@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 fellytip-shared    = { workspace = true }
+bevy               = { workspace = true, features = ["bevy_log", "multi_threaded"] }
+lightyear          = { workspace = true, features = ["std", "server", "client", "netcode", "udp", "replication"] }
 anyhow             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }

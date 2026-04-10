@@ -6,3 +6,18 @@ pub mod inputs;
 pub mod math;
 pub mod protocol;
 pub mod resources;
+
+// ── Network constants shared by server and client ────────────────────────────
+
+/// Game-level protocol identifier; must match on both sides.
+pub const PROTOCOL_ID: u64 = 0x0000_FE11_1950_0001;
+
+/// Shared symmetric key used by netcode.io.
+/// Replace with a securely generated key before shipping.
+pub const PRIVATE_KEY: [u8; 32] = [0u8; 32];
+
+/// UDP port the server listens on.
+pub const NET_PORT: u16 = 5000;
+
+/// Fixed-update tick rate (Hz) for combat / movement.
+pub const TICK_HZ: f64 = 62.5;
