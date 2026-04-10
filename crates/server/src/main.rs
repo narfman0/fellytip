@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
 use fellytip_shared::{
     NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
@@ -8,10 +9,15 @@ use fellytip_shared::{
 use lightyear::prelude::{server::*, *};
 use std::net::SocketAddr;
 
+/// BRP HTTP port for the server (used by ralph scenarios and tooling).
+const BRP_PORT: u16 = 15702;
+
 fn main() {
     tracing_subscriber::fmt::init();
     App::new()
         .add_plugins(MinimalPlugins)
+        .add_plugins(RemotePlugin::default())
+        .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
         .add_plugins(ServerPlugins {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),
         })

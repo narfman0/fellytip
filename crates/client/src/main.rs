@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
 use fellytip_shared::{
     NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
@@ -7,6 +8,9 @@ use fellytip_shared::{
 };
 use lightyear::prelude::{client::*, *};
 use std::net::SocketAddr;
+
+/// BRP HTTP port for the headless client (used by ralph scenarios).
+const BRP_PORT_HEADLESS: u16 = 15703;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -21,7 +25,10 @@ fn main() {
         .add_systems(Update, log_replicated_positions)
         .add_observer(on_connected)
         .add_observer(on_disconnected);
-    if !headless {
+    if headless {
+        app.add_plugins(RemotePlugin::default())
+            .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS));
+    } else {
         // Rendering plugins added later (milestone 0).
     }
     app.run();
