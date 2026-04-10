@@ -2,6 +2,7 @@
 //! Must be added AFTER `ServerPlugins`/`ClientPlugins` but BEFORE any
 //! `Server`/`Client` entity is spawned.
 
+use crate::components::WorldPosition;
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
@@ -53,6 +54,9 @@ impl Plugin for FellytipProtocolPlugin {
             priority: 2.0,
         })
         .add_direction(NetworkDirection::ServerToClient);
+
+        // Components
+        app.register_component::<WorldPosition>();
 
         // Messages
         app.register_message::<GreetMsg>()

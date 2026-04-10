@@ -1,7 +1,12 @@
 use bevy::prelude::*;
-use fellytip_shared::{NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ, protocol::FellytipProtocolPlugin};
+use core::time::Duration;
+use fellytip_shared::{
+    NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
+    components::WorldPosition,
+    protocol::FellytipProtocolPlugin,
+};
 use lightyear::prelude::{client::*, *};
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -13,6 +18,7 @@ fn main() {
         })
         .add_plugins(FellytipProtocolPlugin)
         .add_systems(Startup, spawn_client)
+        .add_systems(Update, log_replicated_positions)
         .add_observer(on_connected)
         .add_observer(on_disconnected);
     if !headless {
@@ -44,8 +50,13 @@ fn spawn_client(mut commands: Commands) {
     tracing::info!("Connecting to {server_addr}");
 }
 
-fn on_connected(trigger: On<Add, Connected>) {
+/// When the connection is established, attach a `ReplicationReceiver` so that
+/// replicated entities are applied to this world.
+fn on_connected(trigger: On<Add, Connected>, mut commands: Commands) {
     tracing::info!("Connected to server (entity {:?})", trigger.entity);
+    commands
+        .entity(trigger.entity)
+        .insert(ReplicationReceiver::default());
 }
 
 fn on_disconnected(trigger: On<Add, Disconnected>, q: Query<&Disconnected>) {
@@ -55,4 +66,11 @@ fn on_disconnected(trigger: On<Add, Disconnected>, q: Query<&Disconnected>) {
         .and_then(|d| d.reason.as_deref())
         .unwrap_or("none");
     tracing::info!("Disconnected (entity {:?}): {reason}", trigger.entity);
+}
+
+/// Log all entities that have a replicated `WorldPosition`.
+fn log_replicated_positions(query: Query<(Entity, &WorldPosition), With<Replicated>>) {
+    for (entity, pos) in &query {
+        tracing::debug!("Replicated WorldPosition {entity:?}: ({}, {})", pos.x, pos.y);
+    }
 }

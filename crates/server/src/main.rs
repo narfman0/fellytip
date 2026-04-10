@@ -1,7 +1,12 @@
 use bevy::prelude::*;
-use fellytip_shared::{NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ, protocol::FellytipProtocolPlugin};
+use core::time::Duration;
+use fellytip_shared::{
+    NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
+    components::WorldPosition,
+    protocol::FellytipProtocolPlugin,
+};
 use lightyear::prelude::{server::*, *};
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -12,6 +17,7 @@ fn main() {
         })
         .add_plugins(FellytipProtocolPlugin)
         .add_systems(Startup, spawn_server)
+        .add_observer(on_link_spawned)
         .add_observer(on_client_connected)
         .run();
 }
@@ -33,8 +39,28 @@ fn spawn_server(mut commands: Commands) {
     tracing::info!("Server listening on {addr}");
 }
 
-fn on_client_connected(trigger: On<Add, Connected>, query: Query<(), With<ClientOf>>) {
-    if query.get(trigger.entity).is_ok() {
-        tracing::info!("Client connected: {:?}", trigger.entity);
+/// Every new client link gets a `ReplicationSender` so the server can push
+/// entity updates to it.
+fn on_link_spawned(trigger: On<Add, LinkOf>, mut commands: Commands) {
+    commands
+        .entity(trigger.entity)
+        .insert(ReplicationSender::new(
+            Duration::from_millis(50),
+            SendUpdatesMode::SinceLastAck,
+            false,
+        ));
+    tracing::debug!("Link spawned, added ReplicationSender: {:?}", trigger.entity);
+}
+
+/// When the netcode handshake completes, spawn a player entity for the client.
+fn on_client_connected(trigger: On<Add, Connected>, query: Query<(), With<ClientOf>>, mut commands: Commands) {
+    if query.get(trigger.entity).is_err() {
+        return;
     }
+    tracing::info!("Client connected: {:?}", trigger.entity);
+
+    commands.spawn((
+        WorldPosition { x: 0.0, y: 0.0 },
+        Replicate::to_clients(NetworkTarget::All),
+    ));
 }
