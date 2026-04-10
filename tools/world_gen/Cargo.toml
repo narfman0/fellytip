@@ -1,0 +1,12 @@
+[package]
+name    = "world_gen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fellytip-shared = { workspace = true }
+rand            = { workspace = true }
+rand_chacha     = { workspace = true }
+anyhow          = { workspace = true }
+tracing         = { workspace = true }
+serde_json      = { workspace = true }

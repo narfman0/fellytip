@@ -1,0 +1,11 @@
+[package]
+name    = "combat_sim"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fellytip-shared = { workspace = true }
+proptest        = { workspace = true }
+proptest-derive = { workspace = true }
+anyhow          = { workspace = true }
+tracing         = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name    = "fellytip-client"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+debug = []
+
+[dependencies]
+fellytip-shared    = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
