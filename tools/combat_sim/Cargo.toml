@@ -9,3 +9,4 @@ proptest        = { workspace = true }
 proptest-derive = { workspace = true }
 anyhow          = { workspace = true }
 tracing         = { workspace = true }
+uuid            = { workspace = true }

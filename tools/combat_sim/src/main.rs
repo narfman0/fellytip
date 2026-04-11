@@ -2,6 +2,91 @@ fn main() {
     println!("combat_sim: run `cargo test -p combat_sim` to execute proptest traces");
 }
 
+// ── Proptest: combat invariants ───────────────────────────────────────────────
+
+#[cfg(test)]
+mod combat_props {
+    use fellytip_shared::combat::{
+        rules::resolve_round,
+        types::{
+            CharacterClass, CombatState, CombatantId, CombatantSnapshot, CombatantState,
+            CoreStats, Effect,
+        },
+    };
+    use proptest::prelude::*;
+    use uuid::Uuid;
+
+    fn arb_snapshot(id: Uuid) -> impl Strategy<Value = CombatantSnapshot> {
+        (1i32..=50, 0i32..=10, 1i32..=20).prop_map(move |(hp, armor, str_)| {
+            CombatantSnapshot {
+                id: CombatantId(id),
+                faction: None,
+                class: CharacterClass::Warrior,
+                stats: CoreStats { strength: str_, ..CoreStats::default() },
+                health_current: hp,
+                health_max: hp,
+                level: 1,
+                armor,
+            }
+        })
+    }
+
+    fn arb_state() -> impl Strategy<Value = (CombatState, CombatantId, CombatantId)> {
+        let aid = Uuid::new_v4();
+        let did = Uuid::new_v4();
+        (arb_snapshot(aid), arb_snapshot(did)).prop_map(move |(a, d)| {
+            let state = CombatState {
+                combatants: vec![CombatantState::new(a), CombatantState::new(d)],
+                round: 0,
+            };
+            (state, CombatantId(aid), CombatantId(did))
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn health_never_negative(
+            (state, aid, did) in arb_state(),
+            attack_roll in 1i32..=20,
+            dmg_roll in 1i32..=12,
+        ) {
+            let (next, _) = resolve_round(state, &aid, &did, attack_roll, dmg_roll);
+            for c in &next.combatants {
+                prop_assert!(c.health >= 0, "health went negative for {:?}", c.snapshot.id);
+            }
+        }
+
+        #[test]
+        fn miss_leaves_defender_health_unchanged(
+            (state, aid, did) in arb_state(),
+            dmg_roll in 1i32..=12,
+        ) {
+            let before_hp = state.get(&did).map(|c| c.health).unwrap_or(0);
+            // Roll 1 + no strength bonus < 10 = guaranteed miss
+            let (next, effects) = resolve_round(state, &aid, &did, 1, dmg_roll);
+            let after_hp = next.get(&did).map(|c| c.health).unwrap_or(0);
+            let has_damage = effects.iter().any(|e| matches!(e, Effect::TakeDamage { .. }));
+            if !has_damage {
+                prop_assert_eq!(before_hp, after_hp);
+            }
+        }
+
+        #[test]
+        fn die_only_emitted_when_health_zero(
+            (state, aid, did) in arb_state(),
+            attack_roll in 1i32..=20,
+            dmg_roll in 1i32..=12,
+        ) {
+            let (next, effects) = resolve_round(state, &aid, &did, attack_roll, dmg_roll);
+            let die_emitted = effects.iter().any(|e| matches!(e, Effect::Die { target } if target == &did));
+            let hp_zero = next.get(&did).map(|c| c.health == 0).unwrap_or(false);
+            if die_emitted {
+                prop_assert!(hp_zero, "Die emitted but health > 0");
+            }
+        }
+    }
+}
+
 // ── Proptest: ecology invariants ───────────────────────────────────────────────
 
 #[cfg(test)]

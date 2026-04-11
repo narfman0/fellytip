@@ -1682,6 +1682,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
