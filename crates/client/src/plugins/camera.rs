@@ -8,7 +8,11 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     prelude::*,
 };
-use fellytip_shared::world::map::{MAP_HEIGHT, MAP_WIDTH};
+use fellytip_shared::{
+    components::{Experience, WorldPosition},
+    world::map::{MAP_HEIGHT, MAP_WIDTH},
+};
+use lightyear::prelude::Replicated;
 
 pub struct OrbitCameraPlugin;
 
@@ -81,10 +85,18 @@ fn update_orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
+    // Follow the local player entity (has Experience; NPCs/boss do not).
+    player_q: Query<&WorldPosition, (With<Replicated>, With<Experience>)>,
 ) {
     let Ok((mut orbit, mut transform)) = query.single_mut() else {
         return;
     };
+
+    // Lock camera target onto the player as soon as one exists.
+    // world (x, y, z) → Bevy (x, z, y); no height offset so we orbit the ground point.
+    if let Some(pos) = player_q.iter().next() {
+        orbit.target = Vec3::new(pos.x, pos.z, pos.y);
+    }
 
     // Right-click or middle-click drag to orbit.
     if buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle) {
