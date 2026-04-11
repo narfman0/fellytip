@@ -100,8 +100,8 @@ mod tests {
     use super::*;
 
     fn dummy_entity(i: u32) -> Entity {
-        // Construct a Entity with a stable index for testing.
-        Entity::from_raw(i)
+        // EntityIndex is NonZero, so index must be >= 1.
+        Entity::from_bits((i + 1) as u64)
     }
 
     #[test]
