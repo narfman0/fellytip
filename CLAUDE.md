@@ -2,7 +2,13 @@
 
 ## What this project is
 
-Multiplayer action RPG in Rust/Bevy. The world simulates itself independently of player presence. Pure simulation logic lives in `crates/shared`; Bevy ECS is a thin bridge. See `docs/PLAN.md` for the full design.
+Multiplayer action RPG in Rust/Bevy. The world simulates itself independently of player presence. Pure simulation logic lives in `crates/shared`; Bevy ECS is a thin bridge.
+
+See `docs/` for product documentation:
+- `docs/requirements.md` — what the game must do
+- `docs/architecture.md` — crate layout, design constraints, data flow
+- `docs/milestones.md` — milestone definitions and status
+- `docs/systems/` — one file per major system (world-map, combat, civilization, world-sim, networking, persistence, rendering)
 
 ## Crate map
 
@@ -67,7 +73,7 @@ Ralph scenarios are the acceptance criteria for each milestone. A scenario passi
 
 ## Implementation order
 
-Follow the numbered sequence in `docs/PLAN.md` §Implementation Order. Do not jump ahead — later steps depend on earlier scaffolding being compile-clean.
+Follow the milestone sequence in `docs/milestones.md`. Each milestone's acceptance criteria define what "done" means. System docs in `docs/systems/` describe the current implementation.
 
 ## Style
 
