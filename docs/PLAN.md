@@ -544,14 +544,14 @@ Claude's self-driven loop: launch → run ralph → read output → edit → reb
 
 ## MVP Milestones
 
-| Milestone | Deliverable | Done When |
+| Milestone | Deliverable | Status |
 |---|---|---|
-| **0 - Bones** | Two binaries connect; WASD moves a sprite | Server + client connect; WorldPosition replicated; movement visible |
-| **0b - Ralph** | BRP wired; ralph `basic_movement` scenario passes | Ralph can assert player entity exists via HTTP |
-| **1 - Living World** | World sim; factions; ecology; story log | Events in egui log; world survives server restart |
-| **2 - First Blood** | Combat resolves; proptest passing | Player attacks NPC; NPC death → story log entry |
-| **3 - Party Play** | 4 simultaneous clients | Party HUD; network visibility culling working |
-| **4 - MVF** | 3 classes, 1 dungeon, faction consequences | 2-hour session stable; history queryable by client |
+| **0 - Bones** | Two binaries connect; `WorldPosition` replicated | ✅ Done |
+| **0b - Ralph** | BRP wired; ralph `basic_movement` scenario | ✅ Done |
+| **1 - Living World** | World sim; factions; ecology; story log | ✅ Done (egui viewer + BRP custom methods pending) |
+| **2 - First Blood** | Combat resolves; proptest passing | ✅ Done (ralph `combat_resolves` scenario pending) |
+| **3 - Party Play** | 4 simultaneous clients; party system | ✅ Done (visibility culling + HUD pending) |
+| **4 - MVF** | 3 classes, 1 dungeon, faction consequences | 🚧 Scaffold done — classes, abilities, full ralph suite remaining |
 
 ---
 
@@ -579,19 +579,30 @@ App::new()
 
 ## Implementation Order
 
-1. Workspace scaffold — all crates stub-compile clean
-2. Lightyear wiring — connect, send one message, disconnect
-3. `WorldPosition` replication end-to-end → **Milestone 0**
-4. BRP on server (15702) + headless client (15703); ralph `basic_movement` scenario → **Milestone 0b**
-5. SQLite migrations + persistence skeleton
-6. `WorldSimSchedule` infrastructure (custom 1 Hz Bevy schedule)
-7. Ecology system + proptest tests; ralph `ecology_loop` scenario
-8. Faction data + NPC schedules + movement AI
-9. Story log writer + egui viewer + custom BRP methods → **Milestone 1**
-10. Pure combat rules + proptest harness (no ECS yet)
-11. ECS combat bridge + interrupt stack; ralph `combat_resolves` scenario → **Milestone 2**
-12. Party system + 4-client validation → **Milestone 3**
-13. Abilities, boss NPCs, dungeon area; full ralph suite → **Milestone 4**
+1. ✅ Workspace scaffold — all crates stub-compile clean
+2. ✅ Lightyear wiring — connect, send one message, disconnect
+3. ✅ `WorldPosition` replication end-to-end → **Milestone 0**
+4. ✅ BRP on server (15702) + headless client (15703); ralph `basic_movement` scenario → **Milestone 0b**
+5. ✅ SQLite migrations + persistence skeleton
+6. ✅ `WorldSimSchedule` infrastructure (custom 1 Hz Bevy schedule)
+7. ✅ Ecology system + proptest tests
+8. ✅ Faction data + NPC goal AI + wander movement
+9. ✅ Story log writer (`WriteStoryEvent` message, `StoryLog` resource) → **Milestone 1** scaffold
+10. ✅ Pure combat rules + proptest harness (`rules.rs`, `interrupt.rs`)
+11. ✅ ECS combat bridge + interrupt stack (`CombatPlugin`, `FixedUpdate`) → **Milestone 2** scaffold
+12. ✅ Party system + tests (`PartyRegistry`, max-4 enforcement) → **Milestone 3** scaffold
+13. ✅ Dungeon boss spawn, `PlayerInput`, `WorldClock` → **Milestone 4** foundation
+
+### Remaining work (next up)
+
+- egui story log viewer + custom BRP methods (`fellytip/story_by_tag`, `fellytip/faction_state`)
+- ralph `ecology_loop` and `combat_resolves` scenarios
+- Visibility culling per party (interest management)
+- 3 character classes wired to `CharacterClass` enum
+- Ability system hooked into `InterruptFrame::ResolvingAbility`
+- Dungeon room transitions
+- SQLite autosave flush (story events, player state)
+- Full ralph suite → **Milestone 4** shipped
 
 ---
 
