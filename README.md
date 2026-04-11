@@ -2,7 +2,7 @@
 
 Multiplayer action RPG in Rust/Bevy where the world simulates itself independent of player presence.
 
-**Status:** All 13 implementation steps complete through Milestone 4 scaffold. Core systems are running: networking, world simulation, ecology, factions, story log, combat rules + ECS bridge, party system, and dungeon boss spawn.
+**Status:** Core systems complete through Milestone 4 scaffold. Fully procedural world with fBm terrain, Whittaker biomes, rivers, settlements, territory, road networks, and 200-tick history pre-simulation before players join.
 
 ## Prerequisites
 
@@ -12,11 +12,15 @@ Multiplayer action RPG in Rust/Bevy where the world simulates itself independent
 ## Run
 
 ```bash
-# Terminal 1 — game server
+# Terminal 1 — game server (generates world + runs 200-tick history warp on startup)
 cargo run -p fellytip-server
 
 # Terminal 2 — headless client (connects automatically)
 cargo run -p fellytip-client -- --headless
+
+# Preview the generated world as ASCII art
+cargo run -p world_gen -- --seed 42
+cargo run -p world_gen -- --seed 42 --width 120 --height 50
 ```
 
 ## Verify with ralph
@@ -31,9 +35,9 @@ cargo run -p ralph -- --scenario basic_movement
 ## Tests
 
 ```bash
-cargo test -p fellytip-shared   # pure logic: ecology, faction, combat (13 tests)
-cargo test -p combat_sim        # proptest invariants for combat + ecology
-cargo test -p fellytip-server   # party system tests
+cargo test --workspace               # 58 tests across all crates
+cargo test -p fellytip-shared        # pure logic: map gen, biomes, civilization, combat (58 tests)
+cargo test -p combat_sim             # proptest invariants for combat + ecology
 cargo clippy --workspace -- -D warnings
 ```
 
@@ -41,15 +45,24 @@ cargo clippy --workspace -- -D warnings
 
 | Area | State |
 |---|---|
-| Networking (Lightyear 0.26) | Server + client connect; `WorldPosition` replicated |
+| Networking (Lightyear 0.26) | Server + client connect; `WorldPosition {x,y,z}` replicated |
 | BRP observability | Server port 15702, headless client port 15703 |
 | SQLite persistence | Migrations run on startup; `Db` resource available |
 | World sim (1 Hz) | `WorldSimSchedule` drives ecology, faction AI, story flush |
+| **World map** | 512×512 tile grid, stacked layers, fBm terrain, 3D height (`z`) |
+| **Biomes** | Whittaker diagram: 10 biome types from temperature × precipitation |
+| **Rivers** | Steepest-descent flow accumulation; high-drainage tiles marked River |
+| **Settlements** | Poisson-disk surface placement; BFS underground city siting |
+| **Territory** | BFS flood-fill assigns every walkable tile to nearest settlement |
+| **Roads** | Kruskal MST + Bresenham rasterization between settlements |
+| **History warp** | 200 WorldSim ticks run at startup before clients connect |
+| **Underground** | Shallow caves (CA 48%), Underdark voids (CA 30%), shaft connectors |
 | Ecology | Discrete Lotka-Volterra per region; Collapse/Recovery events |
 | Faction AI | Utility-scored goals; NPC wander each world-sim tick |
 | Story log | `WriteStoryEvent` messages → `StoryLog` resource |
 | Combat rules | Pure `fn(State, dice) -> (State, Vec<Effect>)`; proptest-covered |
 | Combat ECS bridge | `FixedUpdate` interrupt stack; dice injected at boundary |
+| Fluid movement | Z follows terrain via bilinear height interpolation + lerp |
 | Party system | Up to 4 clients; `PartyRegistry` resource |
 | Dungeon | Boss NPC spawned; `BossNpc` + `InDungeon` markers |
 
@@ -57,8 +70,18 @@ cargo clippy --workspace -- -D warnings
 
 | Crate | Purpose |
 |---|---|
-| `crates/shared` | Types, protocol, combat rules — no I/O |
-| `crates/server` | Bevy server: networking, world sim, persistence |
+| `crates/shared` | Types, protocol, combat rules, world gen — no I/O |
+| `crates/server` | Bevy server: networking, world sim, persistence, map gen |
 | `crates/client` | Bevy client: networking, rendering (WIP) |
 | `tools/ralph` | BRP test driver |
 | `tools/combat_sim` | proptest harness for combat + ecology rules |
+| `tools/world_gen` | ASCII world preview — `cargo run -p world_gen -- --seed N` |
+
+## ASCII map legend
+
+```
+~ water    ^ mountain   , grassland   f temperate forest   d desert
+s savanna  T tropical   R rainforest  b taiga              _ tundra
+p polar    * arctic     = river       + road
+★ capital  • town       ⚑ underground city
+```

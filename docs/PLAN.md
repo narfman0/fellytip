@@ -47,13 +47,16 @@ fellytip/
           ecology.rs
           story.rs
           schedule.rs
-        math.rs
+          map.rs            ← TileKind (20 variants), TileLayer, TileColumn, WorldMap
+          civilization.rs   ← Settlement, generate_settlements, assign_territories, generate_roads
+        math.rs             ← tile_index/frac, bilerp, fbm (smooth_step, lattice_hash, value_noise)
     server/
       src/
         main.rs
         plugins/
           network.rs           ← lightyear ServerPlugin wiring
           world_sim.rs         ← custom WorldSimSchedule (1 Hz)
+          map_gen.rs           ← generate_map + 200-tick history warp on Startup
           ai.rs
           ecology.rs
           story.rs
@@ -152,7 +155,7 @@ opt-level = 3   # optimize bevy/wgpu even in dev builds
 ### Shared (replicated) — `crates/shared/src/components.rs`
 
 ```rust
-WorldPosition { x: f32, y: f32 }      // replicated + predicted + interpolated
+WorldPosition { x: f32, y: f32, z: f32 }  // replicated + predicted + interpolated; z = elevation
 FacingDir(f32)                         // replicated + interpolated
 Health { current: i32, max: i32 }      // replicated, simple interpolation
 Stamina { current: i32, max: i32 }
@@ -395,6 +398,51 @@ Build `CombatantSnapshot` from ECS → call `interrupt_stack.step()` → apply `
 
 ---
 
+## World Map (`crates/shared/src/world/map.rs`)
+
+### Tile structure
+
+Each grid cell `(ix, iy)` is a `TileColumn` — a sorted `Vec<TileLayer>`. Multiple layers coexist vertically (ground + cave + Underdark). Height queries are pure functions with no ECS dependency.
+
+```
+MAP_WIDTH = MAP_HEIGHT = 512
+STEP_HEIGHT  = 0.6   (max upward snap per tick)
+Z_FOLLOW_RATE = 12.0  (lerp speed toward terrain surface)
+FALL_SPEED   = 40.0  (max fall speed, world units/s)
+
+Surface Z: 0.0 – 6.0   (Z_SCALE = 6.0)
+Shallow cave Z: ~-15    (CA: 48% fill, 5 steps, threshold 5)
+Underdark Z:    ~-65    (CA: 30% fill, 3 steps, threshold 6)
+```
+
+### Generation pipeline (called by `MapGenPlugin` on `Startup`)
+
+```
+generate_map(seed):
+  1. fBm surface heights    (6 octaves, BASE_FREQ=4/512, seed-offset)
+  2. fBm moisture           (4 octaves, MOISTURE_FREQ=6/512, separate seed-offset)
+  3. classify_biome(temp, moisture) per walkable tile → TileKind
+  4. river_pass             steepest-descent flow accumulation → River tiles
+  5. cave_pass (shallow)    CA cellular automata → Cavern layers at Z≈-15
+  6. cave_pass (Underdark)  CA → LuminousGrotto layers at Z≈-65
+  7. shaft_pass             ~1/40 eligible columns get Tunnel connectors
+
+generate_settlements(map, seed):
+  Surface: Poisson-disk grid (32×32 cell, min dist 30 tiles, score by habitability)
+  Underground: BFS connected components of LuminousGrotto ≥500 tiles → UndergroundCity
+
+assign_territories(map, settlements) → TerritoryMap  [BFS flood-fill]
+
+generate_roads(map, settlements):
+  Kruskal MST on Euclidean distances → Bresenham segments → map.road_tiles[…] = true
+```
+
+### Fluid movement
+
+After each XY move tick, `process_player_input` calls `smooth_surface_at(map, x, y, current_z)` and lerps `pos.z` toward the result. The bilinear interpolation uses per-corner height offsets pre-computed from the 4 adjacent tile centers.
+
+---
+
 ## Persistence (`crates/server/src/plugins/persistence.rs`)
 
 SQLite via sqlx. Autosave every 5 minutes (300 world sim ticks).
@@ -552,6 +600,7 @@ Claude's self-driven loop: launch → run ralph → read output → edit → reb
 | **2 - First Blood** | Combat resolves; proptest passing | ✅ Done (ralph `combat_resolves` scenario pending) |
 | **3 - Party Play** | 4 simultaneous clients; party system | ✅ Done (visibility culling + HUD pending) |
 | **4 - MVF** | 3 classes, 1 dungeon, faction consequences | 🚧 Scaffold done — classes, abilities, full ralph suite remaining |
+| **World Gen** | fBm terrain, biomes, rivers, settlements, roads, history warp | ✅ Done |
 
 ---
 
@@ -592,6 +641,15 @@ App::new()
 11. ✅ ECS combat bridge + interrupt stack (`CombatPlugin`, `FixedUpdate`) → **Milestone 2** scaffold
 12. ✅ Party system + tests (`PartyRegistry`, max-4 enforcement) → **Milestone 3** scaffold
 13. ✅ Dungeon boss spawn, `PlayerInput`, `WorldClock` → **Milestone 4** foundation
+14. ✅ Tile map — `WorldPosition.z`, `TileLayer`/`TileColumn`/`WorldMap`, 512×512, stacked underground layers
+15. ✅ Procedural noise — `smooth_step`, `lattice_hash`, `value_noise`, `fbm` in `math.rs`
+16. ✅ fBm terrain — replaces box-blur white noise; continent-scale base frequency; seed-offset for uniqueness
+17. ✅ Whittaker biome classification — temperature (latitude + altitude) × precipitation → 10 biome `TileKind` variants
+18. ✅ River generation — steepest-descent flow accumulation; drainage ≥ 800 → `TileKind::River`
+19. ✅ Settlement placement — Poisson-disk surface grid + BFS Underdark connected-component siting
+20. ✅ Territory + roads — BFS flood-fill territories; Kruskal MST + Bresenham road network → `WorldMap::road_tiles`
+21. ✅ History pre-simulation — `MapGenPlugin` runs `WorldSimSchedule` × 200 on `Startup` before clients connect
+22. ✅ `world_gen` tool — ASCII map preview with biome chars, settlement overlays, road network
 
 ### Remaining work (next up)
 

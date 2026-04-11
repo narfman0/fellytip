@@ -8,11 +8,12 @@ Multiplayer action RPG in Rust/Bevy. The world simulates itself independently of
 
 | Crate | Role |
 |---|---|
-| `crates/shared` | Pure types, protocol, combat rules, world types — no ECS, no I/O |
-| `crates/server` | Bevy server: lightyear, WorldSimSchedule (1 Hz), AI, persistence |
+| `crates/shared` | Pure types, protocol, combat rules, world gen — no ECS, no I/O |
+| `crates/server` | Bevy server: lightyear, WorldSimSchedule (1 Hz), AI, persistence, map gen |
 | `crates/client` | Bevy client: lightyear, rendering, egui HUD, input |
 | `tools/combat_sim` | proptest harness — runs combat rules with no ECS |
 | `tools/ralph` | BRP HTTP test driver — asserts live world state via JSON-RPC |
+| `tools/world_gen` | ASCII world preview: `cargo run -p world_gen -- --seed N` |
 
 ## Non-negotiable architecture rules
 
@@ -21,6 +22,8 @@ Multiplayer action RPG in Rust/Bevy. The world simulates itself independently of
 - **No wildcard `_` in interrupt stack `match`.** Every `InterruptFrame` variant must be handled explicitly — this is a lint-level guarantee against silent fallthrough bugs.
 - **Two tick rates.** `FixedUpdate` at 62.5 Hz (combat/movement). `WorldSimSchedule` custom schedule at 1 Hz (factions/ecology/story). Never cross-schedule without a documented reason.
 - **Isometric stays behind a feature flag.** Only `sync_transform` changes between `topdown` (default) and `isometric` features. Simulation and networking are untouched.
+- **World gen is pure and deterministic.** `generate_map(seed)` and `generate_settlements(map, seed)` are pure functions in `crates/shared` — no ECS, no I/O. Same seed always produces the same world. The server calls them on startup via `MapGenPlugin`.
+- **No circular module deps in world gen.** `world/civilization.rs` may import from `world/map.rs`. `world/map.rs` must NOT import from `civilization.rs`. Settlement generation happens after `generate_map` returns.
 
 ## Key version pins (do not bump without checking compatibility)
 
@@ -29,10 +32,12 @@ Multiplayer action RPG in Rust/Bevy. The world simulates itself independently of
 ## Testing & verification
 
 ```bash
-cargo test -p fellytip-shared          # pure logic; should be fast, no I/O
+cargo test --workspace                 # 58 tests total (fast, no I/O)
+cargo test -p fellytip-shared          # pure logic: map gen, biomes, civilization, combat
 cargo test -p combat_sim               # 100k+ proptest traces
 cargo clippy --workspace -- -D warnings
 cargo run -p ralph -- --scenario all   # live end-to-end via BRP
+cargo run -p world_gen -- --seed 42    # ASCII world preview (sanity check)
 ```
 
 Run `cargo clippy` before considering any task done.
@@ -71,6 +76,11 @@ Follow the numbered sequence in `docs/PLAN.md` §Implementation Order. Do not ju
 - `GameEntityId(Uuid)` is the stable cross-session identity; Bevy `Entity` is ephemeral.
 - Replicated components go in `crates/shared/src/components.rs` and must be registered in `FellytipProtocolPlugin`.
 - Story events are emitted as Bevy events (`WriteStoryEvent`), collected by `story_writer`, and flushed to SQLite every 5 minutes.
+- `WorldPosition` has three fields `{x, y, z}` — always include all three when constructing it.
+- `TileKind` has 20 variants (5 legacy surface + 11 Whittaker biomes + River + 4 underground). When matching exhaustively include all or use a `_` only after documenting why.
+- `WorldMap` is NOT replicated to clients (512×512 = too large). Clients get entity positions only; tile rendering samples locally on region-load.
+- `generate_map` runs the full pipeline: fBm surface → moisture → biome classification → rivers → shallow caves → Underdark → shafts. Call order in server: `generate_map` → `generate_settlements` → `generate_roads` (mutates map).
+- `Settlements` is a Bevy `Resource` (wraps `Vec<Settlement>`) inserted by `MapGenPlugin`.
 
 ## Do
 
