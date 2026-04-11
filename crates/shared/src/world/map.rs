@@ -21,18 +21,49 @@ pub const STEP_HEIGHT: f32 = 0.6;
 /// the terrain surface.
 pub const Z_FOLLOW_RATE: f32 = 12.0;
 
-/// Multiplier from normalised height `[0, 1]` to world-unit Z.
-const Z_SCALE: f32 = 4.0;
+/// Multiplier from normalised height `[0, 1]` to world-unit Z for surface terrain.
+const Z_SCALE: f32 = 6.0;
+
+// ── Underground depth levels (world units, negative = below ground) ───────────
+
+/// Floor of the shallow cave network: small tunnels, dungeon entrances.
+pub const SHALLOW_CAVE_Z: f32  = -15.0;
+/// Base of the shallow cave walls (gives them ~7 units of thickness above the floor).
+pub const SHALLOW_CAVE_BASE: f32 = -22.0;
+
+/// Floor of the mid-level cave tier: larger passages, underground rivers.
+pub const MID_CAVE_Z: f32  = -38.0;
+pub const MID_CAVE_BASE: f32 = -46.0;
+
+/// Floor of the Underdark: vast open caverns, bioluminescent fungi, deep cities.
+pub const UNDERDARK_Z: f32  = -65.0;
+pub const UNDERDARK_BASE: f32 = -80.0;
+
+/// Maximum fall speed in world units per second.
+/// Replaces the old hard-coded `2.0 * dt` cap so entities traverse deep shafts
+/// in a reasonable time (~1.5 s from surface to Underdark floor).
+pub const FALL_SPEED: f32 = 40.0;
 
 // ── Tile kind ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub enum TileKind {
+    // ── Surface ──────────────────────────────────────────────────────────────
     Plains,
     Forest,
     Mountain,
     Water,
     Stone,
+    // ── Underground ──────────────────────────────────────────────────────────
+    /// Generic cave floor — shallow dungeon tier.
+    Cavern,
+    /// Mid-level cave: larger passages, underground rivers.
+    DeepRock,
+    /// Underdark floor: vast caverns, bioluminescent fungi, civilization tier.
+    LuminousGrotto,
+    /// Vertical shaft tile — connects surface to underground levels.
+    Tunnel,
+    // ── Meta ─────────────────────────────────────────────────────────────────
     Void,
 }
 
@@ -68,6 +99,23 @@ impl TileLayer {
             self.z_top + self.corner_offsets[2],
             self.z_top + self.corner_offsets[3],
         ]
+    }
+
+    /// True for surface-generated kinds (Plains, Forest, Mountain, Water, Stone).
+    pub fn is_surface_kind(&self) -> bool {
+        matches!(
+            self.kind,
+            TileKind::Plains | TileKind::Forest | TileKind::Mountain
+                | TileKind::Water | TileKind::Stone
+        )
+    }
+
+    /// True for underground-generated kinds (Cavern, DeepRock, LuminousGrotto, Tunnel).
+    pub fn is_underground_kind(&self) -> bool {
+        matches!(
+            self.kind,
+            TileKind::Cavern | TileKind::DeepRock | TileKind::LuminousGrotto | TileKind::Tunnel
+        )
     }
 }
 
@@ -285,13 +333,31 @@ mod tests {
     }
 
     #[test]
-    fn no_negative_z_top() {
+    fn surface_layers_have_non_negative_z_top() {
+        // Surface-generated kinds (Plains, Forest, etc.) must always be at Z ≥ 0.
+        // Underground kinds (Cavern, Tunnel, …) are legitimately negative.
         let m = generate_map(7);
         for col in &m.columns {
             for layer in &col.layers {
-                assert!(layer.z_top >= 0.0, "z_top must be non-negative");
+                if layer.is_surface_kind() {
+                    assert!(
+                        layer.z_top >= 0.0,
+                        "surface layer {:?} has negative z_top {}",
+                        layer.kind, layer.z_top
+                    );
+                }
             }
         }
+    }
+
+    #[test]
+    fn depth_constants_are_ordered() {
+        // Verify that depth constants form a coherent descending stack.
+        assert!(SHALLOW_CAVE_Z  > MID_CAVE_Z,  "shallow must be above mid");
+        assert!(MID_CAVE_Z      > UNDERDARK_Z, "mid must be above underdark");
+        assert!(SHALLOW_CAVE_Z  > SHALLOW_CAVE_BASE);
+        assert!(MID_CAVE_Z      > MID_CAVE_BASE);
+        assert!(UNDERDARK_Z     > UNDERDARK_BASE);
     }
 
     #[test]
