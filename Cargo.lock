@@ -2334,6 +2334,7 @@ dependencies = [
  "bevy",
  "fellytip-shared",
  "lightyear",
+ "smol_str 0.3.6",
  "sqlx",
  "tokio",
  "tracing",
