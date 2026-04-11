@@ -48,12 +48,30 @@ pub const FALL_SPEED: f32 = 40.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub enum TileKind {
-    // ── Surface ──────────────────────────────────────────────────────────────
+    // ── Surface biomes ────────────────────────────────────────────────────────
+    /// Legacy / fallback plains (hot-temperate grassland).
     Plains,
+    /// Legacy / fallback forest.
     Forest,
+    /// High-altitude impassable peaks.
     Mountain,
+    /// Open water — non-walkable.
     Water,
+    /// Bare rocky surface.
     Stone,
+    // ── Whittaker biomes ──────────────────────────────────────────────────────
+    Desert,
+    Savanna,
+    TropicalForest,
+    TropicalRainforest,
+    Grassland,
+    TemperateForest,
+    Taiga,
+    Tundra,
+    PolarDesert,
+    Arctic,
+    /// Surface river tile (flow accumulation ≥ river_threshold).
+    River,
     // ── Underground ──────────────────────────────────────────────────────────
     /// Generic cave floor — shallow dungeon tier.
     Cavern,
@@ -101,12 +119,18 @@ impl TileLayer {
         ]
     }
 
-    /// True for surface-generated kinds (Plains, Forest, Mountain, Water, Stone).
+    /// True for surface-generated kinds (Plains, Forest, Mountain, Water, Stone,
+    /// and all Whittaker biomes + River).
     pub fn is_surface_kind(&self) -> bool {
         matches!(
             self.kind,
             TileKind::Plains | TileKind::Forest | TileKind::Mountain
                 | TileKind::Water | TileKind::Stone
+                | TileKind::Desert | TileKind::Savanna
+                | TileKind::TropicalForest | TileKind::TropicalRainforest
+                | TileKind::Grassland | TileKind::TemperateForest
+                | TileKind::Taiga | TileKind::Tundra
+                | TileKind::PolarDesert | TileKind::Arctic | TileKind::River
         )
     }
 
@@ -198,6 +222,43 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
     Some(crate::math::bilerp(corners, fx, fy))
 }
 
+// ── Biome classification ──────────────────────────────────────────────────────
+
+/// Classify a surface tile using the Whittaker diagram.
+///
+/// `temperature` — `0.0` (tropical/equator) to `1.0` (polar/cold).  Derived
+/// from latitude + altitude penalty.
+/// `moisture` — `0.0` (arid) to `1.0` (wet).  From a separate fBm pass.
+///
+/// High-elevation tiles (h ≥ 0.72) and water tiles (h < 0.25) are handled
+/// before this function is called and map directly to `Mountain` / `Water`.
+pub fn classify_biome(temperature: f32, moisture: f32) -> TileKind {
+    if temperature < 0.2 {
+        // Tropical band
+        if moisture < 0.30 { TileKind::Desert }
+        else if moisture < 0.55 { TileKind::Savanna }
+        else if moisture < 0.75 { TileKind::TropicalForest }
+        else { TileKind::TropicalRainforest }
+    } else if temperature < 0.45 {
+        // Subtropical / warm temperate
+        if moisture < 0.25 { TileKind::Savanna }
+        else if moisture < 0.60 { TileKind::Grassland }
+        else { TileKind::TemperateForest }
+    } else if temperature < 0.65 {
+        // Cool temperate
+        if moisture < 0.25 { TileKind::Grassland }
+        else { TileKind::TemperateForest }
+    } else if temperature < 0.82 {
+        // Boreal / subarctic
+        if moisture < 0.35 { TileKind::Tundra }
+        else { TileKind::Taiga }
+    } else {
+        // Polar
+        if moisture < 0.50 { TileKind::PolarDesert }
+        else { TileKind::Arctic }
+    }
+}
+
 // ── Map generation ────────────────────────────────────────────────────────────
 
 /// Generate a world map deterministically from `seed`.
@@ -216,19 +277,33 @@ pub fn generate_map(seed: u64) -> WorldMap {
     use crate::math::fbm;
 
     // ── Surface pass ──────────────────────────────────────────────────────────
-    // Derive a large coordinate offset from the seed so different seeds sample
-    // entirely different regions of the infinite fBm noise field.
-    let ox = ((seed.wrapping_mul(2_654_435_761)) % 100_000) as f32;
-    let oy = ((seed.wrapping_mul(805_459_861))   % 100_000) as f32;
+    // Derive large coordinate offsets so different seeds sample entirely
+    // different regions of the infinite fBm noise field.
+    let ox  = ((seed.wrapping_mul(2_654_435_761)) % 100_000) as f32;
+    let oy  = ((seed.wrapping_mul(805_459_861))   % 100_000) as f32;
+    // Separate offset for precipitation noise.
+    let mox = ((seed.wrapping_mul(1_234_567_891)) % 100_000) as f32;
+    let moy = ((seed.wrapping_mul(987_654_321))   % 100_000) as f32;
 
     // Base frequency: ~4 cycles across the 512-tile map → continent-scale features.
     const BASE_FREQ: f32 = 4.0 / MAP_WIDTH as f32;
+    // Precipitation varies at a finer scale than elevation.
+    const MOISTURE_FREQ: f32 = 6.0 / MAP_WIDTH as f32;
 
     let heights: Vec<f32> = (0..MAP_WIDTH * MAP_HEIGHT)
         .map(|idx| {
             let ix = (idx % MAP_WIDTH) as f32;
             let iy = (idx / MAP_WIDTH) as f32;
             fbm((ix + ox) * BASE_FREQ, (iy + oy) * BASE_FREQ, 6, 0.5, 2.0)
+        })
+        .collect();
+
+    // Precipitation field: independent fBm pass.
+    let moisture: Vec<f32> = (0..MAP_WIDTH * MAP_HEIGHT)
+        .map(|idx| {
+            let ix = (idx % MAP_WIDTH) as f32;
+            let iy = (idx / MAP_WIDTH) as f32;
+            fbm((ix + mox) * MOISTURE_FREQ, (iy + moy) * MOISTURE_FREQ, 4, 0.5, 2.0)
         })
         .collect();
 
@@ -246,16 +321,21 @@ pub fn generate_map(seed: u64) -> WorldMap {
     for iy in 0..MAP_HEIGHT {
         for ix in 0..MAP_WIDTH {
             let h = heights[ix + iy * MAP_WIDTH];
+            let m = moisture[ix + iy * MAP_WIDTH];
             let z_top = z_tops[ix + iy * MAP_WIDTH];
+
+            // Temperature: increases toward equator (center of map), decreases
+            // with altitude.  Latitude factor: 0 at equator, 1 at poles.
+            let lat = (iy as f32 / MAP_HEIGHT as f32 - 0.5).abs() * 2.0;
+            let alt_penalty = (h - 0.45).max(0.0) * 0.6;
+            let temperature = (lat * 0.7 + alt_penalty).clamp(0.0, 1.0);
 
             let (kind, walkable) = if h < 0.25 {
                 (TileKind::Water, false)
-            } else if h < 0.55 {
-                (TileKind::Plains, true)
-            } else if h < 0.72 {
-                (TileKind::Forest, true)
-            } else {
+            } else if h >= 0.72 {
                 (TileKind::Mountain, false)
+            } else {
+                (classify_biome(temperature, m), true)
             };
 
             let ix_m = ix.saturating_sub(1);
@@ -517,7 +597,7 @@ mod tests {
     #[test]
     fn all_surface_kinds_present() {
         let mut seen = std::collections::HashSet::new();
-        for seed in 0u64..3 {
+        for seed in 0u64..5 {
             let m = generate_map(seed);
             for col in &m.columns {
                 for layer in &col.layers {
@@ -525,10 +605,39 @@ mod tests {
                 }
             }
         }
+        // Water and Mountain are always present at height extremes.
         assert!(seen.contains(&TileKind::Water),    "no Water tiles");
-        assert!(seen.contains(&TileKind::Plains),   "no Plains tiles");
-        assert!(seen.contains(&TileKind::Forest),   "no Forest tiles");
         assert!(seen.contains(&TileKind::Mountain), "no Mountain tiles");
+        // Biome tiles should be present (walkable height range 0.25–0.72).
+        let biome_kinds = [
+            TileKind::Desert, TileKind::Savanna, TileKind::TropicalForest,
+            TileKind::TropicalRainforest, TileKind::Grassland, TileKind::TemperateForest,
+            TileKind::Taiga, TileKind::Tundra, TileKind::PolarDesert, TileKind::Arctic,
+        ];
+        let biome_count = biome_kinds.iter().filter(|k| seen.contains(k)).count();
+        assert!(biome_count >= 5,
+            "expected ≥5 distinct biome kinds across seeds 0–4, got {biome_count}; seen: {seen:?}");
+    }
+
+    #[test]
+    fn classify_biome_covers_all_quadrants() {
+        // Verify the biome function returns a non-Mountain, non-Water, walkable kind
+        // for all temp/moisture combinations and that multiple biomes are possible.
+        let mut seen = std::collections::HashSet::new();
+        for ti in 0..=10 {
+            for mi in 0..=10 {
+                let t = ti as f32 / 10.0;
+                let m = mi as f32 / 10.0;
+                let k = classify_biome(t, m);
+                seen.insert(k);
+                // Must be a walkable biome kind (not water or mountain).
+                assert!(
+                    !matches!(k, TileKind::Water | TileKind::Mountain | TileKind::Void),
+                    "classify_biome({t},{m}) returned non-surface kind {k:?}"
+                );
+            }
+        }
+        assert!(seen.len() >= 8, "expected ≥8 distinct biomes, got {}", seen.len());
     }
 
     #[test]
