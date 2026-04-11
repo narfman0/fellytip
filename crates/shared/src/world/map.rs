@@ -202,66 +202,51 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
 
 /// Generate a world map deterministically from `seed`.
 ///
-/// # Algorithm
-/// 1. Fill 64×64 height buffer with uniform random values in `[0, 1]` using
-///    a seeded `ChaCha8Rng` (reproducible across platforms).
-/// 2. One-pass cardinal box-blur to smooth out point noise into continent shapes.
-/// 3. Classify by height threshold:
-///    - `< 0.25` → Water (z_top = 0, non-walkable)
-///    - `< 0.55` → Plains
-///    - `< 0.72` → Forest
-///    - `≥ 0.72` → Mountain (non-walkable)
-/// 4. Scale walkable tile heights: `z_top = height * Z_SCALE`.
-/// 5. Compute per-corner offsets for smooth slopes: each corner is the
-///    average of the four surrounding tile z_tops minus this tile's z_top.
+/// # Passes
+/// 1. **Surface** — seeded noise → box-blur → classify (Water/Plains/Forest/Mountain)
+///    → corner-averaged heights for smooth bilinear slopes.
+/// 2. **Shallow caves** (Z ≈ -15 to -22) — cellular automata with 48 % initial fill,
+///    5 smoothing steps.  Produces winding passages 3–8 tiles wide, similar to
+///    dungeon crawl level 1.
+/// 3. **Underdark** (Z ≈ -65 to -80) — CA with 30 % initial fill, 3 steps.
+///    Produces vast, mostly-open caverns with scattered pillars — city-scale voids
+///    suitable for underground civilizations.
 pub fn generate_map(seed: u64) -> WorldMap {
     use rand::{RngExt, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
+    // ── Surface pass ──────────────────────────────���───────────────────────────
+
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    // Pass 1: raw noise heights
     let mut heights = vec![0.0f32; MAP_WIDTH * MAP_HEIGHT];
     for h in heights.iter_mut() {
         *h = rng.random::<f32>();
     }
 
-    // Pass 2: cardinal box-blur
+    // Cardinal box-blur to smooth point noise into continent-scale shapes.
     let orig = heights.clone();
     for iy in 0..MAP_HEIGHT {
         for ix in 0..MAP_WIDTH {
             let mut sum = orig[ix + iy * MAP_WIDTH];
             let mut count = 1.0f32;
-            if ix > 0 {
-                sum += orig[(ix - 1) + iy * MAP_WIDTH];
-                count += 1.0;
-            }
-            if ix + 1 < MAP_WIDTH {
-                sum += orig[(ix + 1) + iy * MAP_WIDTH];
-                count += 1.0;
-            }
-            if iy > 0 {
-                sum += orig[ix + (iy - 1) * MAP_WIDTH];
-                count += 1.0;
-            }
-            if iy + 1 < MAP_HEIGHT {
-                sum += orig[ix + (iy + 1) * MAP_WIDTH];
-                count += 1.0;
-            }
+            if ix > 0                { sum += orig[(ix-1) + iy * MAP_WIDTH];     count += 1.0; }
+            if ix + 1 < MAP_WIDTH    { sum += orig[(ix+1) + iy * MAP_WIDTH];     count += 1.0; }
+            if iy > 0                { sum += orig[ix + (iy-1) * MAP_WIDTH];     count += 1.0; }
+            if iy + 1 < MAP_HEIGHT   { sum += orig[ix + (iy+1) * MAP_WIDTH];     count += 1.0; }
             heights[ix + iy * MAP_WIDTH] = sum / count;
         }
     }
 
-    // Pass 3: compute z_top for each cell
     let z_tops: Vec<f32> = heights
         .iter()
         .map(|&h| if h < 0.25 { 0.0 } else { h * Z_SCALE })
         .collect();
 
-    // Helper: z_top at (ix, iy) clamped to map bounds.
-    let z_at = |ix: usize, iy: usize| z_tops[ix.min(MAP_WIDTH - 1) + iy.min(MAP_HEIGHT - 1) * MAP_WIDTH];
+    let z_at = |ix: usize, iy: usize| {
+        z_tops[ix.min(MAP_WIDTH - 1) + iy.min(MAP_HEIGHT - 1) * MAP_WIDTH]
+    };
 
-    // Pass 4: build columns with corner offsets
     let mut columns = Vec::with_capacity(MAP_WIDTH * MAP_HEIGHT);
 
     for iy in 0..MAP_HEIGHT {
@@ -279,31 +264,134 @@ pub fn generate_map(seed: u64) -> WorldMap {
                 (TileKind::Mountain, false)
             };
 
-            // Corner heights: average of the 4 tile-centers sharing each corner.
-            // Shared corners produce continuous terrain across tile boundaries.
             let ix_m = ix.saturating_sub(1);
             let ix_p = (ix + 1).min(MAP_WIDTH - 1);
             let iy_m = iy.saturating_sub(1);
             let iy_p = (iy + 1).min(MAP_HEIGHT - 1);
 
-            let c_tl = (z_at(ix_m, iy_m) + z_at(ix, iy_m) + z_at(ix_m, iy) + z_at(ix, iy)) / 4.0;
-            let c_tr = (z_at(ix, iy_m) + z_at(ix_p, iy_m) + z_at(ix, iy) + z_at(ix_p, iy)) / 4.0;
-            let c_bl = (z_at(ix_m, iy) + z_at(ix, iy) + z_at(ix_m, iy_p) + z_at(ix, iy_p)) / 4.0;
-            let c_br = (z_at(ix, iy) + z_at(ix_p, iy) + z_at(ix, iy_p) + z_at(ix_p, iy_p)) / 4.0;
+            let c_tl = (z_at(ix_m,iy_m)+z_at(ix,iy_m)+z_at(ix_m,iy)+z_at(ix,iy)) / 4.0;
+            let c_tr = (z_at(ix,iy_m)+z_at(ix_p,iy_m)+z_at(ix,iy)+z_at(ix_p,iy)) / 4.0;
+            let c_bl = (z_at(ix_m,iy)+z_at(ix,iy)+z_at(ix_m,iy_p)+z_at(ix,iy_p)) / 4.0;
+            let c_br = (z_at(ix,iy)+z_at(ix_p,iy)+z_at(ix,iy_p)+z_at(ix_p,iy_p)) / 4.0;
 
             let layer = TileLayer {
                 z_base: (z_top - 0.5).max(0.0),
                 z_top,
                 kind,
                 walkable,
-                corner_offsets: [c_tl - z_top, c_tr - z_top, c_bl - z_top, c_br - z_top],
+                corner_offsets: [c_tl-z_top, c_tr-z_top, c_bl-z_top, c_br-z_top],
             };
-
             columns.push(TileColumn { layers: vec![layer] });
         }
     }
 
+    // ── Shallow cave pass ─────────────────────────────────────────────────────
+
+    cave_pass(
+        &mut columns,
+        seed.wrapping_add(1),
+        CaveParams {
+            fill_chance: 0.48,
+            ca_steps: 5,
+            solid_threshold: 5, // standard cave rule
+            floor_z: SHALLOW_CAVE_Z,
+            base_z: SHALLOW_CAVE_BASE,
+            kind: TileKind::Cavern,
+        },
+    );
+
+    // ── Underdark pass ────────────────────────────────────────────────────────
+    // 30 % initial fill + loose rule = vast open spaces with scattered pillars.
+
+    cave_pass(
+        &mut columns,
+        seed.wrapping_add(2),
+        CaveParams {
+            fill_chance: 0.30,
+            ca_steps: 3,
+            solid_threshold: 6, // looser: only close off when 6+ of 8 are solid
+            floor_z: UNDERDARK_Z,
+            base_z: UNDERDARK_BASE,
+            kind: TileKind::LuminousGrotto,
+        },
+    );
+
     WorldMap { columns, seed }
+}
+
+/// Parameters for one underground generation pass.
+struct CaveParams {
+    /// Initial probability that a cell starts as solid rock (0.0–1.0).
+    fill_chance: f32,
+    /// Number of cellular automata smoothing steps.
+    ca_steps: usize,
+    /// Number of solid 8-neighbours required for a cell to remain solid.
+    solid_threshold: u32,
+    /// z_top of the walkable floor layer added to void cells.
+    floor_z: f32,
+    /// z_base of the walkable floor layer (thickness = floor_z - base_z).
+    base_z: f32,
+    /// [`TileKind`] assigned to the generated layers.
+    kind: TileKind,
+}
+
+/// Cellular-automata cave generation.
+///
+/// Initialises a boolean solid/void grid with seeded noise, runs `ca_steps`
+/// smoothing passes, then appends a walkable [`TileLayer`] at `floor_z` to
+/// every void cell in `columns`.
+fn cave_pass(columns: &mut Vec<TileColumn>, seed: u64, p: CaveParams) {
+    use rand::{RngExt, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+    // true = solid rock, false = open void
+    let mut solid: Vec<bool> = (0..MAP_WIDTH * MAP_HEIGHT)
+        .map(|_| rng.random::<f32>() < p.fill_chance)
+        .collect();
+
+    for _ in 0..p.ca_steps {
+        let prev = solid.clone();
+        for iy in 0..MAP_HEIGHT {
+            for ix in 0..MAP_WIDTH {
+                let mut neighbors: u32 = 0;
+                for dy in -1i32..=1 {
+                    for dx in -1i32..=1 {
+                        if dx == 0 && dy == 0 { continue; }
+                        let nx = ix as i32 + dx;
+                        let ny = iy as i32 + dy;
+                        if nx < 0 || ny < 0 || nx >= MAP_WIDTH as i32 || ny >= MAP_HEIGHT as i32 {
+                            neighbors += 1; // out-of-bounds counts as solid wall
+                        } else {
+                            neighbors += prev[nx as usize + ny as usize * MAP_WIDTH] as u32;
+                        }
+                    }
+                }
+                solid[ix + iy * MAP_WIDTH] = neighbors >= p.solid_threshold;
+            }
+        }
+    }
+
+    // Add a walkable layer to every open cell.
+    for iy in 0..MAP_HEIGHT {
+        for ix in 0..MAP_WIDTH {
+            if !solid[ix + iy * MAP_WIDTH] {
+                let layer = TileLayer {
+                    z_base: p.base_z,
+                    z_top: p.floor_z,
+                    kind: p.kind,
+                    walkable: true,
+                    corner_offsets: [0.0; 4], // underground floors are flat
+                };
+                columns[ix + iy * MAP_WIDTH].layers.push(layer);
+                // Keep sorted ascending by z_base (deepest first).
+                columns[ix + iy * MAP_WIDTH]
+                    .layers
+                    .sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
+            }
+        }
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -361,8 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn all_tile_kinds_present() {
-        // 3 seeds × 512×512 = 786k tiles; all surface kinds should appear.
+    fn all_surface_kinds_present() {
         let mut seen = std::collections::HashSet::new();
         for seed in 0u64..3 {
             let m = generate_map(seed);
@@ -376,6 +463,79 @@ mod tests {
         assert!(seen.contains(&TileKind::Plains),   "no Plains tiles");
         assert!(seen.contains(&TileKind::Forest),   "no Forest tiles");
         assert!(seen.contains(&TileKind::Mountain), "no Mountain tiles");
+    }
+
+    #[test]
+    fn underground_layers_generated() {
+        let m = generate_map(0);
+
+        let (mut cavern_count, mut grotto_count) = (0usize, 0usize);
+        for col in &m.columns {
+            for layer in &col.layers {
+                match layer.kind {
+                    TileKind::Cavern        => cavern_count += 1,
+                    TileKind::LuminousGrotto => grotto_count += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        // With 512×512 and ~52% void for shallow caves and ~70% for Underdark,
+        // we expect a very large number of each kind.
+        assert!(cavern_count > 50_000,
+            "expected many Cavern tiles, got {cavern_count}");
+        assert!(grotto_count > 100_000,
+            "expected many LuminousGrotto tiles, got {grotto_count}");
+    }
+
+    #[test]
+    fn underground_layers_have_negative_z_top() {
+        let m = generate_map(5);
+        let mut found_cavern = false;
+        let mut found_grotto = false;
+        for col in &m.columns {
+            for layer in &col.layers {
+                if layer.kind == TileKind::Cavern {
+                    assert!(layer.z_top < 0.0,
+                        "Cavern z_top should be negative, got {}", layer.z_top);
+                    found_cavern = true;
+                }
+                if layer.kind == TileKind::LuminousGrotto {
+                    assert!(layer.z_top < 0.0,
+                        "LuminousGrotto z_top should be negative, got {}", layer.z_top);
+                    assert!(layer.z_top <= SHALLOW_CAVE_Z,
+                        "Underdark should be deeper than shallow caves");
+                    found_grotto = true;
+                }
+            }
+        }
+        assert!(found_cavern, "no Cavern layers in generated map");
+        assert!(found_grotto, "no LuminousGrotto layers in generated map");
+    }
+
+    #[test]
+    fn columns_sorted_ascending_by_z_base() {
+        let m = generate_map(3);
+        for (i, col) in m.columns.iter().enumerate() {
+            for pair in col.layers.windows(2) {
+                assert!(
+                    pair[0].z_base <= pair[1].z_base,
+                    "column {i}: layers not sorted — {} > {}",
+                    pair[0].z_base, pair[1].z_base
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn surface_and_underground_can_coexist_in_column() {
+        // A column with both a surface layer AND an underground layer is valid.
+        let m = generate_map(0);
+        let has_both = m.columns.iter().any(|col| {
+            col.layers.iter().any(|l| l.is_surface_kind())
+                && col.layers.iter().any(|l| l.is_underground_kind())
+        });
+        assert!(has_both, "no column has both surface and underground layers");
     }
 
     #[test]
