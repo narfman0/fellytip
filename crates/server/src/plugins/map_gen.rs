@@ -8,15 +8,15 @@
 //!    factions and ecology have meaningful state before the first player connects.
 
 use bevy::prelude::*;
-use fellytip_shared::world::{
-    civilization::{assign_territories, generate_roads, generate_settlements, Settlements},
-    map::generate_map,
+use fellytip_shared::{
+    WORLD_SEED,
+    world::{
+        civilization::{assign_territories, generate_roads, generate_settlements, Settlements},
+        map::generate_map,
+    },
 };
 
 use crate::plugins::{ai::seed_factions, world_sim::WorldSimTick};
-
-/// Deterministic world seed.  Override via CLI arg or config in a later milestone.
-pub const WORLD_SEED: u64 = 42;
 
 /// WorldSim ticks to run before the server accepts connections.
 ///

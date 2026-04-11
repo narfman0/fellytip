@@ -1,3 +1,5 @@
+mod plugins;
+
 use bevy::prelude::*;
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
@@ -14,11 +16,34 @@ use std::net::SocketAddr;
 const BRP_PORT_HEADLESS: u16 = 15703;
 
 fn main() {
-    tracing_subscriber::fmt::init();
     let headless = std::env::args().any(|a| a == "--headless");
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
-        .add_plugins(ClientPlugins {
+
+    if headless {
+        // Headless: minimal plugins + BRP for ralph test scenarios.
+        // Tracing is initialised manually since MinimalPlugins has no LogPlugin.
+        tracing_subscriber::fmt::init();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(RemotePlugin::default())
+            .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS));
+    } else {
+        // Windowed: full render stack.  DefaultPlugins includes LogPlugin so we
+        // do NOT call tracing_subscriber::fmt::init() to avoid a double-init.
+        app.add_plugins(
+            DefaultPlugins.build().set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Fellytip".into(),
+                    ..default()
+                }),
+                ..default()
+            }),
+        )
+        .add_plugins(plugins::SceneLightingPlugin)
+        .add_plugins(plugins::OrbitCameraPlugin)
+        .add_plugins(plugins::TileRendererPlugin);
+    }
+
+    app.add_plugins(ClientPlugins {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),
         })
         .add_plugins(FellytipProtocolPlugin)
@@ -26,12 +51,7 @@ fn main() {
         .add_systems(Update, (log_replicated_positions, send_player_input))
         .add_observer(on_connected)
         .add_observer(on_disconnected);
-    if headless {
-        app.add_plugins(RemotePlugin::default())
-            .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS));
-    } else {
-        // Rendering plugins added later (milestone 0).
-    }
+
     app.run();
 }
 

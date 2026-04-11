@@ -85,6 +85,34 @@ pub enum TileKind {
     Void,
 }
 
+impl TileKind {
+    /// Every variant in declaration order.  Used by the client renderer to
+    /// pre-build the material map without duplicating the list.
+    pub const ALL: &'static [Self] = &[
+        Self::Plains,
+        Self::Forest,
+        Self::Mountain,
+        Self::Water,
+        Self::Stone,
+        Self::Desert,
+        Self::Savanna,
+        Self::TropicalForest,
+        Self::TropicalRainforest,
+        Self::Grassland,
+        Self::TemperateForest,
+        Self::Taiga,
+        Self::Tundra,
+        Self::PolarDesert,
+        Self::Arctic,
+        Self::River,
+        Self::Cavern,
+        Self::DeepRock,
+        Self::LuminousGrotto,
+        Self::Tunnel,
+        Self::Void,
+    ];
+}
+
 // ── Tile layer ────────────────────────────────────────────────────────────────
 
 /// A single horizontal slice within a tile column.

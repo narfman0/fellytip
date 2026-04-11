@@ -12,6 +12,12 @@ pub mod resources;
 /// Game-level protocol identifier; must match on both sides.
 pub const PROTOCOL_ID: u64 = 0x0000_FE11_1950_0001;
 
+/// Deterministic world seed shared between server and client.
+///
+/// The client regenerates the `WorldMap` locally from this seed so the server
+/// does not need to replicate terrain data.
+pub const WORLD_SEED: u64 = 42;
+
 /// Shared symmetric key used by netcode.io.
 /// Replace with a securely generated key before shipping.
 pub const PRIVATE_KEY: [u8; 32] = [0u8; 32];

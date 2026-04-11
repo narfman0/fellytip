@@ -8,7 +8,7 @@ debug = []
 
 [dependencies]
 fellytip-shared    = { workspace = true }
-bevy               = { workspace = true, features = ["bevy_log", "multi_threaded", "bevy_remote", "keyboard"] }
+bevy               = { workspace = true, default-features = true, features = ["bevy_remote", "keyboard"] }
 lightyear          = { workspace = true, features = ["std", "server", "client", "netcode", "udp", "replication", "prediction", "interpolation", "input_native"] }
 anyhow             = { workspace = true }
 tracing            = { workspace = true }
