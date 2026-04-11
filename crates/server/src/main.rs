@@ -5,11 +5,15 @@ use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
 use fellytip_shared::{
     NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
-    components::WorldPosition,
+    combat::{interrupt::InterruptStack, types::CombatantId},
+    components::{Experience, Health, WorldPosition},
     protocol::FellytipProtocolPlugin,
 };
 use lightyear::prelude::{server::*, *};
 use std::net::SocketAddr;
+use uuid::Uuid;
+
+use plugins::combat::{CombatParticipant, PlayerEntity};
 
 /// BRP HTTP port for the server (used by ralph scenarios and tooling).
 const BRP_PORT: u16 = 15702;
@@ -69,15 +73,30 @@ fn on_link_spawned(trigger: On<Add, LinkOf>, mut commands: Commands) {
     tracing::debug!("Link spawned, added ReplicationSender: {:?}", trigger.entity);
 }
 
-/// When the netcode handshake completes, spawn a player entity for the client.
-fn on_client_connected(trigger: On<Add, Connected>, query: Query<(), With<ClientOf>>, mut commands: Commands) {
+/// When the netcode handshake completes, spawn a player entity and link it to
+/// the `ClientOf` entity so the input system can find it.
+fn on_client_connected(
+    trigger: On<Add, Connected>,
+    query: Query<(), With<ClientOf>>,
+    mut commands: Commands,
+) {
     if query.get(trigger.entity).is_err() {
         return;
     }
-    tracing::info!("Client connected: {:?}", trigger.entity);
-
-    commands.spawn((
-        WorldPosition { x: 0.0, y: 0.0 },
-        Replicate::to_clients(NetworkTarget::All),
-    ));
+    let player = commands
+        .spawn((
+            WorldPosition { x: 0.0, y: 0.0 },
+            Health { current: 100, max: 100 },
+            CombatParticipant {
+                id: CombatantId(Uuid::new_v4()),
+                interrupt_stack: InterruptStack::default(),
+                armor: 2,
+                strength: 12,
+            },
+            Experience::new(),
+            Replicate::to_clients(NetworkTarget::All),
+        ))
+        .id();
+    commands.entity(trigger.entity).insert(PlayerEntity(player));
+    tracing::info!("Client {:?} connected → player entity {:?}", trigger.entity, player);
 }

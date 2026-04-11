@@ -4,7 +4,8 @@ use core::time::Duration;
 use fellytip_shared::{
     NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     components::WorldPosition,
-    protocol::FellytipProtocolPlugin,
+    inputs::{ActionIntent, PlayerInput},
+    protocol::{FellytipProtocolPlugin, PlayerInputChannel},
 };
 use lightyear::prelude::{client::*, *};
 use std::net::SocketAddr;
@@ -22,7 +23,7 @@ fn main() {
         })
         .add_plugins(FellytipProtocolPlugin)
         .add_systems(Startup, spawn_client)
-        .add_systems(Update, log_replicated_positions)
+        .add_systems(Update, (log_replicated_positions, send_player_input))
         .add_observer(on_connected)
         .add_observer(on_disconnected);
     if headless {
@@ -79,5 +80,54 @@ fn on_disconnected(trigger: On<Add, Disconnected>, q: Query<&Disconnected>) {
 fn log_replicated_positions(query: Query<(Entity, &WorldPosition), With<Replicated>>) {
     for (entity, pos) in &query {
         tracing::debug!("Replicated WorldPosition {entity:?}: ({}, {})", pos.x, pos.y);
+    }
+}
+
+/// Read keyboard/gamepad input and send a `PlayerInput` message to the server.
+/// Runs every Update frame; only sends when there is actual input.
+/// Uses `Option<Res<...>>` so headless mode (no window, no input plugin) skips gracefully.
+fn send_player_input(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut sender: Single<&mut MessageSender<PlayerInput>>,
+) {
+    let Some(keyboard) = keyboard else { return };
+
+    // Movement: WASD or arrow keys
+    let mut dx = 0.0_f32;
+    let mut dy = 0.0_f32;
+    if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
+        dy += 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
+        dy -= 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
+        dx -= 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
+        dx += 1.0;
+    }
+
+    // Normalise diagonal movement
+    let len = (dx * dx + dy * dy).sqrt();
+    if len > 0.0 {
+        dx /= len;
+        dy /= len;
+    }
+
+    // Action: Space → BasicAttack (auto-target nearest enemy)
+    let action = if keyboard.just_pressed(KeyCode::Space) {
+        Some(ActionIntent::BasicAttack)
+    } else {
+        None
+    };
+
+    // Only send when there is meaningful input
+    if dx != 0.0 || dy != 0.0 || action.is_some() {
+        sender.send::<PlayerInputChannel>(PlayerInput {
+            move_dir: [dx, dy],
+            action,
+            target: None,
+        });
     }
 }

@@ -2,7 +2,8 @@
 //! Must be added AFTER `ServerPlugins`/`ClientPlugins` but BEFORE any
 //! `Server`/`Client` entity is spawned.
 
-use crate::components::WorldPosition;
+use crate::components::{Experience, Health, WorldPosition};
+use crate::inputs::PlayerInput;
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
@@ -55,11 +56,20 @@ impl Plugin for FellytipProtocolPlugin {
         })
         .add_direction(NetworkDirection::ServerToClient);
 
-        // Components
+        // Register types with Bevy's AppTypeRegistry (required for BRP inspection).
+        app.register_type::<WorldPosition>();
+        app.register_type::<Health>();
+        app.register_type::<Experience>();
+
+        // Register components with lightyear for network replication.
         app.register_component::<WorldPosition>();
+        app.register_component::<Health>();
+        app.register_component::<Experience>();
 
         // Messages
         app.register_message::<GreetMsg>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<PlayerInput>()
+            .add_direction(NetworkDirection::ClientToServer);
     }
 }

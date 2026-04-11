@@ -3,15 +3,14 @@
 
 use bevy::prelude::*;
 use fellytip_shared::{
-    combat::types::CombatantId,
-    components::WorldPosition,
+    combat::{interrupt::InterruptStack, types::CombatantId},
+    components::{Health, WorldPosition},
     world::ecology::RegionId,
 };
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::plugins::combat::{CombatParticipant, Health};
-use fellytip_shared::combat::interrupt::InterruptStack;
+use crate::plugins::combat::{CombatParticipant, ExperienceReward};
 
 /// Marker: this entity is a dungeon boss.
 #[derive(Component)]
@@ -50,6 +49,7 @@ fn spawn_dungeon_boss(mut commands: Commands) {
             armor: 5,
             strength: 18,
         },
+        ExperienceReward(250),
     ));
     tracing::info!("Dungeon boss 'The Hollow King' spawned");
 }
