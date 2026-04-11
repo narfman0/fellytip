@@ -11,6 +11,7 @@ Combat rules are ordinary Rust functions. They take game state and explicit dice
 **Key functions:**
 - `resolve_attack_roll(attacker, defender, roll)` — compares the roll against the defender's armor class; returns hit or miss
 - `resolve_damage(result, attacker, defender, dmg_roll)` — applies strength modifiers to the damage roll; returns a `TakeDamage` effect
+- `resolve_ability(ability_id, caster, target, rolls)` — resolves an activated ability; pre-rolled dice passed as a slice. Ability 1 (StrongAttack) deals 2×d8 damage and applies `"weakened"` status on hit. Unknown IDs return empty effects.
 - `apply_effects(state, effects)` — applies a list of effects to a `CombatState` snapshot; may generate follow-on effects (e.g. a killing blow also emits `Die`)
 
 `CombatantSnapshot` is a plain data struct copied from ECS components into the pure layer for each combat step.
@@ -34,10 +35,13 @@ The `InterruptFrame` match is exhaustive — no `_` wildcard. Every variant must
 The bridge runs in `FixedUpdate` as three chained systems:
 
 **`process_player_input`**
-Reads `PlayerInput` messages from each connected client. Applies movement to `WorldPosition`. When the `BasicAttack` action is present, looks up the target entity and inserts a `PendingAttack` marker component on the player entity.
+Reads `PlayerInput` messages from each connected client. Applies movement to `WorldPosition`. When `BasicAttack` is present, inserts `PendingAttack`; when `UseAbility(id)` is present, inserts `PendingAbility`.
 
 **`initiate_attacks`**
 Converts `PendingAttack` markers into `InterruptFrame::ResolvingAttack` values pushed onto the attacker's `InterruptStack`. Removes the marker.
+
+**`initiate_abilities`**
+Converts `PendingAbility` markers into `InterruptFrame::ResolvingAbility` with pre-rolled dice (`[attack_d20, dmg_d8_1, dmg_d8_2]`) in `AbilityContext.rolls`. Removes the marker.
 
 **`resolve_interrupts`**
 Runs in seven phases each tick:
@@ -60,8 +64,9 @@ XP required to reach the next level is computed by `xp_to_next_level(level)` in 
 | `CombatParticipant` | Holds `CombatantId`, `InterruptStack`, armor, and strength |
 | `ExperienceReward(u32)` | XP granted to the killer; only on NPCs and bosses |
 | `PendingAttack { target }` | Transient marker; consumed by `initiate_attacks` |
+| `PendingAbility { target, ability_id }` | Transient marker; consumed by `initiate_abilities` |
 | `PlayerEntity(Entity)` | Links a `ClientOf` entity to its spawned player entity |
 
 ## Current state
 
-Basic attack → damage → death → XP loop is fully functional. The dungeon boss ("The Hollow King") can be killed by a player; its HP is defined at spawn in `crates/server/src/main.rs`. The ability system (`ResolvingAbility` frame) and movement reactions (`ResolvingMovement`) are scaffolded but no concrete abilities are implemented yet.
+Basic attack (Space) → damage → death → XP loop is fully functional. StrongAttack (Q) is implemented as ability 1: same attack roll, 2×d8 damage, applies `"weakened"` status on hit. The dungeon boss ("The Hollow King") can be killed by either attack. Movement reactions (`ResolvingMovement`) are scaffolded but unimplemented.

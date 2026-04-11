@@ -6,6 +6,7 @@
 use crate::combat::types::{
     AttackRollResult, CombatState, CombatantId, CombatantSnapshot, Effect,
 };
+use smol_str::SmolStr;
 
 /// Attack threshold (to-hit) — roll must beat this (after modifiers) to land.
 const BASE_ATTACK_DC: i32 = 10;
@@ -137,6 +138,39 @@ pub fn resolve_round(
     (state, all)
 }
 
+// ── Ability resolution ────────────────────────────────────────────────────────
+
+/// Resolve an activated ability.
+///
+/// `rolls` — pre-rolled dice injected by the ECS bridge (never rolled here).
+/// Layout for ability 1 (StrongAttack): `[attack_d20, dmg_d8_1, dmg_d8_2]`.
+/// Unknown `ability_id` values return an empty effect list.
+pub fn resolve_ability(
+    ability_id: u8,
+    caster: &CombatantSnapshot,
+    target: &CombatantSnapshot,
+    rolls: &[i32],
+) -> Vec<Effect> {
+    match ability_id {
+        1 => {
+            // StrongAttack: 2×d8 damage + apply "weakened" status on hit.
+            let attack_roll = rolls.first().copied().unwrap_or(1);
+            let dmg1 = rolls.get(1).copied().unwrap_or(1);
+            let dmg2 = rolls.get(2).copied().unwrap_or(1);
+            let roll_result = resolve_attack_roll(caster, target, attack_roll);
+            let mut effects = resolve_damage(&roll_result, caster, target, dmg1 + dmg2);
+            if matches!(roll_result, AttackRollResult::Hit | AttackRollResult::CriticalHit) {
+                effects.push(Effect::ApplyStatus {
+                    target: target.id.clone(),
+                    status: SmolStr::new("weakened"),
+                });
+            }
+            effects
+        }
+        _ => vec![],
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -202,5 +236,45 @@ mod tests {
             .map(|c| c.health)
             .unwrap_or(0);
         assert_eq!(defender_health, 0);
+    }
+
+    #[test]
+    fn strong_attack_deals_more_damage_than_basic_on_same_roll() {
+        let (state, caster_id, target_id) = make_state(20, 100);
+        let caster = state.get(&caster_id).unwrap().snapshot.clone();
+        let target = state.get(&target_id).unwrap().snapshot.clone();
+
+        // Same attack roll (guaranteed hit), dmg roll = 4 for basic; 4+4 for strong.
+        let basic_effects  = resolve_damage(&AttackRollResult::Hit, &caster, &target, 4);
+        let strong_effects = resolve_ability(1, &caster, &target, &[15, 4, 4]);
+
+        let basic_dmg: i32 = basic_effects.iter()
+            .filter_map(|e| if let Effect::TakeDamage { amount, .. } = e { Some(*amount) } else { None })
+            .sum();
+        let strong_dmg: i32 = strong_effects.iter()
+            .filter_map(|e| if let Effect::TakeDamage { amount, .. } = e { Some(*amount) } else { None })
+            .sum();
+
+        assert!(strong_dmg > basic_dmg, "strong_dmg={strong_dmg}, basic_dmg={basic_dmg}");
+    }
+
+    #[test]
+    fn strong_attack_applies_weakened_status_on_hit() {
+        let (state, aid, did) = make_state(20, 100);
+        let caster = state.get(&aid).unwrap().snapshot.clone();
+        let target = state.get(&did).unwrap().snapshot.clone();
+        let effects = resolve_ability(1, &caster, &target, &[15, 4, 4]);
+        assert!(effects.iter().any(|e| matches!(e,
+            Effect::ApplyStatus { status, .. } if status == "weakened"
+        )));
+    }
+
+    #[test]
+    fn unknown_ability_id_returns_no_effects() {
+        let (state, aid, did) = make_state(20, 100);
+        let caster = state.get(&aid).unwrap().snapshot.clone();
+        let target = state.get(&did).unwrap().snapshot.clone();
+        let effects = resolve_ability(99, &caster, &target, &[15, 4, 4]);
+        assert!(effects.is_empty());
     }
 }

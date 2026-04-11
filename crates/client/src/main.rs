@@ -40,7 +40,8 @@ fn main() {
         )
         .add_plugins(plugins::SceneLightingPlugin)
         .add_plugins(plugins::OrbitCameraPlugin)
-        .add_plugins(plugins::TileRendererPlugin);
+        .add_plugins(plugins::TileRendererPlugin)
+        .add_plugins(plugins::EntityRendererPlugin);
     }
 
     app.add_plugins(ClientPlugins {
@@ -135,9 +136,11 @@ fn send_player_input(
         dy /= len;
     }
 
-    // Action: Space → BasicAttack (auto-target nearest enemy)
+    // Action: Space → BasicAttack, Q → StrongAttack (ability 1)
     let action = if keyboard.just_pressed(KeyCode::Space) {
         Some(ActionIntent::BasicAttack)
+    } else if keyboard.just_pressed(KeyCode::KeyQ) {
+        Some(ActionIntent::UseAbility(1))
     } else {
         None
     };

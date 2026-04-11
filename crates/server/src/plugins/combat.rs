@@ -12,7 +12,7 @@ use bevy::{ecs::message::MessageWriter, prelude::*};
 use fellytip_shared::{
     TICK_HZ,
     combat::{
-        interrupt::{AttackContext, InterruptFrame, InterruptStack},
+        interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
         types::{
             CharacterClass, CombatState, CombatantId, CombatantSnapshot, CombatantState,
             CoreStats, Effect,
@@ -54,13 +54,20 @@ pub struct PendingAttack {
     pub target: Entity,
 }
 
+/// Marker: this entity has a pending ability use against `target`.
+#[derive(Component)]
+pub struct PendingAbility {
+    pub target: Entity,
+    pub ability_id: u8,
+}
+
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             FixedUpdate,
-            (process_player_input, initiate_attacks, resolve_interrupts).chain(),
+            (process_player_input, initiate_attacks, initiate_abilities, resolve_interrupts).chain(),
         );
     }
 }
@@ -107,22 +114,43 @@ fn process_player_input(
             }
 
             // Handle combat action
-            if let Some(ActionIntent::BasicAttack) = input.action {
-                let target = if let Some(uuid) = input.target {
-                    enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
-                } else {
-                    enemies.iter().next().map(|(e, _)| e)
-                };
-                if let Some(target_entity) = target {
-                    commands
-                        .entity(player_entity.0)
-                        .insert(PendingAttack { target: target_entity });
-                    tracing::debug!(
-                        player = ?player_entity.0,
-                        target = ?target_entity,
-                        "BasicAttack queued"
-                    );
+            match input.action {
+                Some(ActionIntent::BasicAttack) => {
+                    let target = if let Some(uuid) = input.target {
+                        enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
+                    } else {
+                        enemies.iter().next().map(|(e, _)| e)
+                    };
+                    if let Some(target_entity) = target {
+                        commands
+                            .entity(player_entity.0)
+                            .insert(PendingAttack { target: target_entity });
+                        tracing::debug!(
+                            player = ?player_entity.0,
+                            target = ?target_entity,
+                            "BasicAttack queued"
+                        );
+                    }
                 }
+                Some(ActionIntent::UseAbility(ability_id)) => {
+                    let target = if let Some(uuid) = input.target {
+                        enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
+                    } else {
+                        enemies.iter().next().map(|(e, _)| e)
+                    };
+                    if let Some(target_entity) = target {
+                        commands
+                            .entity(player_entity.0)
+                            .insert(PendingAbility { target: target_entity, ability_id });
+                        tracing::debug!(
+                            player = ?player_entity.0,
+                            target = ?target_entity,
+                            ability_id,
+                            "UseAbility queued"
+                        );
+                    }
+                }
+                Some(ActionIntent::Interact) | Some(ActionIntent::Dodge) | None => {}
             }
         }
     }
@@ -150,6 +178,35 @@ fn initiate_attacks(
             participant.interrupt_stack.push(frame);
         }
         commands.entity(entity).remove::<PendingAttack>();
+    }
+}
+
+// ── Ability initiation ────────────────────────────────────────────────────────
+
+/// Convert pending abilities into interrupt frames, then clear the marker.
+fn initiate_abilities(
+    mut caster_query: Query<(Entity, &PendingAbility, &mut CombatParticipant)>,
+    defender_query: Query<&CombatParticipant, Without<PendingAbility>>,
+    mut commands: Commands,
+) {
+    for (entity, pending, mut participant) in caster_query.iter_mut() {
+        let caster_id = participant.id.clone();
+        if let Ok(defender) = defender_query.get(pending.target) {
+            let frame = InterruptFrame::ResolvingAbility {
+                ctx: AbilityContext {
+                    caster: caster_id,
+                    ability_id: pending.ability_id,
+                    targets: vec![defender.id.clone()],
+                    rolls: vec![
+                        rand::random_range(1..=20), // attack d20
+                        rand::random_range(1..=8),  // dmg d8 #1
+                        rand::random_range(1..=8),  // dmg d8 #2
+                    ],
+                },
+            };
+            participant.interrupt_stack.push(frame);
+        }
+        commands.entity(entity).remove::<PendingAbility>();
     }
 }
 

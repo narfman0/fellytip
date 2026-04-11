@@ -3,7 +3,7 @@
 //! `InterruptStack::step()` drives one frame of resolution per call.
 //! Every `InterruptFrame` variant must be handled explicitly — no `_` wildcard.
 
-use crate::combat::rules::{resolve_attack_roll, resolve_damage};
+use crate::combat::rules::{resolve_ability, resolve_attack_roll, resolve_damage};
 use crate::combat::types::{CombatState, CombatantId, Effect};
 
 // ── Context types ─────────────────────────────────────────────────────────────
@@ -30,6 +30,8 @@ pub struct AbilityContext {
     pub caster: CombatantId,
     pub ability_id: u8,
     pub targets: Vec<CombatantId>,
+    /// Pre-rolled dice injected by the ECS bridge: [attack_d20, dmg_d8_1, dmg_d8_2, …]
+    pub rolls: Vec<i32>,
 }
 
 #[derive(Clone, Debug)]
@@ -102,9 +104,17 @@ impl InterruptStack {
             }
 
             InterruptFrame::ResolvingAbility { ctx } => {
-                // Ability resolution placeholder — full implementation in Step 13.
-                let _ = (ctx, rng);
-                vec![]
+                let _ = rng; // dice are pre-rolled into ctx.rolls
+                let Some(caster) = state.get(&ctx.caster).map(|c| c.snapshot.clone()) else {
+                    return (vec![], self.0.is_empty());
+                };
+                let Some(target_id) = ctx.targets.first().cloned() else {
+                    return (vec![], self.0.is_empty());
+                };
+                let Some(target) = state.get(&target_id).map(|c| c.snapshot.clone()) else {
+                    return (vec![], self.0.is_empty());
+                };
+                resolve_ability(ctx.ability_id, &caster, &target, &ctx.rolls)
             }
 
             InterruptFrame::ResolvingMovement { ctx } => {
