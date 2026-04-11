@@ -30,6 +30,7 @@ fn main() {
         .add_plugins(plugins::ai::AiPlugin)
         .add_plugins(plugins::story::StoryPlugin)
         .add_plugins(plugins::combat::CombatPlugin)
+        .add_plugins(plugins::party::PartyPlugin)
         .add_systems(Startup, plugins::ai::seed_factions)
         .add_systems(Startup, spawn_server)
         .add_observer(on_link_spawned)
