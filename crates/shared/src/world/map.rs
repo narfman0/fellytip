@@ -359,6 +359,10 @@ pub fn generate_map(seed: u64) -> WorldMap {
         }
     }
 
+    // ── River pass ────────────────────────────────────────────────────────────
+
+    river_pass(&mut columns, &heights);
+
     // ── Shallow cave pass ─────────────────────────────────────────────────────
 
     cave_pass(
@@ -540,6 +544,80 @@ fn shaft_pass(columns: &mut [TileColumn], seed: u64) {
     }
 }
 
+/// Steepest-descent river generation.
+///
+/// # Algorithm
+/// 1. For every tile, find the steepest cardinal + diagonal downhill neighbour.
+/// 2. Sort tiles height-descending (highlands first).
+/// 3. Accumulate drainage area: each tile contributes its count to its
+///    downhill neighbour.
+/// 4. Walkable surface tiles whose drainage area exceeds [`RIVER_THRESHOLD`]
+///    are reclassified as [`TileKind::River`] (non-walkable; requires a boat
+///    or bridge to cross).
+///
+/// Water and Mountain tiles are never converted.
+fn river_pass(columns: &mut [TileColumn], heights: &[f32]) {
+    const RIVER_THRESHOLD: u32 = 800; // tiles feeding into a cell for it to become a river
+
+    let n = MAP_WIDTH * MAP_HEIGHT;
+
+    // ── Build flow-direction map ──────────────────────────────────────────────
+    let mut flow_dir = vec![None::<usize>; n];
+    for iy in 0..MAP_HEIGHT {
+        for ix in 0..MAP_WIDTH {
+            let h = heights[ix + iy * MAP_WIDTH];
+            let mut best_h = h;
+            let mut best_idx = None;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    if dx == 0 && dy == 0 { continue; }
+                    let nx = ix as i32 + dx;
+                    let ny = iy as i32 + dy;
+                    if nx < 0 || ny < 0
+                        || nx as usize >= MAP_WIDTH
+                        || ny as usize >= MAP_HEIGHT
+                    {
+                        continue;
+                    }
+                    let nh = heights[nx as usize + ny as usize * MAP_WIDTH];
+                    if nh < best_h {
+                        best_h = nh;
+                        best_idx = Some(nx as usize + ny as usize * MAP_WIDTH);
+                    }
+                }
+            }
+            flow_dir[ix + iy * MAP_WIDTH] = best_idx;
+        }
+    }
+
+    // ── Accumulate drainage area (process highest tiles first) ───────────────
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_unstable_by(|&a, &b| heights[b].partial_cmp(&heights[a]).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut flow = vec![1u32; n];
+    for &idx in &order {
+        if let Some(dst) = flow_dir[idx] {
+            flow[dst] = flow[dst].saturating_add(flow[idx]);
+        }
+    }
+
+    // ── Convert high-drainage walkable tiles to River ─────────────────────────
+    for idx in 0..n {
+        if flow[idx] < RIVER_THRESHOLD {
+            continue;
+        }
+        let col = &mut columns[idx];
+        if let Some(layer) = col.layers.iter_mut().find(|l| {
+            l.is_surface_kind()
+                && l.walkable
+                && !matches!(l.kind, TileKind::Mountain | TileKind::Water)
+        }) {
+            layer.kind = TileKind::River;
+            layer.walkable = false;
+        }
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -617,6 +695,29 @@ mod tests {
         let biome_count = biome_kinds.iter().filter(|k| seen.contains(k)).count();
         assert!(biome_count >= 5,
             "expected ≥5 distinct biome kinds across seeds 0–4, got {biome_count}; seen: {seen:?}");
+    }
+
+    #[test]
+    fn rivers_are_generated() {
+        let m = generate_map(42);
+        let river_count = m.columns.iter()
+            .flat_map(|c| c.layers.iter())
+            .filter(|l| l.kind == TileKind::River)
+            .count();
+        assert!(river_count > 100,
+            "expected >100 River tiles, got {river_count}");
+    }
+
+    #[test]
+    fn rivers_are_not_walkable() {
+        let m = generate_map(1);
+        for col in &m.columns {
+            for layer in &col.layers {
+                if layer.kind == TileKind::River {
+                    assert!(!layer.walkable, "River tile should not be walkable");
+                }
+            }
+        }
     }
 
     #[test]
