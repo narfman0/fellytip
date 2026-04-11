@@ -1,3 +1,5 @@
+mod plugins;
+
 use bevy::prelude::*;
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
@@ -22,6 +24,7 @@ fn main() {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),
         })
         .add_plugins(FellytipProtocolPlugin)
+        .add_plugins(plugins::persistence::PersistencePlugin)
         .add_systems(Startup, spawn_server)
         .add_observer(on_link_spawned)
         .add_observer(on_client_connected)
