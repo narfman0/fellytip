@@ -2,13 +2,15 @@
 
 Combat is built in three layers: pure rules, an interrupt stack, and a thin ECS bridge. The layers are explicitly separated so the rules can be tested independently of Bevy.
 
+Exact dice sizes, damage modifiers, and XP thresholds are defined in `crates/shared/src/combat/` — that directory is the authority.
+
 ## Layer 1 — Pure rules (`crates/shared/src/combat/`)
 
 Combat rules are ordinary Rust functions. They take game state and explicit dice rolls as inputs and return effects as outputs. They never generate randomness internally.
 
 **Key functions:**
-- `resolve_attack_roll(attacker, defender, roll)` — compares the d20 roll against the defender's armor class; returns hit or miss
-- `resolve_damage(result, attacker, defender, dmg_roll)` — applies strength modifiers to the d8 damage roll; returns a `TakeDamage` effect
+- `resolve_attack_roll(attacker, defender, roll)` — compares the roll against the defender's armor class; returns hit or miss
+- `resolve_damage(result, attacker, defender, dmg_roll)` — applies strength modifiers to the damage roll; returns a `TakeDamage` effect
 - `apply_effects(state, effects)` — applies a list of effects to a `CombatState` snapshot; may generate follow-on effects (e.g. a killing blow also emits `Die`)
 
 `CombatantSnapshot` is a plain data struct copied from ECS components into the pure layer for each combat step.
@@ -49,7 +51,7 @@ Runs in seven phases each tick:
 
 ## Levelling
 
-XP thresholds follow a simple linear formula: `xp_to_next_level(level) = 100 × level`. Level 1 needs 100 XP, level 2 needs 200, and so on. Multiple level-ups from a single kill are applied in a loop.
+XP required to reach the next level is computed by `xp_to_next_level(level)` in `crates/shared/src/combat/`. Multiple level-ups from a single kill are applied in a loop.
 
 ## Server-only combat components
 
@@ -62,4 +64,4 @@ XP thresholds follow a simple linear formula: `xp_to_next_level(level) = 100 × 
 
 ## Current state
 
-Basic attack → damage → death → XP loop is fully functional. The dungeon boss ("The Hollow King", 500 HP) can be killed by a player. The ability system (`ResolvingAbility` frame) and movement reactions (`ResolvingMovement`) are scaffolded but no concrete abilities are implemented yet.
+Basic attack → damage → death → XP loop is fully functional. The dungeon boss ("The Hollow King") can be killed by a player; its HP is defined at spawn in `crates/server/src/main.rs`. The ability system (`ResolvingAbility` frame) and movement reactions (`ResolvingMovement`) are scaffolded but no concrete abilities are implemented yet.

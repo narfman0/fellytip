@@ -1,17 +1,19 @@
 # System: Networking
 
-Networking is handled by [Lightyear 0.26.4](https://github.com/cBournhonesque/lightyear), which targets Bevy 0.18. The transport layer is UDP (netcode). Clients and server identify each other by a shared `PROTOCOL_ID` and `PRIVATE_KEY`.
+Networking is handled by [Lightyear 0.26.4](https://github.com/cBournhonesque/lightyear), which targets Bevy 0.18. The transport layer is UDP (netcode).
+
+Port numbers and the protocol constants (`PROTOCOL_ID`, `PRIVATE_KEY`, `NET_PORT`) are defined in `crates/shared/src/lib.rs`. BRP port constants are defined in the server and client `main.rs` files respectively.
 
 ## Topology
 
 ```
 Server (fellytip-server)
-  ├── UDP port 5000        — game traffic (Lightyear netcode)
-  └── HTTP port 15702      — BRP JSON-RPC (observability, ralph)
+  ├── UDP NET_PORT          — game traffic (Lightyear netcode)
+  └── HTTP BRP_PORT         — BRP JSON-RPC (observability, ralph)
 
 Client (fellytip-client)
-  ├── connects to server UDP port 5000
-  └── HTTP port 15703      — BRP JSON-RPC (headless client observability)
+  ├── connects to server UDP NET_PORT
+  └── HTTP BRP_PORT_HEADLESS — BRP JSON-RPC (headless client observability)
 ```
 
 Up to 4 clients may connect simultaneously. A 5th connection is rejected by `PartyPlugin`.
@@ -45,7 +47,7 @@ All three are serializable (`serde`) and reflectable (`bevy::reflect`).
 
 `process_player_input` reads `MessageReceiver<PlayerInput>` on each `ClientOf` entity, applies movement to the linked player entity's `WorldPosition`, and queues attacks. The `PlayerEntity(Entity)` component on the `ClientOf` entity provides the link.
 
-Replication is pushed to all clients every 50 ms (`SendUpdatesMode::SinceLastAck`).
+Replication is pushed to all clients at the interval configured in `SendUpdatesMode` (see `crates/server/src/plugins/combat.rs`).
 
 ## Connection lifecycle
 

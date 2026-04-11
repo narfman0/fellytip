@@ -2,11 +2,13 @@
 
 The world simulation runs independently of player presence. Two separate schedules tick at different rates; neither waits for the other.
 
+Exact tick rates and timing constants are defined in `crates/shared/src/lib.rs` (`TICK_HZ`) and `crates/server/src/plugins/world_sim.rs`.
+
 ## Tick rates
 
 | Schedule | Rate | Systems |
 |---|---|---|
-| `FixedUpdate` | 62.5 Hz | Player input, movement, combat resolution |
+| `FixedUpdate` | `TICK_HZ` (see `shared/src/lib.rs`) | Player input, movement, combat resolution |
 | `WorldSimSchedule` | 1 Hz (real time) | Faction AI, ecology, story flush |
 
 `WorldSimSchedule` is a custom Bevy schedule driven by a 1-second repeating timer in `Update`. It is not a `FixedUpdate` variant — it fires based on wall-clock time, not simulation ticks.
@@ -15,7 +17,7 @@ The world simulation runs independently of player presence. Two separate schedul
 
 ## History warp
 
-On server startup, `MapGenPlugin` runs `WorldSimSchedule` 200 times synchronously before accepting network connections. This pre-ages the world: factions have had time to expand and compete, ecology populations have stabilised or collapsed, and story events have accumulated. Players join a world with history, not a blank slate.
+On server startup, `MapGenPlugin` runs `WorldSimSchedule` synchronously for `HISTORY_WARP_TICKS` iterations (see `crates/server/src/plugins/map_gen.rs`) before accepting network connections. This pre-ages the world: factions have had time to expand and compete, ecology populations have stabilised or collapsed, and story events have accumulated. Players join a world with history, not a blank slate.
 
 ## Ecology (`world/ecology.rs`)
 
@@ -26,7 +28,9 @@ new_prey     = prey × (1 + r × (1 − prey/K)) − α × predator × prey
 new_predator = predator × (β × α × prey − δ)
 ```
 
-When a prey population falls below a collapse threshold, a `StoryEvent::EcologyCollapse` is emitted. This propagates to faction AI: food-scarce factions re-evaluate their goals and may shift toward raiding.
+The model coefficients (`r`, `K`, `α`, `β`, `δ`) and the collapse threshold are defined in `ecology.rs`.
+
+When a prey population falls below the collapse threshold, a `StoryEvent::EcologyCollapse` is emitted. This propagates to faction AI: food-scarce factions re-evaluate their goals and may shift toward raiding.
 
 Populations are clamped to non-negative values. The model is pure — the ECS bridge passes current counts in and receives updated counts back.
 
@@ -46,7 +50,7 @@ NPC entities wander toward their faction's active goal each world-sim tick. Indi
 
 ## Story log (`world/story.rs`)
 
-Any server system can emit a `WriteStoryEvent` Bevy message. The story plugin collects these and appends them to the `StoryLog` resource, which is an in-memory ordered list of `StoryEvent` values indexed by lore tags.
+Any server system can emit a `WriteStoryEvent` Bevy message. The story plugin collects these and appends them to the `StoryLog` resource — an in-memory ordered list of `StoryEvent` values indexed by lore tags.
 
 A `StoryEvent` records:
 - Unique ID and world-sim tick timestamp
