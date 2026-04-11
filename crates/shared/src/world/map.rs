@@ -175,6 +175,10 @@ pub struct WorldMap {
     /// Flat row-major array: index with `ix + iy * MAP_WIDTH`.
     pub columns: Vec<TileColumn>,
     pub seed: u64,
+    /// Flat row-major road flag array. `true` = road tile (same indexing as `columns`).
+    /// Populated after `generate_map` by [`crate::world::civilization::generate_roads`].
+    #[serde(default)]
+    pub road_tiles: Vec<bool>,
 }
 
 impl WorldMap {
@@ -398,7 +402,7 @@ pub fn generate_map(seed: u64) -> WorldMap {
 
     shaft_pass(&mut columns, seed.wrapping_add(3));
 
-    WorldMap { columns, seed }
+    WorldMap { columns, seed, road_tiles: vec![false; MAP_WIDTH * MAP_HEIGHT] }
 }
 
 /// Parameters for one underground generation pass.
@@ -871,7 +875,7 @@ mod tests {
             walkable: true,
             corner_offsets: [0.0; 4],
         };
-        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], seed: 0 };
+        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], seed: 0, road_tiles: vec![] };
         map.columns[0] = TileColumn { layers: vec![make_layer(1.0)] };
         map.columns[1] = TileColumn { layers: vec![make_layer(3.0)] };
 
