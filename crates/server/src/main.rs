@@ -36,6 +36,7 @@ fn main() {
         .add_plugins(plugins::combat::CombatPlugin)
         .add_plugins(plugins::party::PartyPlugin)
         .add_plugins(plugins::dungeon::DungeonPlugin)
+        .add_plugins(plugins::map_gen::MapGenPlugin)
         .add_systems(Startup, plugins::ai::seed_factions)
         .add_systems(Startup, spawn_server)
         .add_observer(on_link_spawned)
@@ -85,7 +86,7 @@ fn on_client_connected(
     }
     let player = commands
         .spawn((
-            WorldPosition { x: 0.0, y: 0.0 },
+            WorldPosition { x: 0.0, y: 0.0, z: 0.0 },
             Health { current: 100, max: 100 },
             CombatParticipant {
                 id: CombatantId(Uuid::new_v4()),

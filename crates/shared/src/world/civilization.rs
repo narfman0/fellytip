@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 
+use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
@@ -38,6 +39,10 @@ pub struct Settlement {
     /// World-space Z elevation at this location.
     pub z: f32,
 }
+
+/// Bevy resource holding all generated settlements.
+#[derive(Resource, Default, Clone, Debug, Serialize, Deserialize)]
+pub struct Settlements(pub Vec<Settlement>);
 
 /// Territory map: one optional settlement-index per tile column (flat row-major).
 ///
