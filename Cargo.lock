@@ -2352,6 +2352,7 @@ dependencies = [
  "bevy",
  "lightyear",
  "rand 0.10.0",
+ "rand_chacha 0.10.0",
  "serde",
  "serde_json",
  "smol_str 0.3.6",

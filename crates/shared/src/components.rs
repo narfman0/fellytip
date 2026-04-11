@@ -3,10 +3,11 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// 2-D world position (game units, not pixels).
+/// 3-D world position (game units, not pixels).
 ///
 /// This is the single canonical position component replicated
 /// from server to every connected client.
+/// `z` is the elevation — entities follow terrain height automatically.
 #[derive(
     Component, Clone, PartialEq, Debug, Default,
     Serialize, Deserialize, Reflect,
@@ -15,6 +16,8 @@ use serde::{Deserialize, Serialize};
 pub struct WorldPosition {
     pub x: f32,
     pub y: f32,
+    /// Elevation in world units. 0 = sea level.
+    pub z: f32,
 }
 
 /// Current and maximum hit points — replicated so clients can render health bars.

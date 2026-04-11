@@ -41,7 +41,7 @@ fn spawn_dungeon_boss(mut commands: Commands) {
             region: RegionId("dungeon_01".into()),
         },
         InDungeon,
-        WorldPosition { x: 50.0, y: 50.0 },
+        WorldPosition { x: 50.0, y: 50.0, z: 0.0 },
         Health { current: 500, max: 500 },
         CombatParticipant {
             id,
