@@ -203,8 +203,9 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
 /// Generate a world map deterministically from `seed`.
 ///
 /// # Passes
-/// 1. **Surface** — seeded noise → box-blur → classify (Water/Plains/Forest/Mountain)
-///    → corner-averaged heights for smooth bilinear slopes.
+/// 1. **Surface** — fBm terrain noise (6 octaves, continent-scale base frequency)
+///    → classify (Water/Plains/Forest/Mountain) → corner-averaged heights for
+///    smooth bilinear slopes.
 /// 2. **Shallow caves** (Z ≈ -15 to -22) — cellular automata with 48 % initial fill,
 ///    5 smoothing steps.  Produces winding passages 3–8 tiles wide, similar to
 ///    dungeon crawl level 1.
@@ -212,31 +213,24 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
 ///    Produces vast, mostly-open caverns with scattered pillars — city-scale voids
 ///    suitable for underground civilizations.
 pub fn generate_map(seed: u64) -> WorldMap {
-    use rand::{RngExt, SeedableRng};
-    use rand_chacha::ChaCha8Rng;
+    use crate::math::fbm;
 
-    // ── Surface pass ──────────────────────────────���───────────────────────────
+    // ── Surface pass ──────────────────────────────────────────────────────────
+    // Derive a large coordinate offset from the seed so different seeds sample
+    // entirely different regions of the infinite fBm noise field.
+    let ox = ((seed.wrapping_mul(2_654_435_761)) % 100_000) as f32;
+    let oy = ((seed.wrapping_mul(805_459_861))   % 100_000) as f32;
 
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    // Base frequency: ~4 cycles across the 512-tile map → continent-scale features.
+    const BASE_FREQ: f32 = 4.0 / MAP_WIDTH as f32;
 
-    let mut heights = vec![0.0f32; MAP_WIDTH * MAP_HEIGHT];
-    for h in heights.iter_mut() {
-        *h = rng.random::<f32>();
-    }
-
-    // Cardinal box-blur to smooth point noise into continent-scale shapes.
-    let orig = heights.clone();
-    for iy in 0..MAP_HEIGHT {
-        for ix in 0..MAP_WIDTH {
-            let mut sum = orig[ix + iy * MAP_WIDTH];
-            let mut count = 1.0f32;
-            if ix > 0                { sum += orig[(ix-1) + iy * MAP_WIDTH];     count += 1.0; }
-            if ix + 1 < MAP_WIDTH    { sum += orig[(ix+1) + iy * MAP_WIDTH];     count += 1.0; }
-            if iy > 0                { sum += orig[ix + (iy-1) * MAP_WIDTH];     count += 1.0; }
-            if iy + 1 < MAP_HEIGHT   { sum += orig[ix + (iy+1) * MAP_WIDTH];     count += 1.0; }
-            heights[ix + iy * MAP_WIDTH] = sum / count;
-        }
-    }
+    let heights: Vec<f32> = (0..MAP_WIDTH * MAP_HEIGHT)
+        .map(|idx| {
+            let ix = (idx % MAP_WIDTH) as f32;
+            let iy = (idx / MAP_WIDTH) as f32;
+            fbm((ix + ox) * BASE_FREQ, (iy + oy) * BASE_FREQ, 6, 0.5, 2.0)
+        })
+        .collect();
 
     let z_tops: Vec<f32> = heights
         .iter()
