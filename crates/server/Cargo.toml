@@ -7,8 +7,10 @@ edition = "2021"
 fellytip-shared    = { workspace = true }
 bevy               = { workspace = true, features = ["bevy_log", "multi_threaded", "bevy_remote"] }
 lightyear          = { workspace = true, features = ["std", "server", "client", "netcode", "udp", "replication"] }
+rand               = { workspace = true }
 smol_str           = { workspace = true }
 sqlx               = { workspace = true }
+uuid               = { workspace = true }
 tokio              = { workspace = true }
 anyhow             = { workspace = true }
 tracing            = { workspace = true }
