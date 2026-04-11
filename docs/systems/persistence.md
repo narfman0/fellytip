@@ -13,14 +13,20 @@ Migrations live in `migrations/` and are embedded at compile time via `sqlx::mig
 | `migrations/001_initial.sql` | `players`, `story_events`, `factions`, `ecology_state`, `world_meta` tables |
 | `migrations/002_world_map.sql` | `world_map` table; adds `pos_z` column to `players` |
 
-## What is and isn't persisted yet
+## What is and isn't persisted
 
 | Data | Persisted | Notes |
 |---|---|---|
-| Story events | Partial — flush not yet wired | `StoryLog` resource accumulates in memory |
-| Player position / health | Schema exists | Save not yet called each session |
+| Story events | Yes — flushed every `FLUSH_INTERVAL_TICKS` world-sim ticks | See `story.rs` for the interval constant |
+| Player state | Yes — saved on disconnect | `WorldPosition`, `Health`, `Experience`, class; UUID used as name placeholder |
 | Faction state | Schema exists | Load/save not yet wired |
 | Ecology state | Schema exists | Load/save not yet wired |
 | World map | Schema exists | Regenerated from seed each startup |
 
-The persistence stub is in place and migrations run correctly. The autosave loop (flush every N world-sim ticks — see `world_sim.rs`) is the next persistence milestone.
+## Story event flush (`crates/server/src/plugins/story.rs`)
+
+Every `FLUSH_INTERVAL_TICKS` world-sim ticks, all accumulated `StoryEvent` entries in `StoryLog` are drained and written to the `story_events` table via `sqlx::query`. Event `kind` is stored as a debug-formatted string; `participants` and `lore_tags` as JSON arrays.
+
+## Player save on disconnect (`crates/server/src/main.rs`)
+
+An observer on `Add<Disconnected>` looks up the `PlayerEntity` linked to the disconnecting client and UPSERTs its `WorldPosition`, `Health`, and `Experience` into the `players` table.

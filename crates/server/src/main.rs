@@ -14,6 +14,7 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 
 use plugins::combat::{CombatParticipant, PlayerEntity};
+use plugins::persistence::Db;
 
 /// BRP HTTP port for the server (used by ralph scenarios and tooling).
 const BRP_PORT: u16 = 15702;
@@ -41,6 +42,7 @@ fn main() {
         .add_systems(Startup, spawn_server)
         .add_observer(on_link_spawned)
         .add_observer(on_client_connected)
+        .add_observer(on_client_disconnected)
         .run();
 }
 
@@ -72,6 +74,65 @@ fn on_link_spawned(trigger: On<Add, LinkOf>, mut commands: Commands) {
             false,
         ));
     tracing::debug!("Link spawned, added ReplicationSender: {:?}", trigger.entity);
+}
+
+/// When a client disconnects, save its player's current state to SQLite.
+fn on_client_disconnected(
+    trigger: On<Add, Disconnected>,
+    client_q: Query<&PlayerEntity>,
+    player_q: Query<(&CombatParticipant, &WorldPosition, &Health, &Experience)>,
+    db: Res<Db>,
+) {
+    let Ok(PlayerEntity(player_entity)) = client_q.get(trigger.entity) else {
+        return;
+    };
+    let Ok((participant, pos, health, exp)) = player_q.get(*player_entity) else {
+        return;
+    };
+
+    let player_id  = participant.id.0.to_string();
+    let level      = exp.level as i64;
+    let hp_current = health.current as i64;
+    let hp_max     = health.max as i64;
+    let pos_x      = pos.x as f64;
+    let pos_y      = pos.y as f64;
+    let last_seen  = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // Use the UUID as a placeholder name until the name system is implemented.
+    let name  = player_id.clone();
+    let class = "Warrior";
+
+    let pool = db.pool().clone();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for player save");
+
+    rt.block_on(async move {
+        let res = sqlx::query(
+            "INSERT OR REPLACE INTO players \
+             (id, name, class, level, health_current, health_max, pos_x, pos_y, last_seen) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&player_id)
+        .bind(&name)
+        .bind(class)
+        .bind(level)
+        .bind(hp_current)
+        .bind(hp_max)
+        .bind(pos_x)
+        .bind(pos_y)
+        .bind(last_seen)
+        .execute(&pool)
+        .await;
+
+        match res {
+            Ok(_) => tracing::info!(player = %player_id, "Player state saved on disconnect"),
+            Err(e) => tracing::warn!(player = %player_id, "Player save failed: {e}"),
+        }
+    });
 }
 
 /// When the netcode handshake completes, spawn a player entity and link it to
