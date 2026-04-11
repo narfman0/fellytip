@@ -1,4 +1,5 @@
 pub mod basic_movement;
+pub mod combat_resolves;
 
 use anyhow::Result;
 
@@ -8,7 +9,10 @@ pub trait Scenario {
 }
 
 pub fn all_scenarios() -> Vec<Box<dyn Scenario>> {
-    vec![Box::new(basic_movement::BasicMovement)]
+    vec![
+        Box::new(basic_movement::BasicMovement),
+        Box::new(combat_resolves::CombatResolves),
+    ]
 }
 
 pub fn find_scenario(name: &str) -> Option<Box<dyn Scenario>> {

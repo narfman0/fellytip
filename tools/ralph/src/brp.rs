@@ -64,6 +64,17 @@ impl BrpClient {
         }
     }
 
+    /// `bevy/get` — fetch specific components from a single entity.
+    pub fn get(&self, entity: u64, components: &[&str]) -> Result<Value> {
+        self.call(
+            "bevy/get",
+            json!({
+                "entity": entity,
+                "components": components,
+            }),
+        )
+    }
+
     /// Check whether the server is reachable.
     pub fn ping(&self) -> bool {
         self.call("bevy/list", json!({})).is_ok()
