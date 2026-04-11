@@ -316,6 +316,10 @@ pub fn generate_map(seed: u64) -> WorldMap {
         },
     );
 
+    // ── Shaft pass ────────────────────────────────────────────────────────────
+
+    shaft_pass(&mut columns, seed.wrapping_add(3));
+
     WorldMap { columns, seed }
 }
 
@@ -391,6 +395,79 @@ fn cave_pass(columns: &mut Vec<TileColumn>, seed: u64, p: CaveParams) {
                     .sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
             }
         }
+    }
+}
+
+/// Generate vertical shafts that connect walkable surface tiles to underground levels.
+///
+/// # Algorithm
+/// 1. Collect all columns that have BOTH a walkable surface layer AND at least one
+///    underground layer (Cavern or LuminousGrotto).  These are candidate shaft sites.
+/// 2. Thin the candidates: keep only every `SHAFT_SPACING`-th candidate (via the
+///    seeded RNG) so shafts appear periodically rather than everywhere.
+/// 3. For each selected shaft column, add a `Tunnel` layer between the surface
+///    floor and the shallowest underground layer.  The tunnel is walkable so the
+///    movement system treats it as a sloped transition.
+///
+/// The shaft layer bridges the Z gap: `z_base = underground_floor`, `z_top =
+/// surface_floor`.  Entities entering the shaft column smoothly lerp down to the
+/// underground floor because that is now the highest reachable walkable layer
+/// within `STEP_HEIGHT` of the surface (the surface layer is not removed — the
+/// shaft sits beside it, and the game can use trigger volumes to enter/exit).
+///
+/// **No surface layer is removed**: shafts are additive.  A shaft column has both
+/// the original surface layer and the tunnel layer; which one the entity stands on
+/// depends on their current Z.
+fn shaft_pass(columns: &mut Vec<TileColumn>, seed: u64) {
+    use rand::{RngExt, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+
+    /// Roughly 1 shaft per SHAFT_SPACING columns (on average).
+    const SHAFT_SPACING: usize = 40;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+    for idx in 0..columns.len() {
+        // Decide whether to place a shaft here.
+        // Use reservoir-style sampling: accept with probability 1/SHAFT_SPACING.
+        if (rng.random::<f32>() * SHAFT_SPACING as f32) >= 1.0 {
+            continue;
+        }
+
+        let col = &columns[idx];
+
+        // Must have a walkable surface layer.
+        let surface_z = match col.layers.iter().find(|l| l.is_surface_kind() && l.walkable) {
+            Some(l) => l.z_top,
+            None => continue,
+        };
+
+        // Must have at least one underground walkable layer.
+        let underground_z = match col
+            .layers
+            .iter()
+            .filter(|l| l.is_underground_kind() && l.walkable)
+            .map(|l| l.z_top)
+            // Pick the shallowest underground floor (highest negative Z).
+            .reduce(f32::max)
+        {
+            Some(z) => z,
+            None => continue,
+        };
+
+        // Add the tunnel layer bridging surface → underground.
+        let shaft = TileLayer {
+            z_base: underground_z,
+            z_top: surface_z,
+            kind: TileKind::Tunnel,
+            walkable: true,
+            corner_offsets: [0.0; 4],
+        };
+        columns[idx].layers.push(shaft);
+        // Re-sort to maintain ascending z_base order.
+        columns[idx]
+            .layers
+            .sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
     }
 }
 
@@ -529,13 +606,60 @@ mod tests {
 
     #[test]
     fn surface_and_underground_can_coexist_in_column() {
-        // A column with both a surface layer AND an underground layer is valid.
         let m = generate_map(0);
         let has_both = m.columns.iter().any(|col| {
             col.layers.iter().any(|l| l.is_surface_kind())
                 && col.layers.iter().any(|l| l.is_underground_kind())
         });
         assert!(has_both, "no column has both surface and underground layers");
+    }
+
+    #[test]
+    fn shafts_are_generated() {
+        let m = generate_map(0);
+        let shaft_count = m.columns.iter()
+            .flat_map(|c| c.layers.iter())
+            .filter(|l| l.kind == TileKind::Tunnel)
+            .count();
+        // With ~1/40 chance per eligible column, expect many thousands of shafts.
+        assert!(shaft_count > 1_000,
+            "expected >1000 shaft layers, got {shaft_count}");
+    }
+
+    #[test]
+    fn shaft_z_top_equals_surface_z() {
+        // Every Tunnel layer's z_top should equal a walkable surface layer's z_top
+        // in the same column, and z_base should equal an underground layer's z_top.
+        let m = generate_map(2);
+        for col in &m.columns {
+            for shaft in col.layers.iter().filter(|l| l.kind == TileKind::Tunnel) {
+                let surface_match = col.layers.iter()
+                    .any(|l| l.is_surface_kind() && l.walkable
+                        && (l.z_top - shaft.z_top).abs() < 0.01);
+                let underground_match = col.layers.iter()
+                    .any(|l| l.is_underground_kind() && l.walkable
+                        && (l.z_top - shaft.z_base).abs() < 0.01);
+                assert!(surface_match,
+                    "shaft z_top={} has no matching surface layer", shaft.z_top);
+                assert!(underground_match,
+                    "shaft z_base={} has no matching underground layer", shaft.z_base);
+            }
+        }
+    }
+
+    #[test]
+    fn shaft_column_remains_sorted() {
+        // Shaft pass must not break z_base sort order.
+        let m = generate_map(7);
+        for (i, col) in m.columns.iter().enumerate() {
+            for pair in col.layers.windows(2) {
+                assert!(
+                    pair[0].z_base <= pair[1].z_base,
+                    "column {i} unsorted after shaft pass: {} > {}",
+                    pair[0].z_base, pair[1].z_base
+                );
+            }
+        }
     }
 
     #[test]
