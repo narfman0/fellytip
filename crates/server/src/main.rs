@@ -28,6 +28,7 @@ fn main() {
         .add_plugins(plugins::world_sim::WorldSimPlugin)
         .add_plugins(plugins::ecology::EcologyPlugin)
         .add_plugins(plugins::ai::AiPlugin)
+        .add_plugins(plugins::story::StoryPlugin)
         .add_systems(Startup, plugins::ai::seed_factions)
         .add_systems(Startup, spawn_server)
         .add_observer(on_link_spawned)
