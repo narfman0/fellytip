@@ -1,6 +1,8 @@
 {
   "permissions": {
     "allow": [
+      "Bash(./target/debug/fellytip-server)",
+      "Bash(./target/debug/fellytip-client --headless)",
       "Bash(cargo add *)",
       "Bash(cargo build)",
       "Bash(cargo build -p *)",
@@ -9,6 +11,7 @@
       "Bash(cargo check:*)",
       "Bash(cargo clippy)",
       "Bash(cargo clippy -p *)",
+      "Bash(cargo clippy:*)",
       "Bash(cargo doc:*)",
       "Bash(cargo fetch:*)",
       "Bash(cargo fmt)",
@@ -21,6 +24,8 @@
       "Bash(cargo test:*)",
       "Bash(cargo tree:*)",
       "Bash(curl:*)",
+      "Bash(echo \"SERVER_PID=$!\")",
+      "Bash(echo \"CLIENT_PID=$!\")",
       "Bash(find *)",
       "Bash(find . -name *)",
       "Bash(find . -type *)",
@@ -29,6 +34,7 @@
       "Bash(grep -c *)",
       "Bash(grep *)",
       "Bash(ls *)",
+      "Bash(python -m json.tool)",
       "Bash(rustc --version)",
       "Bash(rustfmt *)",
       "Bash(rustup:*)",
@@ -39,10 +45,11 @@
       "Bash(timeout 120 cargo check:*)",
       "Bash(tasklist:*)",
       "Bash(taskkill:*)",
+      "Bash(timeout:*)",
       "Bash(TaskOutput *)",
       "Bash(wc -l *)",
       "Bash(xargs wc -l)",
-      "Bash(xargs grep -l *)",
+      "Bash(xargs grep:*)",
       "Bash(xargs kill)",
       "WebFetch",
       "WebSearch"
