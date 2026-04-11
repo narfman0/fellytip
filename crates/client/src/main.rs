@@ -25,7 +25,8 @@ fn main() {
         tracing_subscriber::fmt::init();
         app.add_plugins(MinimalPlugins)
             .add_plugins(RemotePlugin::default())
-            .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS));
+            .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS))
+            .add_systems(Update, headless_auto_attack);
     } else {
         // Windowed: full render stack.  DefaultPlugins includes LogPlugin so we
         // do NOT call tracing_subscriber::fmt::init() to avoid a double-init.
@@ -41,7 +42,8 @@ fn main() {
         .add_plugins(plugins::SceneLightingPlugin)
         .add_plugins(plugins::OrbitCameraPlugin)
         .add_plugins(plugins::TileRendererPlugin)
-        .add_plugins(plugins::EntityRendererPlugin);
+        .add_plugins(plugins::EntityRendererPlugin)
+        .add_plugins(plugins::HudPlugin);
     }
 
     app.add_plugins(ClientPlugins {
@@ -102,6 +104,27 @@ fn log_replicated_positions(query: Query<(Entity, &WorldPosition), With<Replicat
     for (entity, pos) in &query {
         tracing::debug!("Replicated WorldPosition {entity:?}: ({}, {})", pos.x, pos.y);
     }
+}
+
+/// Headless-mode only: sends `BasicAttack` every 2 seconds for ralph integration tests.
+/// Allows `combat_resolves` to assert that damage lands without a real keyboard.
+fn headless_auto_attack(
+    mut sender: Option<Single<&mut MessageSender<PlayerInput>>>,
+    time: Res<Time>,
+    mut elapsed: Local<f32>,
+) {
+    *elapsed += time.delta_secs();
+    if *elapsed < 2.0 {
+        return;
+    }
+    *elapsed = 0.0;
+    let Some(ref mut s) = sender else { return };
+    s.send::<PlayerInputChannel>(PlayerInput {
+        move_dir: [0.0, 0.0],
+        action: Some(ActionIntent::BasicAttack),
+        target: None,
+    });
+    tracing::debug!("Headless: auto BasicAttack sent");
 }
 
 /// Read keyboard/gamepad input and send a `PlayerInput` message to the server.

@@ -58,6 +58,13 @@ One `StandardMaterial` per `TileKind` (see `material_for` in `tile_renderer.rs`)
 
 A rolling square of radius `RENDER_RADIUS` (defined in `tile_renderer.rs`) around the orbit camera target. The grid rebuilds only when the camera target crosses a tile boundary. Tiles leaving the window are despawned; tiles entering it are spawned. The topmost surface layer of each column is rendered; underground layers become visible only when the camera descends below the surface.
 
+## HUD (`crates/client/src/plugins/hud.rs`)
+
+`HudPlugin` draws a compact stats overlay via `bevy_egui`. Only added in windowed mode.
+
+- **Bottom-left panel**: HP bar (`Health.current / Health.max`) + XP progress bar (`Experience.xp / xp_to_next`) + level label. Populated from the first replicated entity that has both `Replicated` and `Experience` (the local player). Shows "Connecting…" before the player entity arrives.
+- Controls: Space → BasicAttack; Q → StrongAttack (ability 1).
+
 ## Upgrade path
 
 ### Textures

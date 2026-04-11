@@ -10,6 +10,7 @@ debug = []
 fellytip-shared    = { workspace = true }
 bevy               = { workspace = true, default-features = true, features = ["bevy_remote", "keyboard"] }
 lightyear          = { workspace = true, features = ["std", "server", "client", "netcode", "udp", "replication", "prediction", "interpolation", "input_native"] }
+bevy_egui          = { workspace = true, features = ["render"] }
 anyhow             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
