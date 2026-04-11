@@ -20,7 +20,10 @@ use fellytip_shared::{
     },
     components::{Experience, Health, WorldPosition},
     inputs::{ActionIntent, PlayerInput},
-    world::story::{GameEntityId, StoryEvent, StoryEventKind, WriteStoryEvent},
+    world::{
+        map::{smooth_surface_at, WorldMap, FALL_SPEED, STEP_HEIGHT, Z_FOLLOW_RATE},
+        story::{GameEntityId, StoryEvent, StoryEventKind, WriteStoryEvent},
+    },
 };
 use lightyear::prelude::{server::ClientOf, MessageReceiver};
 use smol_str::SmolStr;
@@ -66,10 +69,14 @@ impl Plugin for CombatPlugin {
 
 /// Read `PlayerInput` messages arriving from clients, apply movement, and
 /// queue `PendingAttack` markers on player entities.
+///
+/// When a [`WorldMap`] resource is present, `pos.z` smoothly follows the
+/// terrain surface after each horizontal move (fluid height traversal).
 fn process_player_input(
     mut clients: Query<(&mut MessageReceiver<PlayerInput>, &PlayerEntity), With<ClientOf>>,
     mut positions: Query<&mut WorldPosition>,
     enemies: Query<(Entity, &CombatParticipant), With<ExperienceReward>>,
+    map: Option<Res<WorldMap>>,
     mut commands: Commands,
 ) {
     let dt = (1.0 / TICK_HZ) as f32;
@@ -83,6 +90,19 @@ fn process_player_input(
                 if let Ok(mut pos) = positions.get_mut(player_entity.0) {
                     pos.x += dx * SPEED * dt;
                     pos.y += dy * SPEED * dt;
+
+                    // Height following: lerp Z toward the terrain surface.
+                    // No-op when the map resource has not been inserted yet.
+                    if let Some(ref m) = map {
+                        if let Some(target_z) = smooth_surface_at(m, pos.x, pos.y, pos.z) {
+                            let delta = (target_z - pos.z) * Z_FOLLOW_RATE * dt;
+                            // Ascent: limited to one step per tick (prevents tunnelling
+                            // through thin floors from below).
+                            // Descent: FALL_SPEED cap so entities traverse deep shafts
+                            // in ~1-2 seconds rather than crawling at 2 units/s.
+                            pos.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
+                        }
+                    }
                 }
             }
 

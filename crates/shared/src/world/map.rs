@@ -344,7 +344,7 @@ struct CaveParams {
 /// Initialises a boolean solid/void grid with seeded noise, runs `ca_steps`
 /// smoothing passes, then appends a walkable [`TileLayer`] at `floor_z` to
 /// every void cell in `columns`.
-fn cave_pass(columns: &mut Vec<TileColumn>, seed: u64, p: CaveParams) {
+fn cave_pass(columns: &mut [TileColumn], seed: u64, p: CaveParams) {
     use rand::{RngExt, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
@@ -418,7 +418,7 @@ fn cave_pass(columns: &mut Vec<TileColumn>, seed: u64, p: CaveParams) {
 /// **No surface layer is removed**: shafts are additive.  A shaft column has both
 /// the original surface layer and the tunnel layer; which one the entity stands on
 /// depends on their current Z.
-fn shaft_pass(columns: &mut Vec<TileColumn>, seed: u64) {
+fn shaft_pass(columns: &mut [TileColumn], seed: u64) {
     use rand::{RngExt, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
@@ -427,14 +427,11 @@ fn shaft_pass(columns: &mut Vec<TileColumn>, seed: u64) {
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    for idx in 0..columns.len() {
-        // Decide whether to place a shaft here.
-        // Use reservoir-style sampling: accept with probability 1/SHAFT_SPACING.
+    for col in columns.iter_mut() {
+        // Decide whether to place a shaft here (~1/SHAFT_SPACING chance).
         if (rng.random::<f32>() * SHAFT_SPACING as f32) >= 1.0 {
             continue;
         }
-
-        let col = &columns[idx];
 
         // Must have a walkable surface layer.
         let surface_z = match col.layers.iter().find(|l| l.is_surface_kind() && l.walkable) {
@@ -463,11 +460,9 @@ fn shaft_pass(columns: &mut Vec<TileColumn>, seed: u64) {
             walkable: true,
             corner_offsets: [0.0; 4],
         };
-        columns[idx].layers.push(shaft);
+        col.layers.push(shaft);
         // Re-sort to maintain ascending z_base order.
-        columns[idx]
-            .layers
-            .sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
+        col.layers.sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
     }
 }
 
