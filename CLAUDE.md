@@ -88,6 +88,20 @@ Follow the milestone sequence in `docs/milestones.md`. Each milestone's acceptan
 - `generate_map` runs the full pipeline: fBm surface → moisture → biome classification → rivers → shallow caves → Underdark → shafts. Call order in server: `generate_map` → `generate_settlements` → `generate_roads` (mutates map).
 - `Settlements` is a Bevy `Resource` (wraps `Vec<Settlement>`) inserted by `MapGenPlugin`.
 
+## Change workflow
+
+For every atomic change, follow this sequence before moving on:
+
+1. **Write unit tests** for any new pure logic (functions in `crates/shared`).
+2. **Pass all tests** — `cargo test --workspace` must be green.
+3. **Pass clippy** — `cargo clippy --workspace -- -D warnings` must be clean.
+4. **Smoke test** — build both binaries (`cargo build --workspace`); run ralph if the change touches networking or combat.
+5. **Update docs** — edit the relevant file in `docs/systems/` to reflect the current behaviour.
+6. **Commit** with a descriptive message.
+7. **Push** to origin.
+
+Never leave a step half-done and move to the next feature. Small, complete, verified increments.
+
 ## Do
 
 - **Write unit tests for all pure logic.**
