@@ -26,6 +26,7 @@ fn main() {
         .add_plugins(FellytipProtocolPlugin)
         .add_plugins(plugins::persistence::PersistencePlugin)
         .add_plugins(plugins::world_sim::WorldSimPlugin)
+        .add_plugins(plugins::ecology::EcologyPlugin)
         .add_systems(Startup, spawn_server)
         .add_observer(on_link_spawned)
         .add_observer(on_client_connected)
