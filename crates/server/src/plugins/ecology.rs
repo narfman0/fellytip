@@ -8,12 +8,13 @@ use bevy::prelude::*;
 use crate::plugins::persistence::Db;
 use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
-    components::{Health, WorldPosition},
+    components::{EntityKind, Health, WorldPosition},
     world::{
         ecology::{EcologyEvent, Population, RegionEcology, RegionId, SpeciesId, tick_ecology},
         map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH, MAP_HALF_WIDTH},
     },
 };
+use lightyear::prelude::{NetworkTarget, Replicate};
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
@@ -241,6 +242,8 @@ fn sync_wildlife_entities(
                 // CR 1/8 = 25 XP (docs/dnd5e-srd-reference.md)
                 ExperienceReward(25),
                 WildlifeNpc { region: ecology.region.clone() },
+                EntityKind::Wildlife,
+                Replicate::to_clients(NetworkTarget::All),
             ));
             spawns_this_tick += 1;
         }

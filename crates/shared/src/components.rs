@@ -55,3 +55,22 @@ impl Default for Experience {
         Self::new()
     }
 }
+
+/// Visual / gameplay kind for non-player entities — replicated so the client
+/// can render each type with a distinct mesh and colour.
+///
+/// Players do **not** carry this component; its absence on a replicated entity
+/// signals "local or remote player".
+#[derive(
+    Component, Clone, PartialEq, Debug,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub enum EntityKind {
+    /// Faction-aligned guard or soldier NPC.
+    FactionNpc,
+    /// Ecology-driven predator or prey creature.
+    Wildlife,
+    /// Static settlement marker (capital, town, underground city).
+    Settlement,
+}

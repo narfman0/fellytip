@@ -3,9 +3,10 @@
 
 use bevy::prelude::*;
 use crate::plugins::persistence::Db;
+use lightyear::prelude::{NetworkTarget, Replicate};
 use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
-    components::{Health, WorldPosition},
+    components::{EntityKind, Health, WorldPosition},
     world::{
         civilization::Settlements,
         faction::{
@@ -128,6 +129,8 @@ pub fn spawn_faction_npcs(
                 FactionNpcRank(NpcRank::Grunt),
                 CurrentGoal(None),
                 HomePosition(pos),
+                EntityKind::FactionNpc,
+                Replicate::to_clients(NetworkTarget::All),
             ));
             tracing::debug!(
                 faction = %faction.name,

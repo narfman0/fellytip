@@ -19,10 +19,12 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
+use lightyear::prelude::{NetworkTarget, Replicate};
 use fellytip_shared::{
+    components::{EntityKind, WorldPosition},
     world::{
         civilization::{assign_territories, generate_roads, generate_settlements, Settlements},
-        map::{generate_map, WorldMap},
+        map::{generate_map, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
     },
 };
 
@@ -60,7 +62,7 @@ impl Plugin for MapGenPlugin {
         // deferred in Bevy and are not flushed until the next apply_deferred.
         app.add_systems(
             Startup,
-            (generate_world, ApplyDeferred, seed_ecology, spawn_faction_npcs, history_warp, flush_factions_to_db)
+            (generate_world, ApplyDeferred, seed_ecology, spawn_faction_npcs, spawn_settlement_markers, history_warp, flush_factions_to_db)
                 .chain()
                 .after(seed_factions),
         );
@@ -216,6 +218,27 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
     commands.insert_resource(map);
     commands.insert_resource(Settlements(settlements));
     tracing::info!("World generation complete");
+}
+
+/// Spawn a static marker entity at each settlement so clients can render them.
+///
+/// Settlement markers carry `WorldPosition`, `EntityKind::Settlement`, and
+/// `Replicate` — no `Health` or combat components.  They are never moved or
+/// despawned during normal gameplay.
+fn spawn_settlement_markers(settlements: Res<Settlements>, mut commands: Commands) {
+    for settlement in &settlements.0 {
+        commands.spawn((
+            WorldPosition {
+                x: settlement.x - MAP_HALF_WIDTH as f32,
+                y: settlement.y - MAP_HALF_HEIGHT as f32,
+                z: settlement.z,
+            },
+            EntityKind::Settlement,
+            Replicate::to_clients(NetworkTarget::All),
+        ));
+        tracing::debug!(name = %settlement.name, "Settlement marker spawned");
+    }
+    tracing::info!(count = settlements.0.len(), "Settlement markers spawned");
 }
 
 /// Run WorldSimSchedule [`HISTORY_WARP_TICKS`] times synchronously before

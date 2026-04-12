@@ -1,13 +1,22 @@
-//! Renders replicated game entities (players, NPCs, boss) as PBR capsule meshes.
+//! Renders replicated game entities (players, NPCs, settlements) as PBR meshes.
 //!
 //! Every entity that arrives from the server with a `WorldPosition` + `Replicated`
-//! gets a capsule mesh inserted directly.  A separate system keeps the Bevy
-//! `Transform` in sync as the server pushes position updates.
+//! gets a mesh inserted directly.  Visual appearance is determined by `EntityKind`:
+//!
+//! | `EntityKind`  | Mesh     | Colour       |
+//! |---------------|----------|--------------|
+//! | absent        | capsule  | warm gold    | ← player
+//! | `FactionNpc`  | capsule  | steel blue   |
+//! | `Wildlife`    | capsule  | forest green |
+//! | `Settlement`  | pillar   | bright white |
+//!
+//! A separate system keeps the Bevy `Transform` in sync as the server pushes
+//! position updates.
 //!
 //! # Coordinate mapping
 //! Same convention as `tile_renderer`: world (x, y, z_elevation) → Bevy (x, z_elevation, y).
-//! The capsule center is placed half a unit above the tile surface so the
-//! entity visually stands on the ground.
+//! Capsule centre is placed `CAPSULE_HALF_HEIGHT` above the tile surface; pillar
+//! centre is placed `PILLAR_HALF_HEIGHT` above.
 //!
 //! # Local-player vs remote entities
 //! The local player's transform tracks `PredictedPosition` (updated every frame
@@ -16,7 +25,7 @@
 
 use bevy::prelude::*;
 use crate::{LocalPlayer, PredictedPosition};
-use fellytip_shared::components::WorldPosition;
+use fellytip_shared::components::{EntityKind, WorldPosition};
 use lightyear::prelude::Replicated;
 
 pub struct EntityRendererPlugin;
@@ -33,11 +42,20 @@ impl Plugin for EntityRendererPlugin {
 
 // ── Assets ────────────────────────────────────────────────────────────────────
 
-/// Shared mesh + material handles for entity visuals.  Pre-built at startup.
+/// Pre-built mesh + material handles for all entity visual variants.
 #[derive(Resource)]
 struct EntityVisualAssets {
-    mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
+    capsule_mesh: Handle<Mesh>,
+    /// Tall cylinder used for settlement markers.
+    pillar_mesh: Handle<Mesh>,
+    /// Warm gold — local and remote players.
+    player_mat: Handle<StandardMaterial>,
+    /// Steel blue — faction guard NPCs.
+    faction_npc_mat: Handle<StandardMaterial>,
+    /// Forest green — ecology wildlife.
+    wildlife_mat: Handle<StandardMaterial>,
+    /// Bright white — settlement markers.
+    settlement_mat: Handle<StandardMaterial>,
 }
 
 fn setup_entity_assets(
@@ -45,24 +63,56 @@ fn setup_entity_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Capsule: radius 0.3, half-cylinder length 0.4 → total height ≈ 1.4 units.
-    let mesh = meshes.add(Capsule3d::new(0.3, 0.4));
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.95, 0.75, 0.20), // warm gold — visible against terrain
+    let capsule_mesh = meshes.add(Capsule3d::new(0.3, 0.4));
+    // Radius 0.2, height 3.0 — thin pillar standing 3 units tall.
+    let pillar_mesh = meshes.add(Cylinder::new(0.2, 3.0));
+
+    let player_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.95, 0.75, 0.20), // warm gold
         perceptual_roughness: 0.55,
         ..default()
     });
-    commands.insert_resource(EntityVisualAssets { mesh, material });
+    let faction_npc_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.25, 0.50, 0.85), // steel blue
+        perceptual_roughness: 0.55,
+        ..default()
+    });
+    let wildlife_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.20, 0.65, 0.25), // forest green
+        perceptual_roughness: 0.70,
+        ..default()
+    });
+    let settlement_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.95, 0.95, 0.95), // bright white
+        perceptual_roughness: 0.30,
+        emissive: LinearRgba::new(0.15, 0.15, 0.15, 1.0),
+        ..default()
+    });
+
+    commands.insert_resource(EntityVisualAssets {
+        capsule_mesh,
+        pillar_mesh,
+        player_mat,
+        faction_npc_mat,
+        wildlife_mat,
+        settlement_mat,
+    });
 }
 
-// ── Coordinate helper ─────────────────────────────────────────────────────────
+// ── Coordinate helpers ────────────────────────────────────────────────────────
 
-/// Convert a `WorldPosition` to a Bevy `Vec3`, placing the entity centre
-/// `CAPSULE_HALF_HEIGHT` above the tile surface.
+/// Half-height offset for capsule entities so the visual base sits on terrain.
 const CAPSULE_HALF_HEIGHT: f32 = 0.7; // half of total capsule height (~1.4 / 2)
 
-fn world_to_bevy(pos: &WorldPosition) -> Vec3 {
+/// Half-height offset for pillar entities (cylinder height 3.0 / 2).
+const PILLAR_HALF_HEIGHT: f32 = 1.5;
+
+fn capsule_translation(pos: &WorldPosition) -> Vec3 {
     Vec3::new(pos.x, pos.z + CAPSULE_HALF_HEIGHT, pos.y)
+}
+
+fn pillar_translation(pos: &WorldPosition) -> Vec3 {
+    Vec3::new(pos.x, pos.z + PILLAR_HALF_HEIGHT, pos.y)
 }
 
 // ── Systems ───────────────────────────────────────────────────────────────────
@@ -76,13 +126,36 @@ type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
 fn spawn_entity_visuals(
     mut commands: Commands,
     assets: Res<EntityVisualAssets>,
-    query: Query<(Entity, &WorldPosition), NewReplicatedPos>,
+    query: Query<(Entity, &WorldPosition, Option<&EntityKind>), NewReplicatedPos>,
 ) {
-    for (entity, pos) in &query {
+    for (entity, pos, kind) in &query {
+        let (mesh, material, translation) = match kind {
+            Some(EntityKind::FactionNpc) => (
+                assets.capsule_mesh.clone(),
+                assets.faction_npc_mat.clone(),
+                capsule_translation(pos),
+            ),
+            Some(EntityKind::Wildlife) => (
+                assets.capsule_mesh.clone(),
+                assets.wildlife_mat.clone(),
+                capsule_translation(pos),
+            ),
+            Some(EntityKind::Settlement) => (
+                assets.pillar_mesh.clone(),
+                assets.settlement_mat.clone(),
+                pillar_translation(pos),
+            ),
+            None => (
+                assets.capsule_mesh.clone(),
+                assets.player_mat.clone(),
+                capsule_translation(pos),
+            ),
+        };
+
         commands.entity(entity).insert((
-            Transform::from_translation(world_to_bevy(pos)),
-            Mesh3d(assets.mesh.clone()),
-            MeshMaterial3d(assets.material.clone()),
+            Transform::from_translation(translation),
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
         ));
     }
 }
@@ -91,9 +164,14 @@ fn spawn_entity_visuals(
 ///
 /// Excludes the local player: its transform is driven by `PredictedPosition`
 /// in `sync_local_player_transform` for zero-latency visual feedback.
-fn sync_remote_transforms(mut query: Query<(&WorldPosition, &mut Transform), ChangedRemotePos>) {
-    for (pos, mut transform) in &mut query {
-        transform.translation = world_to_bevy(pos);
+fn sync_remote_transforms(
+    mut query: Query<(&WorldPosition, &mut Transform, Option<&EntityKind>), ChangedRemotePos>,
+) {
+    for (pos, mut transform, kind) in &mut query {
+        transform.translation = match kind {
+            Some(EntityKind::Settlement) => pillar_translation(pos),
+            _ => capsule_translation(pos),
+        };
     }
 }
 

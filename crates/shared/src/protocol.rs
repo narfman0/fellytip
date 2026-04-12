@@ -2,7 +2,7 @@
 //! Must be added AFTER `ServerPlugins`/`ClientPlugins` but BEFORE any
 //! `Server`/`Client` entity is spawned.
 
-use crate::components::{Experience, Health, WorldPosition};
+use crate::components::{EntityKind, Experience, Health, WorldPosition};
 use crate::inputs::PlayerInput;
 use bevy::prelude::*;
 use core::time::Duration;
@@ -60,11 +60,13 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<WorldPosition>();
         app.register_type::<Health>();
         app.register_type::<Experience>();
+        app.register_type::<EntityKind>();
 
         // Register components with lightyear for network replication.
         app.register_component::<WorldPosition>();
         app.register_component::<Health>();
         app.register_component::<Experience>();
+        app.register_component::<EntityKind>();
 
         // Messages
         app.register_message::<GreetMsg>()

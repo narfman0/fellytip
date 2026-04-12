@@ -27,8 +27,11 @@ These components in `crates/shared/src/components.rs` are registered in `Fellyti
 | `WorldPosition { x, y, z }` | Full prediction + linear interpolation | Predicted on client; authoritative on server |
 | `Health { current, max }` | Simple interpolation | Client renders health bars |
 | `Experience { xp, level, xp_to_next }` | Simple interpolation | Client renders level/XP |
+| `EntityKind` | Simple | Enum: FactionNpc / Wildlife / Settlement — drives visual differentiation on client |
 
-All three are serializable (`serde`) and reflectable (`bevy::reflect`).
+All four are serializable (`serde`) and reflectable (`bevy::reflect`).
+
+Players do **not** carry `EntityKind`. Its absence on a replicated entity indicates a player.
 
 ## Messages
 

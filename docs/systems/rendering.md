@@ -84,7 +84,16 @@ Three systems run in order every `Update` frame:
 
 ## Entity rendering (`crates/client/src/plugins/entity_renderer.rs`)
 
-`EntityRendererPlugin` spawns a colored capsule for each replicated entity that has `WorldPosition`. A system (`sync_entity_transforms`) updates the Bevy `Transform` every frame from `WorldPosition`, using the same coordinate mapping as the terrain.
+`EntityRendererPlugin` spawns a PBR mesh for each replicated entity that carries `WorldPosition`. Visual appearance is determined by the optional `EntityKind` component:
+
+| `EntityKind`  | Mesh     | Colour       |
+|---------------|----------|--------------|
+| absent        | capsule  | warm gold    | ← player
+| `FactionNpc`  | capsule  | steel blue   |
+| `Wildlife`    | capsule  | forest green |
+| `Settlement`  | pillar (Cylinder3d, 3 units tall) | bright white |
+
+A system (`sync_remote_transforms`) updates the Bevy `Transform` every frame from `WorldPosition`, using the same coordinate mapping as the terrain. The local player's transform is driven by `PredictedPosition` instead for zero-latency movement.
 
 ## HUD (`crates/client/src/plugins/hud.rs`)
 
