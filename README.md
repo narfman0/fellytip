@@ -76,6 +76,7 @@ cargo clippy --workspace -- -D warnings
 | `tools/ralph` | BRP test driver |
 | `tools/combat_sim` | proptest harness for combat + ecology rules |
 | `tools/world_gen` | ASCII world preview — `cargo run -p world_gen -- --seed N` |
+| `tools/worldwatch` | Windows tray app: live BRP + SQLite dashboard |
 
 ## ASCII map legend
 

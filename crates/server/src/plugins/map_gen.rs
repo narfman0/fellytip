@@ -36,9 +36,9 @@ use crate::plugins::{
 
 /// WorldSim ticks to run before the server accepts connections.
 ///
-/// 200 ticks = 200 simulated seconds of world history (factions expand,
-/// ecology reaches equilibrium, story events accumulate).
-const HISTORY_WARP_TICKS: u64 = 200;
+/// Kept small (10) so startup finishes quickly and clients can connect.
+/// Raise once map gen is moved off the main thread.
+const HISTORY_WARP_TICKS: u64 = 10;
 
 /// Key used in the `world_meta` table to store the world map file path.
 const META_KEY_MAP_FILE: &str = "world_map_file";
@@ -167,7 +167,13 @@ fn generate_world(mut commands: Commands, db: Res<Db>) {
         Some(path) => {
             tracing::info!(path = %path.display(), "Found cached world map — attempting load");
             match try_load_map_file(&path) {
-                Some(loaded) if loaded.seed == WORLD_SEED && !loaded.road_tiles.is_empty() => {
+                Some(loaded)
+                    if loaded.seed == WORLD_SEED
+                        && !loaded.road_tiles.is_empty()
+                        && loaded.columns.len()
+                            == fellytip_shared::world::map::MAP_WIDTH
+                                * fellytip_shared::world::map::MAP_HEIGHT =>
+                {
                     tracing::info!(seed = WORLD_SEED, "World map loaded from cache — skipping generation");
                     loaded
                 }

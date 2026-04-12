@@ -32,9 +32,11 @@ pub struct Settlement {
     pub id: Uuid,
     pub name: SmolStr,
     pub kind: SettlementKind,
-    /// World-space tile-center X position.
+    /// Tile-space center X (ix + 0.5, range 0..MAP_WIDTH).  Subtract
+    /// `MAP_HALF_WIDTH` to convert to world-space.
     pub x: f32,
-    /// World-space tile-center Y position.
+    /// Tile-space center Y (iy + 0.5, range 0..MAP_HEIGHT).  Subtract
+    /// `MAP_HALF_HEIGHT` to convert to world-space.
     pub y: f32,
     /// World-space Z elevation at this location.
     pub z: f32,

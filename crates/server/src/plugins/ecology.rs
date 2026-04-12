@@ -11,7 +11,7 @@ use fellytip_shared::{
     components::{Health, WorldPosition},
     world::{
         ecology::{EcologyEvent, Population, RegionEcology, RegionId, SpeciesId, tick_ecology},
-        map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH},
+        map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH, MAP_HALF_WIDTH},
     },
 };
 use uuid::Uuid;
@@ -33,8 +33,8 @@ pub struct WildlifeNpc {
 
 /// Grid size used for macro-region division (4×4 grid → 16 regions).
 const MACRO_GRID: usize = 4;
-/// Tile width/height of each macro-region.
-const MACRO_REGION_SIZE: usize = MAP_WIDTH / MACRO_GRID; // 128
+/// Tile width/height of each macro-region (MAP_WIDTH / MACRO_GRID).
+const MACRO_REGION_SIZE: usize = MAP_WIDTH / MACRO_GRID;
 
 /// Predator population threshold below which no wildlife entities are spawned.
 const SPAWN_THRESHOLD: f64 = 10.0;
@@ -62,8 +62,9 @@ pub fn seed_ecology(map: Res<WorldMap>, mut state: ResMut<EcologyState>) {
     for ry in 0..MACRO_GRID {
         for rx in 0..MACRO_GRID {
             // Sample the center tile of the macro-region to determine its dominant biome.
-            let cx = (rx * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32;
-            let cy = (ry * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32;
+            // Convert tile indices to world-space (map centered on (0,0)).
+            let cx = (rx * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
+            let cy = (ry * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
 
             let Some(col) = map.column_at(cx, cy) else { continue };
             // Find the topmost walkable layer at this sample point.
@@ -317,7 +318,8 @@ fn region_center_from_id(id: &RegionId) -> (f32, f32) {
     let mut parts = s.splitn(2, '_');
     let rx: usize = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
     let ry: usize = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let cx = (rx * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32;
-    let cy = (ry * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32;
+    // Convert tile-space center to world-space (map centered on (0,0)).
+    let cx = (rx * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
+    let cy = (ry * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
     (cx, cy)
 }

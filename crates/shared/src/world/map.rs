@@ -11,8 +11,13 @@ use serde::{Deserialize, Serialize};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-pub const MAP_WIDTH: usize  = 512;
-pub const MAP_HEIGHT: usize = 512;
+pub const MAP_WIDTH: usize  = 1024;
+pub const MAP_HEIGHT: usize = 1024;
+
+/// Half the map width/height, used to convert between world coords (centered on
+/// (0,0)) and tile indices (0..MAP_WIDTH / 0..MAP_HEIGHT).
+pub const MAP_HALF_WIDTH:  i64 = (MAP_WIDTH  / 2) as i64;
+pub const MAP_HALF_HEIGHT: i64 = (MAP_HEIGHT / 2) as i64;
 
 /// How far above `current_z` an entity can step up in one tick.
 pub const STEP_HEIGHT: f32 = 0.6;
@@ -215,9 +220,12 @@ impl WorldMap {
     }
 
     /// Returns `None` if `(x, y)` is outside the map bounds.
+    ///
+    /// `x` and `y` are world-space coordinates centered on (0, 0): the map
+    /// spans [-MAP_HALF_WIDTH, MAP_HALF_WIDTH) × [-MAP_HALF_HEIGHT, MAP_HALF_HEIGHT).
     pub fn column_at(&self, x: f32, y: f32) -> Option<&TileColumn> {
-        let ix = x.floor() as i64;
-        let iy = y.floor() as i64;
+        let ix = x.floor() as i64 + MAP_HALF_WIDTH;
+        let iy = y.floor() as i64 + MAP_HALF_HEIGHT;
         if ix < 0 || iy < 0 || ix as usize >= MAP_WIDTH || iy as usize >= MAP_HEIGHT {
             return None;
         }
@@ -262,6 +270,40 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
 /// terrain. See `docs/systems/world-map.md` for the wall-slide behaviour.
 pub fn is_walkable_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> bool {
     smooth_surface_at(map, x, y, current_z).is_some()
+}
+
+/// Find a walkable surface spawn point near the world origin (map centre).
+///
+/// Tries tiles in an expanding ring around `(0, 0)` until it finds one with a
+/// walkable surface layer.  Uses `Z_SCALE * 2` as the z-ceiling so the query
+/// succeeds regardless of terrain height — no existing `current_z` is needed.
+///
+/// Returns world-space `(x, y, z)` for the first hit.  Falls back to
+/// `(0.0, 0.0, 0.0)` only if the entire map has no walkable surface (should
+/// never happen on a valid generated map).
+pub fn find_surface_spawn(map: &WorldMap) -> (f32, f32, f32) {
+    // Any walkable surface tile has z_top in [0, Z_SCALE].  Using Z_SCALE * 2
+    // as the ceiling guarantees surface_layer sees all surface layers while
+    // still returning the topmost one (underground layers are negative).
+    const Z_CEIL: f32 = Z_SCALE * 2.0;
+    for radius in 0..(MAP_WIDTH / 2) {
+        let r = radius as i64;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                // Only test the outer ring of the current radius.
+                if dx.abs() != r && dy.abs() != r {
+                    continue;
+                }
+                // Tile centres in world space (world is centered on (0,0)).
+                let x = dx as f32 + 0.5;
+                let y = dy as f32 + 0.5;
+                if let Some(z) = smooth_surface_at(map, x, y, Z_CEIL) {
+                    return (x, y, z);
+                }
+            }
+        }
+    }
+    (0.0, 0.0, 0.0)
 }
 
 // ── Biome classification ──────────────────────────────────────────────────────
@@ -599,7 +641,10 @@ fn shaft_pass(columns: &mut [TileColumn], seed: u64) {
 ///
 /// Water and Mountain tiles are never converted.
 fn river_pass(columns: &mut [TileColumn], heights: &[f32]) {
-    const RIVER_THRESHOLD: u32 = 800; // tiles feeding into a cell for it to become a river
+    // Scale threshold proportionally to map area so rivers appear at any map size.
+    // At 512×512 this equals 800 tiles (~0.3% of total); shrinks for smaller maps.
+    let river_threshold: u32 =
+        ((MAP_WIDTH * MAP_HEIGHT) as u64 * 800 / (512 * 512)).max(2) as u32;
 
     let n = MAP_WIDTH * MAP_HEIGHT;
 
@@ -645,7 +690,7 @@ fn river_pass(columns: &mut [TileColumn], heights: &[f32]) {
 
     // ── Convert high-drainage walkable tiles to River ─────────────────────────
     for idx in 0..n {
-        if flow[idx] < RIVER_THRESHOLD {
+        if flow[idx] < river_threshold {
             continue;
         }
         let col = &mut columns[idx];
@@ -746,8 +791,10 @@ mod tests {
             .flat_map(|c| c.layers.iter())
             .filter(|l| l.kind == TileKind::River)
             .count();
-        assert!(river_count > 100,
-            "expected >100 River tiles, got {river_count}");
+        // Minimum expected rivers scales with map area (conservative: ~0.02% of tiles).
+        let min_rivers = (MAP_WIDTH * MAP_HEIGHT / 5_000).max(5);
+        assert!(river_count > min_rivers,
+            "expected >{min_rivers} River tiles, got {river_count}");
     }
 
     #[test]
@@ -798,11 +845,11 @@ mod tests {
             }
         }
 
-        // With 512×512 and ~52% void for shallow caves and ~70% for Underdark,
-        // we expect a very large number of each kind.
-        assert!(cavern_count > 50_000,
+        // Thresholds scale with map area: ~30% fill for caverns, ~12% for Underdark.
+        let total = MAP_WIDTH * MAP_HEIGHT;
+        assert!(cavern_count > total * 3 / 10,
             "expected many Cavern tiles, got {cavern_count}");
-        assert!(grotto_count > 100_000,
+        assert!(grotto_count > total / 8,
             "expected many LuminousGrotto tiles, got {grotto_count}");
     }
 
@@ -862,9 +909,10 @@ mod tests {
             .flat_map(|c| c.layers.iter())
             .filter(|l| l.kind == TileKind::Tunnel)
             .count();
-        // With ~1/40 chance per eligible column, expect many thousands of shafts.
-        assert!(shaft_count > 1_000,
-            "expected >1000 shaft layers, got {shaft_count}");
+        // With ~1/40 chance per eligible column, expect at least 0.5% of tiles.
+        let min_shafts = MAP_WIDTH * MAP_HEIGHT / 200;
+        assert!(shaft_count > min_shafts,
+            "expected >{min_shafts} shaft layers, got {shaft_count}");
     }
 
     #[test]
@@ -917,8 +965,13 @@ mod tests {
         map.columns[0] = TileColumn { layers: vec![make_layer(1.0)] };
         map.columns[1] = TileColumn { layers: vec![make_layer(3.0)] };
 
-        // At x=0.5 (middle of tile 0), z should equal tile 0's z_top (no offsets).
-        let h = smooth_surface_at(&map, 0.5, 0.0, 5.0).unwrap();
+        // Tile (0,0) center in world-space: x = -(MAP_HALF_WIDTH) + 0.5
+        let h = smooth_surface_at(
+            &map,
+            -(MAP_HALF_WIDTH as f32) + 0.5,
+            -(MAP_HALF_HEIGHT as f32) + 0.5,
+            5.0,
+        ).unwrap();
         assert!((h - 1.0).abs() < 1e-6, "Expected 1.0, got {h}");
     }
 
@@ -947,11 +1000,15 @@ mod tests {
     fn surface_height_at_returns_none_over_water() {
         let map = generate_map(0);
         // Find a water tile and confirm surface_height_at returns None.
+        // Convert tile indices to world-space (map centered on (0,0)).
         let water_pos = map.columns.iter().enumerate().find_map(|(i, col)| {
             if col.layers.first().map(|l| l.kind == TileKind::Water).unwrap_or(false) {
                 let ix = i % MAP_WIDTH;
                 let iy = i / MAP_WIDTH;
-                Some((ix as f32 + 0.5, iy as f32 + 0.5))
+                Some((
+                    ix as f32 + 0.5 - MAP_HALF_WIDTH as f32,
+                    iy as f32 + 0.5 - MAP_HALF_HEIGHT as f32,
+                ))
             } else {
                 None
             }
@@ -968,11 +1025,15 @@ mod tests {
     #[test]
     fn is_walkable_at_false_over_water() {
         let map = generate_map(0);
+        // Convert tile indices to world-space (map centered on (0,0)).
         let water_pos = map.columns.iter().enumerate().find_map(|(i, col)| {
             if col.layers.first().map(|l| l.kind == TileKind::Water).unwrap_or(false) {
                 let ix = i % MAP_WIDTH;
                 let iy = i / MAP_WIDTH;
-                Some((ix as f32 + 0.5, iy as f32 + 0.5))
+                Some((
+                    ix as f32 + 0.5 - MAP_HALF_WIDTH as f32,
+                    iy as f32 + 0.5 - MAP_HALF_HEIGHT as f32,
+                ))
             } else {
                 None
             }
@@ -986,7 +1047,25 @@ mod tests {
     #[test]
     fn is_walkable_at_false_out_of_bounds() {
         let map = generate_map(0);
-        assert!(!is_walkable_at(&map, -1.0, 0.0, 0.0));
-        assert!(!is_walkable_at(&map, MAP_WIDTH as f32 + 1.0, 0.0, 0.0));
+        // Map spans [-MAP_HALF_WIDTH, MAP_HALF_WIDTH) in world-space.
+        assert!(!is_walkable_at(&map, -(MAP_HALF_WIDTH as f32) - 1.0, 0.0, 0.0));
+        assert!(!is_walkable_at(&map,   MAP_HALF_WIDTH as f32  + 1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn find_surface_spawn_is_walkable_at_spawn_z() {
+        let map = generate_map(42);
+        let (x, y, z) = find_surface_spawn(&map);
+        // The returned z must be walkable from itself.
+        assert!(
+            is_walkable_at(&map, x, y, z),
+            "spawn ({x:.2}, {y:.2}, {z:.2}) must be walkable from its own z"
+        );
+        // z must match what smooth_surface_at gives with a high ceiling.
+        let expected_z = smooth_surface_at(&map, x, y, Z_SCALE * 2.0).unwrap();
+        assert!(
+            (z - expected_z).abs() < 1e-3,
+            "spawn z {z:.4} should match surface z {expected_z:.4}"
+        );
     }
 }

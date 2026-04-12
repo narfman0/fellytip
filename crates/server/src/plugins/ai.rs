@@ -10,6 +10,7 @@ use fellytip_shared::{
         civilization::Settlements,
         faction::{Faction, FactionId, FactionResources, FactionGoal, pick_goal},
         ecology::RegionId,
+        map::{MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
     },
 };
 use smol_str::SmolStr;
@@ -91,9 +92,10 @@ pub fn spawn_faction_npcs(
         let settlement = &settlements.0[faction_idx % settlements.0.len()];
 
         for (npc_idx, (ox, oy)) in NPC_OFFSETS.iter().enumerate() {
+            // settlement.x/y are tile-space (0..MAP_WIDTH); convert to world-space.
             let pos = WorldPosition {
-                x: settlement.x + ox,
-                y: settlement.y + oy,
+                x: settlement.x - MAP_HALF_WIDTH as f32 + ox,
+                y: settlement.y - MAP_HALF_HEIGHT as f32 + oy,
                 z: settlement.z,
             };
             commands.spawn((

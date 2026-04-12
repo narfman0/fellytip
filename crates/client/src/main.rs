@@ -12,6 +12,10 @@ use fellytip_shared::{
 use lightyear::prelude::{client::*, *};
 use std::net::SocketAddr;
 
+/// Seconds between client connection attempts.  Gives the server time to finish
+/// startup before the first attempt and allows automatic reconnect on failure.
+const CONNECT_RETRY_SECS: f32 = 2.0;
+
 /// BRP HTTP port for the headless client (used by ralph scenarios).
 const BRP_PORT_HEADLESS: u16 = 15703;
 
@@ -50,15 +54,57 @@ fn main() {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),
         })
         .add_plugins(FellytipProtocolPlugin)
-        .add_systems(Startup, spawn_client)
-        .add_systems(Update, (log_replicated_positions, send_player_input))
+        .insert_resource(ConnectTimer(Timer::from_seconds(
+            CONNECT_RETRY_SECS,
+            TimerMode::Repeating,
+        )))
+        .add_systems(Update, (try_connect, log_replicated_positions, send_player_input))
         .add_observer(on_connected)
         .add_observer(on_disconnected);
 
     app.run();
 }
 
-fn spawn_client(mut commands: Commands) {
+/// Drives periodic connection attempts so the client can start before the
+/// server is ready and reconnects automatically after a dropped connection.
+#[derive(Resource)]
+struct ConnectTimer(Timer);
+
+/// Attempt to connect (or reconnect) on each timer tick.
+///
+/// States:
+/// - No `NetcodeClient` entity   → spawn one and start the handshake.
+/// - Entity present, `Connected` → already live, do nothing.
+/// - Entity present, `Disconnected` → clean it up then let the next tick retry.
+/// - Entity present, neither      → handshake in flight, wait.
+fn try_connect(
+    time: Res<Time>,
+    mut timer: ResMut<ConnectTimer>,
+    clients: Query<(Entity, Has<Connected>, Has<Disconnected>), With<NetcodeClient>>,
+    mut commands: Commands,
+) {
+    if !timer.0.tick(time.delta()).just_finished() {
+        return;
+    }
+
+    let mut has_live = false;
+    let mut has_pending = false;
+    for (entity, connected, disconnected) in &clients {
+        if connected {
+            has_live = true;
+        } else if disconnected {
+            // Clean up the stale entity so we can spawn a fresh one next tick.
+            commands.entity(entity).despawn();
+        } else {
+            // Handshake still in flight — wait for it to resolve.
+            has_pending = true;
+        }
+    }
+    if has_live || has_pending {
+        return;
+    }
+
+    // No live or in-flight client: attempt a fresh connection.
     let server_addr: SocketAddr = format!("127.0.0.1:{NET_PORT}").parse().unwrap();
     let local_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
     let e = commands

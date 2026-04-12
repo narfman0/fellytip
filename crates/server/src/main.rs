@@ -8,6 +8,7 @@ use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Experience, Health, WorldPosition},
     protocol::FellytipProtocolPlugin,
+    world::map::{find_surface_spawn, WorldMap},
 };
 use lightyear::prelude::{server::*, *};
 use std::net::SocketAddr;
@@ -158,14 +159,19 @@ fn on_client_disconnected(
 fn on_client_connected(
     trigger: On<Add, Connected>,
     query: Query<(), With<ClientOf>>,
+    map: Option<Res<WorldMap>>,
     mut commands: Commands,
 ) {
     if query.get(trigger.entity).is_err() {
         return;
     }
+    let (spawn_x, spawn_y, spawn_z) = map
+        .as_deref()
+        .map(find_surface_spawn)
+        .unwrap_or((0.0, 0.0, 0.0));
     let player = commands
         .spawn((
-            WorldPosition { x: 0.0, y: 0.0, z: 0.0 },
+            WorldPosition { x: spawn_x, y: spawn_y, z: spawn_z },
             // Starting HP is generous (100) rather than strict SRD (d10+CON mod)
             // to give players a comfortable introduction to combat.
             Health { current: 100, max: 100 },
