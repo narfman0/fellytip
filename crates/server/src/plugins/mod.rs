@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod combat;
+pub mod combat_test;
 pub mod dungeon;
 pub mod ecology;
 pub mod map_gen;

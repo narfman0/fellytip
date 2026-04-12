@@ -1,17 +1,28 @@
-//! Scenario: assert that at least one NPC takes damage after a player connects.
+//! Scenario: assert that at least one NPC takes damage within the timeout.
 //!
-//! The headless client sends `BasicAttack` automatically every 2 seconds.
-//! This scenario verifies that the full combat pipeline (input → interrupt stack
-//! → damage effect → Health component) is working end-to-end via live BRP queries.
+//! Verifies the full combat pipeline end-to-end via live BRP queries:
+//! interrupt stack → damage effect → Health component update.
 //!
-//! The test does not require a specific NPC to be the target — with faction NPCs
-//! and the dungeon boss all present, the server picks whatever entity comes first
-//! in ECS iteration order. Verifying that ANY NPC took damage is sufficient to
-//! prove the pipeline is alive.
+//! ## Recommended: combat-test mode (no headless client required)
 //!
-//! Pre-conditions:
-//!   `cargo run -p fellytip-server &`
-//!   `cargo run -p fellytip-client -- --headless &`
+//! The server spawns an Iron Wolves brawler and a Merchant Guild guard that
+//! fight automatically at 1 Hz.  No client needs to connect.
+//!
+//! ```bash
+//! cargo run -p fellytip-server -- --combat-test &
+//! cargo run -p ralph -- --scenario combat_resolves
+//! ```
+//!
+//! ## Full game mode
+//!
+//! The headless client sends `BasicAttack` every 2 s; the server picks the
+//! first entity with `ExperienceReward` as the target.
+//!
+//! ```bash
+//! cargo run -p fellytip-server &
+//! cargo run -p fellytip-client -- --headless &
+//! cargo run -p ralph -- --scenario combat_resolves
+//! ```
 
 use crate::{Scenario, brp::BrpClient};
 use anyhow::{Result, bail};

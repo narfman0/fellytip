@@ -21,8 +21,11 @@ const BRP_PORT: u16 = 15702;
 
 fn main() {
     tracing_subscriber::fmt::init();
-    App::new()
-        .add_plugins(MinimalPlugins)
+    let combat_test = std::env::args().any(|a| a == "--combat-test");
+
+    // Plugins shared by all run modes.
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
         .add_plugins(RemotePlugin::default())
         .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
         .add_plugins(ServerPlugins {
@@ -31,24 +34,34 @@ fn main() {
         .add_plugins(FellytipProtocolPlugin)
         .add_plugins(plugins::persistence::PersistencePlugin)
         .add_plugins(plugins::world_sim::WorldSimPlugin)
-        .add_plugins(plugins::map_gen::MapGenPlugin)
-        .add_plugins(plugins::ecology::EcologyPlugin)
-        .add_plugins(plugins::ai::AiPlugin)
         .add_plugins(plugins::story::StoryPlugin)
-        .add_plugins(plugins::combat::CombatPlugin)
-        .add_plugins(plugins::party::PartyPlugin)
-        .add_plugins(plugins::dungeon::DungeonPlugin)
-        .add_systems(Startup, plugins::ai::seed_factions)
-        // spawn_server runs in PostStartup so its deferred command application
-        // (which triggers the lightyear UDP observer) cannot share an ApplyDeferred
-        // sync point with the map-gen chain.  If the observer panics (e.g. port in
-        // use), it no longer corrupts generate_world's Commands flush and the
-        // WorldMap resource is always present for seed_ecology.
-        .add_systems(PostStartup, spawn_server)
-        .add_observer(on_link_spawned)
-        .add_observer(on_client_connected)
-        .add_observer(on_client_disconnected)
-        .run();
+        .add_plugins(plugins::combat::CombatPlugin);
+
+    if combat_test {
+        // Minimal test world: two hostile NPCs, no map gen, no lightyear socket.
+        // ralph `combat_resolves` scenario passes without a headless client.
+        tracing::info!("Starting in combat-test mode — minimal world, no clients required");
+        app.add_plugins(plugins::combat_test::CombatTestPlugin);
+    } else {
+        // Full game world with map gen, ecology, factions, and live networking.
+        app.add_plugins(plugins::map_gen::MapGenPlugin)
+            .add_plugins(plugins::ecology::EcologyPlugin)
+            .add_plugins(plugins::ai::AiPlugin)
+            .add_plugins(plugins::party::PartyPlugin)
+            .add_plugins(plugins::dungeon::DungeonPlugin)
+            .add_systems(Startup, plugins::ai::seed_factions)
+            // spawn_server runs in PostStartup so its deferred command application
+            // (which triggers the lightyear UDP observer) cannot share an ApplyDeferred
+            // sync point with the map-gen chain.  If the observer panics (e.g. port in
+            // use), it no longer corrupts generate_world's Commands flush and the
+            // WorldMap resource is always present for seed_ecology.
+            .add_systems(PostStartup, spawn_server)
+            .add_observer(on_link_spawned)
+            .add_observer(on_client_connected)
+            .add_observer(on_client_disconnected);
+    }
+
+    app.run();
 }
 
 fn spawn_server(mut commands: Commands) {
