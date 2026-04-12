@@ -46,8 +46,9 @@ pub struct CombatantSnapshot {
     pub health_current: i32,
     pub health_max: i32,
     pub level: u32,
-    /// Armour rating — reduces incoming physical damage.
-    pub armor: i32,
+    /// Armour Class — the total that an attack roll must meet or beat to hit.
+    /// See `docs/dnd5e-srd-reference.md` for AC values by armour type.
+    pub armor_class: i32,
 }
 
 impl CombatantSnapshot {
@@ -57,6 +58,29 @@ impl CombatantSnapshot {
     }
     pub fn str_mod(&self) -> i32 { Self::modifier(self.stats.strength) }
     pub fn dex_mod(&self) -> i32 { Self::modifier(self.stats.dexterity) }
+    pub fn con_mod(&self) -> i32 { Self::modifier(self.stats.constitution) }
+}
+
+/// Proficiency bonus for the given character level (SRD table).
+/// See `docs/dnd5e-srd-reference.md`.
+pub fn proficiency_bonus(level: u32) -> i32 {
+    match level {
+        1..=4   => 2,
+        5..=8   => 3,
+        9..=12  => 4,
+        13..=16 => 5,
+        _       => 6, // levels 17–20+
+    }
+}
+
+/// Hit die size for the given class (max face value of the die).
+/// See `docs/dnd5e-srd-reference.md`.
+pub fn hit_die_for_class(class: &CharacterClass) -> i32 {
+    match class {
+        CharacterClass::Warrior => 10,
+        CharacterClass::Rogue   =>  8,
+        CharacterClass::Mage    =>  6,
+    }
 }
 
 // ── Effects ───────────────────────────────────────────────────────────────────

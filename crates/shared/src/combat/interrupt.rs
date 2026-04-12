@@ -149,7 +149,7 @@ mod tests {
             health_current: 20,
             health_max: 20,
             level: 1,
-            armor: 0,
+            armor_class: 10,
         };
         let defender = CombatantSnapshot {
             id: did.clone(),
@@ -159,7 +159,7 @@ mod tests {
             health_current: 10,
             health_max: 10,
             level: 1,
-            armor: 0,
+            armor_class: 10,
         };
         let state = CombatState {
             combatants: vec![

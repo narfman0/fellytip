@@ -1,0 +1,153 @@
+# D&D 5e SRD Reference
+
+This file is the **single source of truth** for all D&D 5e SRD numbers enforced in the codebase.
+Do not derive these values elsewhere — import or reference this document.
+
+Source: *System Reference Document 5.1*, Creative Commons Attribution 4.0 International License.
+
+---
+
+## Character Advancement: XP Thresholds
+
+| Level | Total XP required | XP needed from previous level |
+|-------|-------------------|-------------------------------|
+|  1    |         0         |            —                  |
+|  2    |       300         |          300                  |
+|  3    |       900         |          600                  |
+|  4    |     2,700         |        1,800                  |
+|  5    |     6,500         |        3,800                  |
+|  6    |    14,000         |        7,500                  |
+|  7    |    23,000         |        9,000                  |
+|  8    |    34,000         |       11,000                  |
+|  9    |    48,000         |       14,000                  |
+| 10    |    64,000         |       16,000                  |
+| 11    |    85,000         |       21,000                  |
+| 12    |   100,000         |       15,000                  |
+| 13    |   120,000         |       20,000                  |
+| 14    |   140,000         |       20,000                  |
+| 15    |   165,000         |       25,000                  |
+| 16    |   195,000         |       30,000                  |
+| 17    |   225,000         |       30,000                  |
+| 18    |   265,000         |       40,000                  |
+| 19    |   305,000         |       40,000                  |
+| 20    |   355,000         |       50,000                  |
+
+Implemented in: `crates/shared/src/combat/rules.rs → xp_to_next_level()`
+
+---
+
+## Proficiency Bonus by Level
+
+| Levels | Proficiency bonus |
+|--------|-------------------|
+|  1– 4  |       +2          |
+|  5– 8  |       +3          |
+|  9–12  |       +4          |
+| 13–16  |       +5          |
+| 17–20  |       +6          |
+
+Implemented in: `crates/shared/src/combat/types.rs → proficiency_bonus(level)`
+
+---
+
+## Challenge Rating (CR) → XP Award
+
+| CR    | XP     |
+|-------|--------|
+| 0     |    10  |
+| 1/8   |    25  |
+| 1/4   |    50  |
+| 1/2   |   100  |
+| 1     |   200  |
+| 2     |   450  |
+| 3     |   700  |
+| 4     | 1,100  |
+| 5     | 1,800  |
+| 6     | 2,300  |
+| 7     | 2,900  |
+| 8     | 3,900  |
+| 9     | 5,000  |
+| 10    | 5,900  |
+| 11    | 7,200  |
+| 12    | 8,400  |
+| 13    |10,000  |
+| 14    |11,500  |
+| 15    |13,000  |
+| 16    |15,000  |
+| 17    |18,000  |
+| 18    |20,000  |
+| 19    |22,000  |
+| 20    |25,000  |
+
+Used to set `ExperienceReward(xp)` on NPCs/bosses.
+Representative spawn values in the codebase:
+- Wildlife (CR 1/8): `ExperienceReward(25)`
+- Faction guard (CR 1/4): `ExperienceReward(50)`
+- Dungeon boss (CR 3): `ExperienceReward(700)`
+
+---
+
+## Hit Dice by Class
+
+| Class           | Hit die | Starting HP          |
+|-----------------|---------|----------------------|
+| Warrior (Fighter) | d10   | 10 + CON mod         |
+| Rogue           | d8      | 8 + CON mod          |
+| Mage (Wizard)   | d6      | 6 + CON mod          |
+
+HP gained on level-up: roll hit die + CON mod (minimum 1).
+
+Implemented in:
+- `crates/shared/src/combat/types.rs → hit_die_for_class(class)`
+- `crates/shared/src/combat/rules.rs → hp_on_level_up(class, con_mod, rng)`
+
+---
+
+## Attack Rolls
+
+```
+d20 + ability_modifier + proficiency_bonus  >=  target Armor Class (AC)  →  Hit
+```
+
+- **Natural 20**: always a critical hit (ignores AC)
+- **Natural 1**: always a miss (ignores modifiers)
+- **Critical hit**: double the weapon dice (not modifiers); ignores nothing else in 5e base rules
+- Primary ability: STR for melee; DEX for finesse/ranged; INT/WIS/CHA for spell attacks
+
+Current implementation uses STR for all classes (TODO: use DEX for Rogue, INT for Mage).
+
+Implemented in: `crates/shared/src/combat/rules.rs → resolve_attack_roll()`
+
+---
+
+## Armor Class (AC)
+
+| Armor type     | AC formula               |
+|----------------|--------------------------|
+| Unarmored      | 10 + DEX mod             |
+| Leather        | 11 + DEX mod             |
+| Scale mail     | 14 + DEX mod (max +2)    |
+| Chain mail     | 16 (no DEX)              |
+| Plate          | 18 (no DEX)              |
+
+Default AC values used at spawn:
+- Player (leather): AC 13 (DEX 14 → +2; 11+2=13)
+- Faction NPC guard (leather): AC 11 (DEX 10 → +0; 11+0=11)
+- Wildlife: AC 10 (unarmored, DEX 10)
+- Dungeon boss (chain mail): AC 16
+
+Note: The codebase does not yet implement equipment slots. AC is set directly on `CombatParticipant.armor_class`.
+
+---
+
+## Damage
+
+```
+Hit:          weapon_die + ability_modifier  (minimum 1)
+Critical hit: weapon_die × 2 + ability_modifier  (minimum 1)
+Miss:         0
+```
+
+No base damage reduction (DR) in 5e. Armor affects whether you're hit, not how much damage you take.
+
+Implemented in: `crates/shared/src/combat/rules.rs → resolve_damage()`

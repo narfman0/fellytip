@@ -17,7 +17,7 @@ mod combat_props {
     use uuid::Uuid;
 
     fn arb_snapshot(id: Uuid) -> impl Strategy<Value = CombatantSnapshot> {
-        (1i32..=50, 0i32..=10, 1i32..=20).prop_map(move |(hp, armor, str_)| {
+        (1i32..=50, 10i32..=20, 1i32..=20).prop_map(move |(hp, armor_class, str_)| {
             CombatantSnapshot {
                 id: CombatantId(id),
                 faction: None,
@@ -26,7 +26,7 @@ mod combat_props {
                 health_current: hp,
                 health_max: hp,
                 level: 1,
-                armor,
+                armor_class,
             }
         })
     }
@@ -62,7 +62,7 @@ mod combat_props {
             dmg_roll in 1i32..=12,
         ) {
             let before_hp = state.get(&did).map(|c| c.health).unwrap_or(0);
-            // Roll 1 + no strength bonus < 10 = guaranteed miss
+            // Natural 1 is always a miss (SRD fumble rule).
             let (next, effects) = resolve_round(state, &aid, &did, 1, dmg_roll);
             let after_hp = next.get(&did).map(|c| c.health).unwrap_or(0);
             let has_damage = effects.iter().any(|e| matches!(e, Effect::TakeDamage { .. }));
