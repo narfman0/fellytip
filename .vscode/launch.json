@@ -5,13 +5,41 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug unit tests in library 'fellytip_shared'",
+            "name": "Run fellytip",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=fellytip-client",
+                    "--package=fellytip-client"
+                ]
+            },
+            "preLaunchTask": "rust: cargo build fellytip-server",
+            "args": []
+        },
+        {
+            "name": "Debug executable 'fellytip-client'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=fellytip-client",
+                    "--package=fellytip-client"
+                ]
+            },
+            "args": []
+        },
+        {
+            "name": "Debug unit tests in executable 'fellytip-client'",
             "type": "lldb",
             "request": "launch",
             "cargo": {
                 "args": [
                     "test",
-                    "--package=fellytip-shared"
+                    "--bin=fellytip-client",
+                    "--package=fellytip-client"
                 ]
             }
         },
@@ -41,102 +69,13 @@
             }
         },
         {
-            "name": "Debug executable 'fellytip-client'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=fellytip-client",
-                    "--package=fellytip-client"
-                ]
-            },
-            "args": []
-        },
-        {
-            "name": "Debug unit tests in executable 'fellytip-client'",
+            "name": "Debug unit tests in library 'fellytip_shared'",
             "type": "lldb",
             "request": "launch",
             "cargo": {
                 "args": [
                     "test",
-                    "--bin=fellytip-client",
-                    "--package=fellytip-client"
-                ]
-            }
-        },
-        {
-            "name": "Debug executable 'combat_sim'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=combat_sim",
-                    "--package=combat_sim"
-                ]
-            },
-            "args": []
-        },
-        {
-            "name": "Debug unit tests in executable 'combat_sim'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--bin=combat_sim",
-                    "--package=combat_sim"
-                ]
-            }
-        },
-        {
-            "name": "Debug executable 'world_gen'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=world_gen",
-                    "--package=world_gen"
-                ]
-            },
-            "args": []
-        },
-        {
-            "name": "Debug unit tests in executable 'world_gen'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--bin=world_gen",
-                    "--package=world_gen"
-                ]
-            }
-        },
-        {
-            "name": "Debug executable 'ralph'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=ralph",
-                    "--package=ralph"
-                ]
-            },
-            "args": []
-        },
-        {
-            "name": "Debug unit tests in executable 'ralph'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--bin=ralph",
-                    "--package=ralph"
+                    "--package=fellytip-shared"
                 ]
             }
         }
