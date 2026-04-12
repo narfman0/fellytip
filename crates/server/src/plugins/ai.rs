@@ -8,7 +8,10 @@ use fellytip_shared::{
     components::{Health, WorldPosition},
     world::{
         civilization::Settlements,
-        faction::{Faction, FactionId, FactionResources, FactionGoal, pick_goal},
+        faction::{
+            Faction, FactionId, FactionResources, FactionGoal, NpcRank,
+            PlayerReputationMap, STANDING_NEUTRAL, STANDING_HOSTILE, pick_goal,
+        },
         ecology::RegionId,
         map::{MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
     },
@@ -31,6 +34,11 @@ pub struct CurrentGoal(#[allow(dead_code)] pub Option<FactionGoal>);
 #[derive(Component)]
 pub struct HomePosition(#[allow(dead_code)] pub WorldPosition);
 
+/// Server-only component: NPC rank for kill-penalty calculation.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct FactionNpcRank(pub NpcRank);
+
 /// Server-only resource: all live factions.
 #[derive(Resource, Default)]
 pub struct FactionRegistry {
@@ -48,7 +56,9 @@ pub struct AiPlugin;
 
 impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<FactionRegistry>();
+        app.init_resource::<FactionRegistry>()
+            .init_resource::<PlayerReputationMap>()
+            .register_type::<FactionNpcRank>();
         app.add_systems(WorldSimSchedule, (update_faction_goals, wander_npcs).chain());
         // spawn_faction_npcs and flush_factions_to_db are registered in MapGenPlugin's
         // Startup chain so they run after generate_world inserts the Settlements resource.
@@ -115,6 +125,7 @@ pub fn spawn_faction_npcs(
                 // CR 1/4 = 50 XP (docs/dnd5e-srd-reference.md)
                 ExperienceReward(50),
                 FactionMember(faction.id.clone()),
+                FactionNpcRank(NpcRank::Grunt),
                 CurrentGoal(None),
                 HomePosition(pos),
             ));
@@ -180,25 +191,49 @@ pub fn flush_factions_to_db(registry: Res<FactionRegistry>, db: Res<Db>) {
     });
 }
 
-/// Seed the faction registry with two starter factions for testing.
+/// Seed the faction registry with four canonical factions.
 pub fn seed_factions(mut registry: ResMut<FactionRegistry>) {
     use std::collections::HashMap;
     registry.factions = vec![
         Faction {
-            id: FactionId("wolves".into()),
+            id: FactionId("iron_wolves".into()),
             name: SmolStr::new("Iron Wolves"),
             disposition: HashMap::new(),
             goals: vec![FactionGoal::Survive, FactionGoal::RaidResource { resource_node_id: "mine_01".into() }],
             resources: FactionResources { food: 20.0, gold: 5.0, military_strength: 30.0 },
             territory: vec![RegionId("north".into())],
+            is_aggressive: false,
+            player_default_standing: STANDING_NEUTRAL,
         },
         Faction {
-            id: FactionId("guild".into()),
+            id: FactionId("merchant_guild".into()),
             name: SmolStr::new("Merchant Guild"),
             disposition: HashMap::new(),
-            goals: vec![FactionGoal::FormAlliance { with: FactionId("wolves".into()), min_trust: 0.5 }, FactionGoal::Survive],
+            goals: vec![FactionGoal::FormAlliance { with: FactionId("iron_wolves".into()), min_trust: 0.5 }, FactionGoal::Survive],
             resources: FactionResources { food: 80.0, gold: 200.0, military_strength: 10.0 },
             territory: vec![RegionId("south".into())],
+            is_aggressive: false,
+            player_default_standing: STANDING_NEUTRAL,
+        },
+        Faction {
+            id: FactionId("ash_covenant".into()),
+            name: SmolStr::new("Ash Covenant"),
+            disposition: HashMap::new(),
+            goals: vec![FactionGoal::Survive, FactionGoal::DefendSettlement { settlement_id: "ruins_01".into() }],
+            resources: FactionResources { food: 15.0, gold: 0.0, military_strength: 40.0 },
+            territory: vec![RegionId("east".into())],
+            is_aggressive: true,
+            player_default_standing: STANDING_HOSTILE,
+        },
+        Faction {
+            id: FactionId("deep_tide".into()),
+            name: SmolStr::new("Deep Tide"),
+            disposition: HashMap::new(),
+            goals: vec![FactionGoal::Survive, FactionGoal::RaidResource { resource_node_id: "surface_01".into() }],
+            resources: FactionResources { food: 10.0, gold: 0.0, military_strength: 35.0 },
+            territory: vec![RegionId("underdark".into())],
+            is_aggressive: true,
+            player_default_standing: STANDING_HOSTILE,
         },
     ];
 }

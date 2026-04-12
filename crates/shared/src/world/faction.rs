@@ -1,9 +1,11 @@
 //! Faction data, goals, dispositions, and the pure utility-scoring function.
 
 use crate::world::ecology::RegionId;
+use bevy::prelude::{Reflect, Resource};
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 // ── Identifiers ───────────────────────────────────────────────────────────────
 
@@ -41,6 +43,98 @@ pub enum FactionGoal {
     Survive,
 }
 
+// ── Standing tiers ────────────────────────────────────────────────────────────
+
+pub const STANDING_EXALTED:    i32 =  750;
+pub const STANDING_HONORED:    i32 =  500;
+pub const STANDING_FRIENDLY:   i32 =  250;
+pub const STANDING_NEUTRAL:    i32 =    0;
+pub const STANDING_UNFRIENDLY: i32 = -250;
+pub const STANDING_HOSTILE:    i32 = -500;
+
+/// Player–faction reputation tier derived from a numeric score.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+pub enum StandingTier {
+    Exalted,
+    Honored,
+    Friendly,
+    Neutral,
+    Unfriendly,
+    Hostile,
+    Hated,
+}
+
+impl StandingTier {
+    /// True when the tier results in NPC aggression.
+    pub fn is_aggressive(self) -> bool {
+        matches!(self, StandingTier::Hostile | StandingTier::Hated)
+    }
+}
+
+/// Map a numeric score to its `StandingTier`.
+pub fn standing_tier(score: i32) -> StandingTier {
+    if score >= STANDING_EXALTED         { StandingTier::Exalted    }
+    else if score >= STANDING_HONORED    { StandingTier::Honored    }
+    else if score >= STANDING_FRIENDLY   { StandingTier::Friendly   }
+    else if score >= STANDING_NEUTRAL    { StandingTier::Neutral    }
+    else if score >= STANDING_UNFRIENDLY { StandingTier::Unfriendly }
+    else if score >= STANDING_HOSTILE    { StandingTier::Hostile    }
+    else                                 { StandingTier::Hated      }
+}
+
+// ── NPC rank & kill penalties ─────────────────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+pub enum NpcRank { Grunt, Named, Boss }
+
+pub const KILL_PENALTY_GRUNT: i32 = -50;
+pub const KILL_PENALTY_NAMED: i32 = -200;
+pub const KILL_PENALTY_BOSS:  i32 = -500;
+
+pub fn kill_standing_delta(rank: NpcRank) -> i32 {
+    match rank {
+        NpcRank::Grunt => KILL_PENALTY_GRUNT,
+        NpcRank::Named => KILL_PENALTY_NAMED,
+        NpcRank::Boss  => KILL_PENALTY_BOSS,
+    }
+}
+
+/// Default player standing with a faction, used when no record exists.
+pub fn default_standing(faction_id: &FactionId) -> i32 {
+    match faction_id.0.as_str() {
+        "ash_covenant" | "deep_tide" => STANDING_HOSTILE,
+        _ => STANDING_NEUTRAL,
+    }
+}
+
+// ── Player reputation map ─────────────────────────────────────────────────────
+
+/// Per-player, per-faction standing scores.
+///
+/// Keyed by player UUID (same UUID as `CombatantId`).  Clamps scores to
+/// [-999, 1000] on every mutation to prevent runaway values.
+#[derive(Debug, Default, Clone, Resource)]
+pub struct PlayerReputationMap(pub HashMap<Uuid, HashMap<FactionId, i32>>);
+
+impl PlayerReputationMap {
+    /// Current standing score.  Falls back to `default_standing` if no record
+    /// exists for this player/faction combination.
+    pub fn score(&self, player_id: Uuid, faction: &FactionId) -> i32 {
+        self.0
+            .get(&player_id)
+            .and_then(|m| m.get(faction))
+            .copied()
+            .unwrap_or_else(|| default_standing(faction))
+    }
+
+    /// Apply a delta and clamp the result to [-999, 1000].
+    pub fn apply_delta(&mut self, player_id: Uuid, faction: &FactionId, delta: i32) {
+        let entry = self.0.entry(player_id).or_default()
+            .entry(faction.clone()).or_insert_with(|| default_standing(faction));
+        *entry = (*entry + delta).clamp(-999, 1000);
+    }
+}
+
 // ── Faction ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -51,6 +145,10 @@ pub struct Faction {
     pub goals: Vec<FactionGoal>,
     pub resources: FactionResources,
     pub territory: Vec<RegionId>,
+    /// Whether this faction attacks players on sight regardless of standing.
+    pub is_aggressive: bool,
+    /// Initial standing score for a player with no prior interaction.
+    pub player_default_standing: i32,
 }
 
 // ── Pure goal-scoring function ────────────────────────────────────────────────
@@ -126,7 +224,74 @@ mod tests {
                 gold: 0.0,
             },
             territory: vec![],
+            is_aggressive: false,
+            player_default_standing: STANDING_NEUTRAL,
         }
+    }
+
+    #[test]
+    fn standing_tier_exact_boundaries() {
+        assert_eq!(standing_tier(STANDING_EXALTED),    StandingTier::Exalted);
+        assert_eq!(standing_tier(STANDING_HONORED),    StandingTier::Honored);
+        assert_eq!(standing_tier(STANDING_FRIENDLY),   StandingTier::Friendly);
+        assert_eq!(standing_tier(STANDING_NEUTRAL),    StandingTier::Neutral);
+        assert_eq!(standing_tier(STANDING_UNFRIENDLY), StandingTier::Unfriendly);
+        assert_eq!(standing_tier(STANDING_HOSTILE),    StandingTier::Hostile);
+        assert_eq!(standing_tier(STANDING_HOSTILE - 1), StandingTier::Hated);
+        assert_eq!(standing_tier(-999),                StandingTier::Hated);
+    }
+
+    #[test]
+    fn kill_penalty_ordering() {
+        assert!(KILL_PENALTY_BOSS < KILL_PENALTY_NAMED);
+        assert!(KILL_PENALTY_NAMED < KILL_PENALTY_GRUNT);
+        assert!(KILL_PENALTY_GRUNT < 0);
+    }
+
+    #[test]
+    fn aggressive_tiers() {
+        assert!(StandingTier::Hostile.is_aggressive());
+        assert!(StandingTier::Hated.is_aggressive());
+        assert!(!StandingTier::Neutral.is_aggressive());
+        assert!(!StandingTier::Friendly.is_aggressive());
+    }
+
+    #[test]
+    fn default_standing_hostile_factions() {
+        assert_eq!(default_standing(&FactionId("ash_covenant".into())), STANDING_HOSTILE);
+        assert_eq!(default_standing(&FactionId("deep_tide".into())),    STANDING_HOSTILE);
+        assert_eq!(default_standing(&FactionId("iron_wolves".into())),  STANDING_NEUTRAL);
+    }
+
+    #[test]
+    fn reputation_map_new_player_gets_default() {
+        let rep = PlayerReputationMap::default();
+        let id = Uuid::new_v4();
+        assert_eq!(rep.score(id, &FactionId("iron_wolves".into())), STANDING_NEUTRAL);
+        assert_eq!(rep.score(id, &FactionId("ash_covenant".into())), STANDING_HOSTILE);
+    }
+
+    #[test]
+    fn reputation_map_delta_clamps() {
+        let mut rep = PlayerReputationMap::default();
+        let id = Uuid::new_v4();
+        rep.apply_delta(id, &FactionId("iron_wolves".into()), -2000);
+        assert!(rep.score(id, &FactionId("iron_wolves".into())) >= -999);
+        rep.apply_delta(id, &FactionId("iron_wolves".into()), 5000);
+        assert!(rep.score(id, &FactionId("iron_wolves".into())) <= 1000);
+    }
+
+    #[test]
+    fn ten_grunt_kills_reach_hostile() {
+        let mut rep = PlayerReputationMap::default();
+        let id = Uuid::new_v4();
+        let faction = FactionId("iron_wolves".into());
+        for _ in 0..10 {
+            rep.apply_delta(id, &faction, kill_standing_delta(NpcRank::Grunt));
+        }
+        let score = rep.score(id, &faction);
+        assert_eq!(standing_tier(score), StandingTier::Hostile,
+            "10 grunt kills should reach Hostile; score = {score}");
     }
 
     #[test]

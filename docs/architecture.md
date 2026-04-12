@@ -86,5 +86,17 @@ World sim tick (1 Hz)
 ## Entity identity
 
 - `Bevy Entity` — ephemeral, local to one server session.
-- `GameEntityId(Uuid)` — stable cross-session identity stored in SQLite. Used for story events and persistence.
+- `GameEntityId(Uuid)` — stable cross-session identity stored in SQLite. Used for story events and persistence. Player entities carry this as a `Component`; the invariant `CombatantId.0 == GameEntityId.0` holds for all player entities.
 - `CombatantId(Uuid)` — identifies a combatant within the interrupt stack (can be player or NPC).
+
+## Key server resources
+
+| Resource | Description |
+|---|---|
+| `WorldMap` | Generated tile grid; not replicated to clients |
+| `Settlements` | List of generated settlements; used for NPC spawn placement |
+| `FactionRegistry` | All live `Faction` structs; mutated by world-sim AI |
+| `PlayerReputationMap` | Per-player, per-faction standing scores (`HashMap<Uuid, HashMap<FactionId, i32>>`); clamped to `[-999, 1000]`; persisted to `player_faction_standing` SQLite table |
+| `EcologyState` | Per-region predator/prey population counts |
+| `StoryLog` | In-memory ordered event log; flushed to SQLite periodically |
+| `WorldSimTick` | Monotonic counter incremented each 1 Hz world-sim tick |

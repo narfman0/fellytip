@@ -32,7 +32,10 @@ The `InterruptFrame` match is exhaustive — no `_` wildcard. Every variant must
 
 ## Layer 3 — ECS bridge (`crates/server/src/plugins/combat.rs`)
 
-The bridge runs in `FixedUpdate` as three chained systems:
+The bridge runs in `FixedUpdate`. System ordering:
+
+**`check_faction_aggression`** (runs before `process_player_input`)
+Queries all faction NPCs without a pending attack and all players. For each NPC within 10 tiles of a player, inserts `PendingAttack` if the faction's `is_aggressive` flag is set or the player's standing tier is Hostile/Hated. Uses `PlayerReputationMap` and `FactionRegistry` resources. See `docs/systems/factions.md` for aggression rules.
 
 **`process_player_input`**
 Reads `PlayerInput` messages from each connected client. Applies movement to `WorldPosition`. When `BasicAttack` is present, inserts `PendingAttack`; when `UseAbility(id)` is present, inserts `PendingAbility`.
@@ -44,11 +47,12 @@ Converts `PendingAttack` markers into `InterruptFrame::ResolvingAttack` values p
 Converts `PendingAbility` markers into `InterruptFrame::ResolvingAbility` with pre-rolled dice (`[attack_d20, dmg_d8_1, dmg_d8_2]`) in `AbilityContext.rolls`. Removes the marker.
 
 **`resolve_interrupts`**
-Runs in seven phases each tick:
-1. Build `id → Entity` and `Entity → XP reward` lookup maps.
-2. Build a `CombatState` snapshot from current `Health` and `CombatParticipant` components.
+Runs in eight phases each tick:
+1. Build `id → Entity`, `Entity → XP reward`, and `Entity → player UUID` lookup maps.
+2. Build a `CombatState` snapshot from current `Health`, `CombatParticipant`, and `FactionMember` components. `CombatantSnapshot.faction` is populated from `FactionMember` when present.
 3. Step each non-empty `InterruptStack` once; collect effects.
-4. Apply effects via `get_mut` (avoids borrow conflicts with the step phase).
+4. Apply effects via `get_mut` (avoids borrow conflicts with the step phase). Resolve killer UUID from `GameEntityId` on the attacker.
+4b. Apply faction standing deltas for each kill: look up the dead NPC's `FactionMember` and `FactionNpcRank`, call `kill_standing_delta(rank)`, and mutate `PlayerReputationMap`.
 5. Award XP to attackers whose target died.
 6. Emit `WriteStoryEvent` for each death.
 7. Despawn dead entities.
@@ -68,6 +72,7 @@ On each level-up, HP increases by rolling the class hit die + CON modifier (mini
 | `PendingAttack { target }` | Transient marker; consumed by `initiate_attacks` |
 | `PendingAbility { target, ability_id }` | Transient marker; consumed by `initiate_abilities` |
 | `PlayerEntity(Entity)` | Links a `ClientOf` entity to its spawned player entity |
+| `GameEntityId(Uuid)` | Stable cross-session identity on player entities; `CombatantId.0 == GameEntityId.0` for all players |
 
 ## Current state
 

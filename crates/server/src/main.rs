@@ -8,7 +8,10 @@ use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Experience, Health, WorldPosition},
     protocol::FellytipProtocolPlugin,
-    world::map::{find_surface_spawn, WorldMap, MAP_WIDTH, MAP_HEIGHT},
+    world::{
+        map::{find_surface_spawn, WorldMap, MAP_WIDTH, MAP_HEIGHT},
+        story::GameEntityId,
+    },
 };
 
 use plugins::map_gen::MapGenConfig;
@@ -187,6 +190,7 @@ fn on_client_connected(
         .as_deref()
         .map(find_surface_spawn)
         .unwrap_or((0.0, 0.0, 0.0));
+    let player_uuid = Uuid::new_v4();
     let player = commands
         .spawn((
             WorldPosition { x: spawn_x, y: spawn_y, z: spawn_z },
@@ -194,7 +198,7 @@ fn on_client_connected(
             // to give players a comfortable introduction to combat.
             Health { current: 100, max: 100 },
             CombatParticipant {
-                id: CombatantId(Uuid::new_v4()),
+                id: CombatantId(player_uuid),
                 interrupt_stack: InterruptStack::default(),
                 class: CharacterClass::Warrior,
                 level: 1,
@@ -204,6 +208,7 @@ fn on_client_connected(
                 dexterity: 14,
                 constitution: 12,
             },
+            GameEntityId(player_uuid),
             Experience::new(),
             Replicate::to_clients(NetworkTarget::All),
         ))

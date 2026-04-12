@@ -22,10 +22,13 @@ use fellytip_shared::{
     components::{Experience, Health, WorldPosition},
     inputs::{ActionIntent, PlayerInput},
     world::{
+        faction::{kill_standing_delta, standing_tier, PlayerReputationMap},
         map::{is_walkable_at, smooth_surface_at, WorldMap, FALL_SPEED, STEP_HEIGHT, Z_FOLLOW_RATE},
         story::{GameEntityId, StoryEvent, StoryEventKind, WriteStoryEvent},
     },
 };
+
+use crate::plugins::ai::{FactionMember, FactionNpcRank, FactionRegistry};
 use lightyear::prelude::{server::ClientOf, MessageReceiver};
 use smol_str::SmolStr;
 use uuid::Uuid;
@@ -74,8 +77,59 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             FixedUpdate,
+            check_faction_aggression
+                .before(process_player_input),
+        );
+        app.add_systems(
+            FixedUpdate,
             (process_player_input, initiate_attacks, initiate_abilities, resolve_interrupts).chain(),
         );
+    }
+}
+
+// ── Faction aggression check ──────────────────────────────────────────────────
+
+type NpcAggroQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static FactionMember, &'static WorldPosition),
+    (With<ExperienceReward>, Without<PendingAttack>),
+>;
+
+/// Check whether any faction NPC should initiate combat with a nearby player.
+///
+/// Triggers when:
+/// 1. The NPC's faction has `is_aggressive = true`, OR
+/// 2. The player's standing with that faction is Hostile or Hated.
+///
+/// Range: 10 tiles (squared distance ≤ 100).  Runs at FixedUpdate (62.5 Hz).
+fn check_faction_aggression(
+    npc_query: NpcAggroQuery,
+    player_query: Query<
+        (Entity, &WorldPosition, &GameEntityId),
+        Without<ExperienceReward>,
+    >,
+    reputation: Res<PlayerReputationMap>,
+    registry: Res<FactionRegistry>,
+    mut commands: Commands,
+) {
+    const AGGRO_RANGE_SQ: f32 = 100.0; // 10 tiles²
+    for (npc_entity, fm, npc_pos) in npc_query.iter() {
+        let Some(faction) = registry.factions.iter().find(|f| f.id == fm.0) else {
+            continue;
+        };
+        for (player_entity, player_pos, gid) in player_query.iter() {
+            let dx = npc_pos.x - player_pos.x;
+            let dy = npc_pos.y - player_pos.y;
+            if dx * dx + dy * dy > AGGRO_RANGE_SQ {
+                continue;
+            }
+            let tier = standing_tier(reputation.score(gid.0, &fm.0));
+            if faction.is_aggressive || tier.is_aggressive() {
+                commands.entity(npc_entity).insert(PendingAttack { target: player_entity });
+                break;
+            }
+        }
     }
 }
 
@@ -243,6 +297,9 @@ type ParticipantQuery<'w, 's> = Query<
         &'static mut Health,
         Option<&'static mut Experience>,
         Option<&'static ExperienceReward>,
+        Option<&'static GameEntityId>,
+        Option<&'static FactionMember>,
+        Option<&'static FactionNpcRank>,
     ),
 >;
 
@@ -250,6 +307,7 @@ type ParticipantQuery<'w, 's> = Query<
 fn resolve_interrupts(
     mut participants: ParticipantQuery,
     mut story_writer: MessageWriter<WriteStoryEvent>,
+    mut reputation: ResMut<PlayerReputationMap>,
     tick: Res<crate::plugins::world_sim::WorldSimTick>,
     mut commands: Commands,
 ) {
@@ -265,17 +323,23 @@ fn resolve_interrupts(
 
     let xp_rewards: HashMap<Entity, u32> = participants
         .iter()
-        .filter_map(|(e, _, _, _, reward)| reward.map(|r| (e, r.0)))
+        .filter_map(|(e, _, _, _, reward, ..)| reward.map(|r| (e, r.0)))
+        .collect();
+
+    // Map Entity → player GameEntityId (only entities that have one — i.e. players).
+    let entity_to_game_id: HashMap<Entity, uuid::Uuid> = participants
+        .iter()
+        .filter_map(|(e, _, _, _, _, gid, ..)| gid.map(|g| (e, g.0)))
         .collect();
 
     // ── Phase 2: build CombatState snapshot for rule calls ───────────────────
     let combat_state = CombatState {
         combatants: participants
             .iter()
-            .map(|(_, p, h, ..)| CombatantState {
+            .map(|(_, p, h, _, _, _, fm, _)| CombatantState {
                 snapshot: CombatantSnapshot {
                     id: p.id.clone(),
-                    faction: None,
+                    faction: fm.map(|m| m.0.clone()),
                     class: p.class.clone(),
                     stats: CoreStats {
                         strength: p.strength,
@@ -297,7 +361,7 @@ fn resolve_interrupts(
 
     // ── Phase 3: step each non-empty interrupt stack ─────────────────────────
     let mut all_effects: Vec<(CombatantId, Entity, Vec<Effect>)> = Vec::new();
-    for (entity, mut participant, ..) in participants.iter_mut() {
+    for (entity, mut participant, _, _, _, _, _, _) in participants.iter_mut() {
         if participant.interrupt_stack.is_empty() {
             continue;
         }
@@ -313,6 +377,8 @@ fn resolve_interrupts(
     let mut xp_awards: Vec<(Entity, u32)> = Vec::new();
     let mut despawn_list: Vec<Entity> = Vec::new();
     let mut story_events: Vec<StoryEvent> = Vec::new();
+    // (killer_uuid, target_entity) pairs for reputation penalty application.
+    let mut reputation_kills: Vec<(uuid::Uuid, Entity)> = Vec::new();
 
     for (_attacker_id, attacker_entity, effects) in &all_effects {
         for effect in effects {
@@ -342,18 +408,26 @@ fn resolve_interrupts(
                         if let Some(&xp) = xp_rewards.get(&target_entity) {
                             xp_awards.push((*attacker_entity, xp));
                         }
+                        // Resolve killer UUID from attacker's GameEntityId (players have one).
+                        let killer_uuid = entity_to_game_id
+                            .get(attacker_entity)
+                            .copied()
+                            .unwrap_or(Uuid::nil());
                         story_events.push(StoryEvent {
                             id: Uuid::new_v4(),
                             tick: tick.0,
                             world_day: (tick.0 / 86400) as u32,
                             kind: StoryEventKind::PlayerKilledNamed {
                                 victim: GameEntityId(target.0),
-                                killer: GameEntityId(Uuid::nil()),
+                                killer: GameEntityId(killer_uuid),
                             },
                             participants: vec![GameEntityId(target.0)],
                             location: None,
                             lore_tags: vec![SmolStr::new("death")],
                         });
+                        if killer_uuid != Uuid::nil() {
+                            reputation_kills.push((killer_uuid, target_entity));
+                        }
                         tracing::info!(target = ?target.0, "Combatant died");
                         despawn_list.push(target_entity);
                     }
@@ -365,9 +439,26 @@ fn resolve_interrupts(
         }
     }
 
+    // ── Phase 4b: apply reputation deltas for kills ──────────────────────────
+    for (killer_uuid, target_entity) in &reputation_kills {
+        if let Ok((_, _, _, _, _, _, Some(fm), rank)) = participants.get(*target_entity) {
+            let rank = rank.map(|r| r.0).unwrap_or(fellytip_shared::world::faction::NpcRank::Grunt);
+            reputation.apply_delta(*killer_uuid, &fm.0, kill_standing_delta(rank));
+            let new_score = reputation.score(*killer_uuid, &fm.0);
+            tracing::debug!(
+                killer = %killer_uuid,
+                faction = %fm.0.0,
+                delta = kill_standing_delta(rank),
+                score = new_score,
+                tier = ?standing_tier(new_score),
+                "Kill reputation applied"
+            );
+        }
+    }
+
     // ── Phase 5: award XP and apply level-up ────────────────────────────────
     for (attacker_entity, xp) in xp_awards {
-        if let Ok((_, mut participant, mut health, Some(mut exp), _)) =
+        if let Ok((_, mut participant, mut health, Some(mut exp), _, _, _, _)) =
             participants.get_mut(attacker_entity)
         {
             exp.xp += xp;

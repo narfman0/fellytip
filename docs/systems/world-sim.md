@@ -57,7 +57,9 @@ Each NPC spawns with:
 - `Health { current: 20, max: 20 }`
 - `CombatParticipant` — Warrior, level 1, AC 11 (leather), STR 10, DEX 10, CON 10
 - `ExperienceReward(50)` — CR 1/4 per the SRD CR→XP table
-- `FactionMember`, `CurrentGoal(None)`, `HomePosition` components
+- `FactionMember`, `FactionNpcRank(Grunt)`, `CurrentGoal(None)`, `HomePosition` components
+
+Aggression checks run at `FixedUpdate` (62.5 Hz) in `check_faction_aggression` (in `combat.rs`), not at the 1 Hz world-sim rate. This ensures NPC reactions are frame-accurate. See `docs/systems/factions.md` for full aggression rules.
 
 NPCs are stationary until pathfinding is implemented. The `wander_npcs` WorldSimSchedule system is a placeholder that does nothing; it will be replaced with goal-directed movement in a later milestone.
 
