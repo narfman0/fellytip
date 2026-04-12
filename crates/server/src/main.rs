@@ -31,9 +31,6 @@ fn main() {
         .add_plugins(FellytipProtocolPlugin)
         .add_plugins(plugins::persistence::PersistencePlugin)
         .add_plugins(plugins::world_sim::WorldSimPlugin)
-        // MapGenPlugin must come before AiPlugin and EcologyPlugin so that the
-        // Settlements and WorldMap resources are available when their Startup
-        // systems run (Bevy executes Startup systems in plugin-registration order).
         .add_plugins(plugins::map_gen::MapGenPlugin)
         .add_plugins(plugins::ecology::EcologyPlugin)
         .add_plugins(plugins::ai::AiPlugin)
@@ -42,7 +39,12 @@ fn main() {
         .add_plugins(plugins::party::PartyPlugin)
         .add_plugins(plugins::dungeon::DungeonPlugin)
         .add_systems(Startup, plugins::ai::seed_factions)
-        .add_systems(Startup, spawn_server)
+        // spawn_server runs in PostStartup so its deferred command application
+        // (which triggers the lightyear UDP observer) cannot share an ApplyDeferred
+        // sync point with the map-gen chain.  If the observer panics (e.g. port in
+        // use), it no longer corrupts generate_world's Commands flush and the
+        // WorldMap resource is always present for seed_ecology.
+        .add_systems(PostStartup, spawn_server)
         .add_observer(on_link_spawned)
         .add_observer(on_client_connected)
         .add_observer(on_client_disconnected)
