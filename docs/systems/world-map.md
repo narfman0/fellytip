@@ -62,8 +62,16 @@ Flow direction: the steepest downhill cardinal/diagonal neighbour. Drainage area
 ### 4. Shallow caves
 Cellular automata with parameters defined in `generate_map`. Produces winding passages similar to a dungeon crawl. Open cells receive a walkable `Cavern` layer at `SHALLOW_CAVE_Z`.
 
-### 5. Underdark
-Same algorithm with looser parameters, producing vast mostly-open caverns. Open cells receive a walkable `LuminousGrotto` layer at `UNDERDARK_Z`.
+### 5. Mid-level caves
+Same algorithm with intermediate parameters (40 % fill, 4 steps). Produces larger passages than shallow caves. Open cells receive a walkable `DeepRock` layer at `MID_CAVE_Z`.
 
-### 6. Shaft connectors
-Columns that have both a walkable surface layer and at least one walkable underground layer get a `Tunnel` layer bridging the two, enabling vertical travel. The selection probability is defined in `generate_map`.
+### 6. Underdark
+Looser CA parameters (30 % fill, 3 steps), producing vast mostly-open caverns with scattered pillars. Open cells receive a walkable `LuminousGrotto` layer at `UNDERDARK_Z`.
+
+### 7. Shaft connectors
+Three independent stochastic passes add `Tunnel` layers bridging every adjacent tier pair:
+- **Surface ↕ Cavern** — connects surface to the shallowest underground floor.
+- **Cavern ↕ DeepRock** — links the shallow dungeon tier to the mid-level caves.
+- **DeepRock ↕ LuminousGrotto** — links mid-level caves to the Underdark.
+
+Together they guarantee a continuous traversal chain from surface to Underdark. The selection probability per column per pass is defined in `shaft_pass` in `map.rs`.

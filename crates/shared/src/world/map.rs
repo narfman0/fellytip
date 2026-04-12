@@ -318,6 +318,7 @@ pub fn find_surface_spawn(map: &WorldMap) -> (f32, f32, f32) {
 /// from latitude + altitude penalty.
 /// `moisture` — `0.0` (arid) to `1.0` (wet).  From a separate fBm pass.
 ///
+///
 /// High-elevation tiles (h ≥ 0.72) and water tiles (h < 0.25) are handled
 /// before this function is called and map directly to `Mountain` / `Water`.
 pub fn classify_biome(temperature: f32, moisture: f32) -> TileKind {
@@ -360,9 +361,14 @@ pub fn classify_biome(temperature: f32, moisture: f32) -> TileKind {
 /// 2. **Shallow caves** (Z ≈ -15 to -22) — cellular automata with 48 % initial fill,
 ///    5 smoothing steps.  Produces winding passages 3–8 tiles wide, similar to
 ///    dungeon crawl level 1.
-/// 3. **Underdark** (Z ≈ -65 to -80) — CA with 30 % initial fill, 3 steps.
+/// 3. **Mid-level caves** (Z ≈ -38 to -46) — CA with 40 % initial fill, 4 steps.
+///    Larger passages than shallow caves; forms the intermediate tier between the
+///    dungeon and the Underdark.
+/// 4. **Underdark** (Z ≈ -65 to -80) — CA with 30 % initial fill, 3 steps.
 ///    Produces vast, mostly-open caverns with scattered pillars — city-scale voids
 ///    suitable for underground civilizations.
+/// 5. **Shaft connectors** — vertical `Tunnel` layers linking every adjacent tier
+///    pair: surface↕Cavern, Cavern↕DeepRock, DeepRock↕LuminousGrotto.
 pub fn generate_map(seed: u64, width: usize, height: usize) -> WorldMap {
     use crate::math::fbm;
 
@@ -470,6 +476,24 @@ pub fn generate_map(seed: u64, width: usize, height: usize) -> WorldMap {
         height,
     );
 
+    // ── Mid-level cave pass ───────────────────────────────────────────────────
+    // 40 % fill, 4 CA steps → larger passages than shallow caves, tighter than Underdark.
+
+    cave_pass(
+        &mut columns,
+        seed.wrapping_add(4),
+        CaveParams {
+            fill_chance: 0.40,
+            ca_steps: 4,
+            solid_threshold: 5,
+            floor_z: MID_CAVE_Z,
+            base_z: MID_CAVE_BASE,
+            kind: TileKind::DeepRock,
+        },
+        width,
+        height,
+    );
+
     // ── Underdark pass ────────────────────────────────────────────────────────
     // 30 % initial fill + loose rule = vast open spaces with scattered pillars.
 
@@ -570,71 +594,108 @@ fn cave_pass(columns: &mut [TileColumn], seed: u64, p: CaveParams, width: usize,
     }
 }
 
-/// Generate vertical shafts that connect walkable surface tiles to underground levels.
+/// Generate vertical shafts connecting every adjacent tier pair.
 ///
 /// # Algorithm
-/// 1. Collect all columns that have BOTH a walkable surface layer AND at least one
-///    underground layer (Cavern or LuminousGrotto).  These are candidate shaft sites.
-/// 2. Thin the candidates: keep only every `SHAFT_SPACING`-th candidate (via the
-///    seeded RNG) so shafts appear periodically rather than everywhere.
-/// 3. For each selected shaft column, add a `Tunnel` layer between the surface
-///    floor and the shallowest underground layer.  The tunnel is walkable so the
-///    movement system treats it as a sloped transition.
+/// The function runs three independent stochastic passes over all columns using
+/// the same seeded RNG so the overall shaft density is uniform.
 ///
-/// The shaft layer bridges the Z gap: `z_base = underground_floor`, `z_top =
-/// surface_floor`.  Entities entering the shaft column smoothly lerp down to the
-/// underground floor because that is now the highest reachable walkable layer
-/// within `STEP_HEIGHT` of the surface (the surface layer is not removed — the
-/// shaft sits beside it, and the game can use trigger volumes to enter/exit).
+/// **Pass A — surface ↕ Cavern**: columns with both a walkable surface layer and
+/// any walkable underground layer get a `Tunnel` bridging from the shallowest
+/// underground floor up to the surface.
 ///
-/// **No surface layer is removed**: shafts are additive.  A shaft column has both
-/// the original surface layer and the tunnel layer; which one the entity stands on
-/// depends on their current Z.
+/// **Pass B — Cavern ↕ DeepRock**: columns with both a walkable `Cavern` layer
+/// and a walkable `DeepRock` layer get a `Tunnel` bridging between the two.
+///
+/// **Pass C — DeepRock ↕ LuminousGrotto**: same pattern for the deepest pair.
+///
+/// Together the three passes guarantee a continuous traversal chain:
+/// surface ↕ Cavern ↕ DeepRock ↕ LuminousGrotto.
+///
+/// **No existing layer is removed**: shafts are additive.  Which layer an entity
+/// stands on depends on their current Z.
 fn shaft_pass(columns: &mut [TileColumn], seed: u64) {
     use rand::{RngExt, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
-    /// Roughly 1 shaft per SHAFT_SPACING columns (on average).
+    /// Roughly 1 shaft per SHAFT_SPACING columns (on average) per pass.
     const SHAFT_SPACING: usize = 40;
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
+    // ── Pass A: surface → shallowest underground ──────────────────────────────
     for col in columns.iter_mut() {
-        // Decide whether to place a shaft here (~1/SHAFT_SPACING chance).
         if (rng.random::<f32>() * SHAFT_SPACING as f32) >= 1.0 {
             continue;
         }
-
-        // Must have a walkable surface layer.
         let surface_z = match col.layers.iter().find(|l| l.is_surface_kind() && l.walkable) {
             Some(l) => l.z_top,
             None => continue,
         };
-
-        // Must have at least one underground walkable layer.
         let underground_z = match col
             .layers
             .iter()
             .filter(|l| l.is_underground_kind() && l.walkable)
             .map(|l| l.z_top)
-            // Pick the shallowest underground floor (highest negative Z).
             .reduce(f32::max)
         {
             Some(z) => z,
             None => continue,
         };
-
-        // Add the tunnel layer bridging surface → underground.
-        let shaft = TileLayer {
+        col.layers.push(TileLayer {
             z_base: underground_z,
             z_top: surface_z,
             kind: TileKind::Tunnel,
             walkable: true,
             corner_offsets: [0.0; 4],
-        };
-        col.layers.push(shaft);
-        // Re-sort to maintain ascending z_base order.
+        });
         col.layers.sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
+    }
+
+    // ── Pass B: Cavern ↕ DeepRock ─────────────────────────────────────────────
+    for col in columns.iter_mut() {
+        if (rng.random::<f32>() * SHAFT_SPACING as f32) >= 1.0 {
+            continue;
+        }
+        let cavern_z = col.layers.iter()
+            .find(|l| l.kind == TileKind::Cavern && l.walkable)
+            .map(|l| l.z_top);
+        let deeprock_z = col.layers.iter()
+            .find(|l| l.kind == TileKind::DeepRock && l.walkable)
+            .map(|l| l.z_top);
+        if let (Some(upper), Some(lower)) = (cavern_z, deeprock_z) {
+            col.layers.push(TileLayer {
+                z_base: lower,
+                z_top: upper,
+                kind: TileKind::Tunnel,
+                walkable: true,
+                corner_offsets: [0.0; 4],
+            });
+            col.layers.sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
+        }
+    }
+
+    // ── Pass C: DeepRock ↕ LuminousGrotto ────────────────────────────────────
+    for col in columns.iter_mut() {
+        if (rng.random::<f32>() * SHAFT_SPACING as f32) >= 1.0 {
+            continue;
+        }
+        let deeprock_z = col.layers.iter()
+            .find(|l| l.kind == TileKind::DeepRock && l.walkable)
+            .map(|l| l.z_top);
+        let grotto_z = col.layers.iter()
+            .find(|l| l.kind == TileKind::LuminousGrotto && l.walkable)
+            .map(|l| l.z_top);
+        if let (Some(upper), Some(lower)) = (deeprock_z, grotto_z) {
+            col.layers.push(TileLayer {
+                z_base: lower,
+                z_top: upper,
+                kind: TileKind::Tunnel,
+                walkable: true,
+                corner_offsets: [0.0; 4],
+            });
+            col.layers.sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
+        }
     }
 }
 
@@ -927,21 +988,23 @@ mod tests {
 
     #[test]
     fn shaft_z_top_equals_surface_z() {
-        // Every Tunnel layer's z_top should equal a walkable surface layer's z_top
-        // in the same column, and z_base should equal an underground layer's z_top.
+        // Every Tunnel layer's z_top and z_base should each match the z_top of some
+        // other walkable layer in the same column (surface or underground).
+        // Inter-tier shafts (Cavern↕DeepRock, DeepRock↕LuminousGrotto) bridge two
+        // underground layers, so the old surface-only invariant no longer applies.
         let m = generate_map(2, MAP_WIDTH, MAP_HEIGHT);
         for col in &m.columns {
             for shaft in col.layers.iter().filter(|l| l.kind == TileKind::Tunnel) {
-                let surface_match = col.layers.iter()
-                    .any(|l| l.is_surface_kind() && l.walkable
+                let upper_match = col.layers.iter()
+                    .any(|l| l.kind != TileKind::Tunnel && l.walkable
                         && (l.z_top - shaft.z_top).abs() < 0.01);
-                let underground_match = col.layers.iter()
-                    .any(|l| l.is_underground_kind() && l.walkable
+                let lower_match = col.layers.iter()
+                    .any(|l| l.kind != TileKind::Tunnel && l.walkable
                         && (l.z_top - shaft.z_base).abs() < 0.01);
-                assert!(surface_match,
-                    "shaft z_top={} has no matching surface layer", shaft.z_top);
-                assert!(underground_match,
-                    "shaft z_base={} has no matching underground layer", shaft.z_base);
+                assert!(upper_match,
+                    "shaft z_top={} has no matching walkable layer", shaft.z_top);
+                assert!(lower_match,
+                    "shaft z_base={} has no matching walkable layer", shaft.z_base);
             }
         }
     }
