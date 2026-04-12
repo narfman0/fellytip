@@ -58,11 +58,12 @@ The vertex at tile-grid position `(gx, gy)` uses `layer.z_top + layer.corner_off
 
 | `LodLevel` | Step | Vertices/side | Distance threshold |
 |---|---|---|---|
-| `Full`    | 1 | 33 | < 80 units   |
-| `Half`    | 2 | 17 | < 192 units  |
-| `Quarter` | 4 |  9 | ≥ 192 units  |
+| `Full`    | 1 | 33 | < 80 units    |
+| `Half`    | 2 | 17 | 80–192 units  |
+| `Quarter` | 4 |  9 | 192–320 units |
+| `Eighth`  | 8 |  5 | ≥ 320 units   |
 
-Distance thresholds are tuned so that at the maximum camera zoom (~400 units) the entire visible area fits within `render_radius = 13` chunks.
+Distance thresholds are tuned so that at the maximum camera zoom the entire visible area fits within `render_radius = 20` chunks.
 
 LOD transitions are **constrained to ±1 level** between neighbors (BFS clamping in `update_chunk_visibility`). Where a fine chunk borders a coarser one, T-junction stitching eliminates visible cracks: odd-indexed edge vertices are removed (whole triangles filtered) and replaced with T-collapse triangles.
 

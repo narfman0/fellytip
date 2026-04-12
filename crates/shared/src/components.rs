@@ -46,7 +46,7 @@ pub struct Experience {
 
 impl Experience {
     pub fn new() -> Self {
-        Self { xp: 0, level: 1, xp_to_next: 100 }
+        Self { xp: 0, level: 1, xp_to_next: 300 }
     }
 }
 
