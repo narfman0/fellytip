@@ -8,6 +8,7 @@ fellytip-shared    = { workspace = true }
 bevy               = { workspace = true, features = ["bevy_log", "multi_threaded", "bevy_remote"] }
 lightyear          = { workspace = true, features = ["std", "server", "client", "netcode", "udp", "replication"] }
 rand               = { workspace = true }
+serde              = { workspace = true }
 serde_json         = { workspace = true }
 bincode            = { workspace = true }
 smol_str           = { workspace = true }

@@ -21,6 +21,7 @@
 mod app;
 mod brp;
 mod db;
+mod dm;
 mod state;
 
 use std::sync::{Arc, Mutex, mpsc};
@@ -57,11 +58,15 @@ fn main() -> Result<()> {
     let (query_tx, query_rx) = mpsc::channel::<String>();
     let (result_tx, result_rx) = mpsc::channel::<String>();
 
+    // Channel pair for DM commands from the DM tab.
+    let (dm_tx, dm_rx) = mpsc::channel::<(String, serde_json::Value)>();
+    let (dm_result_tx, dm_result_rx) = mpsc::channel::<String>();
+
     {
         let snapshot = Arc::clone(&snapshot);
         let db_path = db_path.clone();
         rt.spawn(async move {
-            state::polling_loop(snapshot, query_rx, result_tx, db_path).await;
+            state::polling_loop(snapshot, query_rx, result_tx, dm_rx, dm_result_tx, db_path).await;
         });
     }
 
@@ -98,6 +103,8 @@ fn main() -> Result<()> {
         tray,
         query_tx,
         result_rx,
+        dm_tx,
+        dm_result_rx,
         show_hide_id,
         quit_id,
     );

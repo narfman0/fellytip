@@ -4,9 +4,11 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, RichText, ScrollArea, Ui, ViewportCommand};
+use serde_json::Value;
 use tray_icon::{TrayIcon, TrayIconEvent};
 use tray_icon::menu::MenuEvent;
 
+use crate::dm::{DmTab, render_dm};
 use crate::state::WorldSnapshot;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -16,6 +18,7 @@ enum Tab {
     Ecology,
     Story,
     Query,
+    Dm,
 }
 
 impl Tab {
@@ -26,6 +29,7 @@ impl Tab {
             Tab::Ecology  => "Ecology",
             Tab::Story    => "Story",
             Tab::Query    => "Query",
+            Tab::Dm       => "DM",
         }
     }
 }
@@ -41,17 +45,23 @@ pub struct WorldWatchApp {
     query_result: String,
     query_tx: mpsc::Sender<String>,
     result_rx: mpsc::Receiver<String>,
+    // DM tab state + channels.
+    dm_tab: DmTab,
+    dm_result_rx: mpsc::Receiver<String>,
     // IDs for tray menu items.
     show_hide_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
 }
 
 impl WorldWatchApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         snapshot: Arc<Mutex<WorldSnapshot>>,
         tray: TrayIcon,
         query_tx: mpsc::Sender<String>,
         result_rx: mpsc::Receiver<String>,
+        dm_tx: mpsc::Sender<(String, Value)>,
+        dm_result_rx: mpsc::Receiver<String>,
         show_hide_id: tray_icon::menu::MenuId,
         quit_id: tray_icon::menu::MenuId,
     ) -> Self {
@@ -64,6 +74,8 @@ impl WorldWatchApp {
             query_result: String::new(),
             query_tx,
             result_rx,
+            dm_tab: DmTab::new(dm_tx),
+            dm_result_rx,
             show_hide_id,
             quit_id,
         }
@@ -76,6 +88,9 @@ impl eframe::App for WorldWatchApp {
         if let Ok(result) = self.result_rx.try_recv() {
             self.query_result = result;
         }
+
+        // Drain DM results into the DM tab log.
+        self.dm_tab.drain_results(&self.dm_result_rx);
 
         // Poll tray icon and menu events.
         self.poll_tray_events(ctx);
@@ -95,7 +110,10 @@ impl eframe::App for WorldWatchApp {
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                for tab in [Tab::Overview, Tab::Factions, Tab::Ecology, Tab::Story, Tab::Query] {
+                for tab in [
+                    Tab::Overview, Tab::Factions, Tab::Ecology,
+                    Tab::Story, Tab::Query, Tab::Dm,
+                ] {
                     if ui.selectable_label(self.active_tab == tab, tab.label()).clicked() {
                         self.active_tab = tab;
                     }
@@ -110,6 +128,7 @@ impl eframe::App for WorldWatchApp {
                 Tab::Ecology  => render_ecology(ui, &snap),
                 Tab::Story    => render_story(ui, &snap),
                 Tab::Query    => self.render_query(ui),
+                Tab::Dm       => render_dm(&mut self.dm_tab, ui),
             }
         });
     }

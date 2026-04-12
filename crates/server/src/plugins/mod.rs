@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod dm;
 pub mod combat;
 pub mod combat_test;
 pub mod dungeon;

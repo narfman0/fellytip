@@ -58,7 +58,15 @@ fn main() {
     // Plugins shared by all run modes.
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
-        .add_plugins(RemotePlugin::default())
+        .add_plugins(
+            RemotePlugin::default()
+                .with_method("dm/spawn_npc",         plugins::dm::dm_spawn_npc)
+                .with_method("dm/kill",              plugins::dm::dm_kill)
+                .with_method("dm/teleport",          plugins::dm::dm_teleport)
+                .with_method("dm/set_faction",       plugins::dm::dm_set_faction)
+                .with_method("dm/trigger_war_party", plugins::dm::dm_trigger_war_party)
+                .with_method("dm/set_ecology",       plugins::dm::dm_set_ecology),
+        )
         .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
         .add_plugins(ServerPlugins {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),

@@ -61,20 +61,28 @@ pub struct StoryEntry {
 // ── Polling loop ──────────────────────────────────────────────────────────────
 
 /// Background task: polls BRP + SQLite every 2 seconds and updates the shared
-/// snapshot. Also serves freeform BRP queries sent via `query_rx`.
+/// snapshot. Also serves freeform BRP queries and DM commands sent via channels.
 pub async fn polling_loop(
     snapshot: Arc<Mutex<WorldSnapshot>>,
     query_rx: mpsc::Receiver<String>,
     result_tx: mpsc::Sender<String>,
+    dm_rx: mpsc::Receiver<(String, serde_json::Value)>,
+    dm_result_tx: mpsc::Sender<String>,
     db_path: String,
 ) {
     let brp = BrpClient::new();
 
     loop {
-        // Check for a pending freeform query (non-blocking).
+        // Check for a pending freeform BRP query (non-blocking).
         if let Ok(component_path) = query_rx.try_recv() {
             let result = run_freeform_query(&brp, &component_path).await;
             let _ = result_tx.send(result);
+        }
+
+        // Check for a pending DM command (non-blocking).
+        if let Ok((method, params)) = dm_rx.try_recv() {
+            let result = run_dm_command(&brp, &method, params).await;
+            let _ = dm_result_tx.send(result);
         }
 
         let new_snap = fetch_snapshot(&brp, &db_path).await;
@@ -143,5 +151,12 @@ async fn run_freeform_query(brp: &BrpClient, component_path: &str) -> String {
     match brp.query(&[component_path]).await {
         Ok(results) => serde_json::to_string_pretty(&results).unwrap_or_else(|e| e.to_string()),
         Err(e) => format!("Error: {e}"),
+    }
+}
+
+async fn run_dm_command(brp: &BrpClient, method: &str, params: serde_json::Value) -> String {
+    match brp.call(method, params).await {
+        Ok(v) => format!("✓ {}", serde_json::to_string_pretty(&v).unwrap_or_else(|e| e.to_string())),
+        Err(e) => format!("✗ {e}"),
     }
 }
