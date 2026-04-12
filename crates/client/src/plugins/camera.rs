@@ -10,7 +10,6 @@ use bevy::{
 };
 use fellytip_shared::{
     components::{Experience, WorldPosition},
-    world::map::{MAP_HEIGHT, MAP_WIDTH},
 };
 use lightyear::prelude::Replicated;
 
@@ -48,8 +47,8 @@ pub struct OrbitCamera {
 impl Default for OrbitCamera {
     fn default() -> Self {
         Self {
-            // Centre of the 512×512 map; y≈3 is typical surface elevation.
-            target: Vec3::new(MAP_WIDTH as f32 * 0.5, 3.0, MAP_HEIGHT as f32 * 0.5),
+            // World-space origin (0, 3, 0) = centre of the map; y≈3 is typical surface elevation.
+            target: Vec3::new(0.0, 3.0, 0.0),
             distance: 60.0,
             yaw: PI * 0.25,   // 45° diagonal — isometric
             pitch: 0.615,     // ~35.3° — classic isometric elevation

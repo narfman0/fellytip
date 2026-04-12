@@ -2,7 +2,9 @@
 
 The world map is a grid of tile columns. It is generated once from a seed on server startup, never replicated to clients, and used server-side for movement height queries and AI pathfinding.
 
-Grid dimensions and all numeric thresholds are defined as named constants in `crates/shared/src/world/map.rs` — that file is the authority; this document explains structure and intent.
+Grid dimensions are runtime-configurable via `MapGenConfig` (seed, width, height). Default values (`MAP_WIDTH = 1024`, `MAP_HEIGHT = 1024`) are constants in `crates/shared/src/world/map.rs`; custom values are passed with `--seed`, `--map-width`, `--map-height` CLI args on the server. The `WorldMap` struct stores `width` and `height` fields so all indexing is self-contained. Cache files are named `world_{seed}_{width}x{height}.bin`.
+
+All numeric thresholds beyond dimensions are also defined in `map.rs` — that file is the authority; this document explains structure and intent.
 
 ## Tile structure
 

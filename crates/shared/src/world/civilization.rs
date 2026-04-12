@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::world::map::{TileKind, WorldMap, MAP_HEIGHT, MAP_WIDTH, UNDERDARK_Z};
+use crate::world::map::{TileKind, WorldMap, UNDERDARK_Z};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -103,8 +103,8 @@ fn surface_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
     let mut placed: Vec<Settlement> = Vec::new();
     let mut idx = 0usize;
 
-    let cells_x = MAP_WIDTH  / GRID_CELL;
-    let cells_y = MAP_HEIGHT / GRID_CELL;
+    let cells_x = map.width  / GRID_CELL;
+    let cells_y = map.height / GRID_CELL;
 
     for cy in 0..cells_y {
         for cx in 0..cells_x {
@@ -176,7 +176,7 @@ fn underground_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
     use rand_chacha::ChaCha8Rng;
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let n = MAP_WIDTH * MAP_HEIGHT;
+    let n = map.width * map.height;
 
     // Mark walkable LuminousGrotto tiles.
     let is_grotto: Vec<bool> = (0..n)
@@ -204,18 +204,18 @@ fn underground_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
 
         while let Some(idx) = queue.pop_front() {
             components[comp_id].push(idx);
-            let ix = idx % MAP_WIDTH;
-            let iy = idx / MAP_WIDTH;
+            let ix = idx % map.width;
+            let iy = idx / map.width;
             for dy in -1i32..=1 {
                 for dx in -1i32..=1 {
                     if dx == 0 && dy == 0 { continue; }
                     let nx = ix as i32 + dx;
                     let ny = iy as i32 + dy;
                     if nx < 0 || ny < 0
-                        || nx as usize >= MAP_WIDTH
-                        || ny as usize >= MAP_HEIGHT
+                        || nx as usize >= map.width
+                        || ny as usize >= map.height
                     { continue; }
-                    let ni = nx as usize + ny as usize * MAP_WIDTH;
+                    let ni = nx as usize + ny as usize * map.width;
                     if is_grotto[ni] && component[ni].is_none() {
                         component[ni] = Some(comp_id);
                         queue.push_back(ni);
@@ -231,8 +231,8 @@ fn underground_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
         if cells.len() < MIN_UNDERGROUND_AREA {
             continue;
         }
-        let sum_x: usize = cells.iter().map(|&i| i % MAP_WIDTH).sum();
-        let sum_y: usize = cells.iter().map(|&i| i / MAP_WIDTH).sum();
+        let sum_x: usize = cells.iter().map(|&i| i % map.width).sum();
+        let sum_y: usize = cells.iter().map(|&i| i / map.width).sum();
         let cx = sum_x / cells.len();
         let cy = sum_y / cells.len();
 
@@ -256,15 +256,15 @@ fn underground_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
 /// Only walkable surface tiles are assigned.  The returned [`TerritoryMap`] has
 /// the same flat row-major layout as `WorldMap::columns`.
 pub fn assign_territories(map: &WorldMap, settlements: &[Settlement]) -> TerritoryMap {
-    let n = MAP_WIDTH * MAP_HEIGHT;
+    let n = map.width * map.height;
     let mut territory: TerritoryMap = vec![None; n];
     let mut queue: VecDeque<(usize, usize)> = VecDeque::new(); // (tile_idx, settlement_idx)
 
     // Seed BFS from each settlement's tile.
     for (si, s) in settlements.iter().enumerate() {
-        let ix = (s.x as usize).min(MAP_WIDTH  - 1);
-        let iy = (s.y as usize).min(MAP_HEIGHT - 1);
-        let idx = ix + iy * MAP_WIDTH;
+        let ix = (s.x as usize).min(map.width  - 1);
+        let iy = (s.y as usize).min(map.height - 1);
+        let idx = ix + iy * map.width;
         if territory[idx].is_none() {
             territory[idx] = Some(si);
             queue.push_back((idx, si));
@@ -272,18 +272,18 @@ pub fn assign_territories(map: &WorldMap, settlements: &[Settlement]) -> Territo
     }
 
     while let Some((idx, si)) = queue.pop_front() {
-        let ix = idx % MAP_WIDTH;
-        let iy = idx / MAP_WIDTH;
+        let ix = idx % map.width;
+        let iy = idx / map.width;
         for dy in -1i32..=1 {
             for dx in -1i32..=1 {
                 if dx == 0 && dy == 0 { continue; }
                 let nx = ix as i32 + dx;
                 let ny = iy as i32 + dy;
                 if nx < 0 || ny < 0
-                    || nx as usize >= MAP_WIDTH
-                    || ny as usize >= MAP_HEIGHT
+                    || nx as usize >= map.width
+                    || ny as usize >= map.height
                 { continue; }
-                let ni = nx as usize + ny as usize * MAP_WIDTH;
+                let ni = nx as usize + ny as usize * map.width;
                 if territory[ni].is_some() { continue; }
                 // Only cross walkable surface tiles.
                 let col = &map.columns[ni];
@@ -360,10 +360,10 @@ pub fn generate_roads(map: &mut WorldMap, settlements: &[Settlement]) {
         let by = surface[v].y as i32;
         for (rx, ry) in bresenham(ax, ay, bx, by) {
             if rx >= 0 && ry >= 0
-                && (rx as usize) < MAP_WIDTH
-                && (ry as usize) < MAP_HEIGHT
+                && (rx as usize) < map.width
+                && (ry as usize) < map.height
             {
-                map.road_tiles[rx as usize + ry as usize * MAP_WIDTH] = true;
+                map.road_tiles[rx as usize + ry as usize * map.width] = true;
             }
         }
     }
@@ -403,11 +403,11 @@ fn deterministic_uuid(rng: &mut impl rand::RngExt) -> Uuid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::map::generate_map;
+    use crate::world::map::{generate_map, MAP_WIDTH, MAP_HEIGHT};
 
     #[test]
     fn surface_settlements_are_generated() {
-        let map = generate_map(42);
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 42);
         let surface_count = settlements
             .iter()
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn underground_cities_are_generated() {
-        let map = generate_map(42);
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 42);
         let underground_count = settlements
             .iter()
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn at_least_one_capital_generated() {
-        let map = generate_map(0);
+        let map = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 0);
         let capital_count = settlements
             .iter()
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn settlements_are_deterministic() {
-        let map = generate_map(7);
+        let map = generate_map(7, MAP_WIDTH, MAP_HEIGHT);
         let a = generate_settlements(&map, 7);
         let b = generate_settlements(&map, 7);
         assert_eq!(a.len(), b.len(), "settlement count is not deterministic");
@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn territory_covers_most_surface_tiles() {
-        let map = generate_map(1);
+        let map = generate_map(1, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 1);
         let territory = assign_territories(&map, &settlements);
 
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn roads_are_written_to_map() {
-        let map = generate_map(5);
+        let map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 5);
         let mut map = map;
         generate_roads(&mut map, &settlements);
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn min_settlement_distance_respected() {
-        let map = generate_map(3);
+        let map = generate_map(3, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 3);
         for i in 0..settlements.len() {
             for j in (i + 1)..settlements.len() {
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn territory_index_in_bounds() {
-        let map = generate_map(2);
+        let map = generate_map(2, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 2);
         let territory = assign_territories(&map, &settlements);
         for &t in &territory {

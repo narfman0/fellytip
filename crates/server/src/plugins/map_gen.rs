@@ -20,12 +20,20 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use fellytip_shared::{
-    WORLD_SEED,
     world::{
         civilization::{assign_territories, generate_roads, generate_settlements, Settlements},
         map::{generate_map, WorldMap},
     },
 };
+
+/// Runtime map generation configuration — insert before [`MapGenPlugin`] is added.
+#[derive(Resource, Reflect, Clone)]
+#[reflect(Resource)]
+pub struct MapGenConfig {
+    pub seed: u64,
+    pub width: usize,
+    pub height: usize,
+}
 
 use crate::plugins::{
     ai::{flush_factions_to_db, seed_factions, spawn_faction_npcs},
@@ -108,10 +116,10 @@ fn try_load_map_file(path: &PathBuf) -> Option<WorldMap> {
     }
 }
 
-/// Serialise `map` to a bincode file named `world_{seed}.bin`.
+/// Serialise `map` to a bincode file named `world_{seed}_{width}x{height}.bin`.
 /// Returns the path on success.
 fn save_map_file(map: &WorldMap) -> Option<PathBuf> {
-    let path = PathBuf::from(format!("world_{}.bin", map.seed));
+    let path = PathBuf::from(format!("world_{}_{}x{}.bin", map.seed, map.width, map.height));
     let bytes = match bincode::serialize(map) {
         Ok(b) => b,
         Err(e) => {
@@ -136,10 +144,14 @@ fn save_map_file(map: &WorldMap) -> Option<PathBuf> {
 /// Run the full generation pipeline, save to file, and record the path in
 /// `world_meta`.  Settlements are generated here only to stamp roads onto the
 /// map; `generate_world` regenerates them afterwards for the ECS resource.
-fn generate_and_save(pool: &sqlx::SqlitePool, rt: &tokio::runtime::Runtime) -> WorldMap {
-    tracing::info!(seed = WORLD_SEED, "Generating world map…");
-    let mut map = generate_map(WORLD_SEED);
-    let settlements = generate_settlements(&map, WORLD_SEED);
+fn generate_and_save(
+    pool: &sqlx::SqlitePool,
+    rt: &tokio::runtime::Runtime,
+    config: &MapGenConfig,
+) -> WorldMap {
+    tracing::info!(seed = config.seed, width = config.width, height = config.height, "Generating world map…");
+    let mut map = generate_map(config.seed, config.width, config.height);
+    let settlements = generate_settlements(&map, config.seed);
     generate_roads(&mut map, &settlements);
     let road_count = map.road_tiles.iter().filter(|&&r| r).count();
     tracing::info!(road_count, "Road network stamped");
@@ -155,7 +167,7 @@ fn generate_and_save(pool: &sqlx::SqlitePool, rt: &tokio::runtime::Runtime) -> W
 
 /// Generate (or load from cache) the world map + settlements and insert them
 /// as Bevy resources.
-fn generate_world(mut commands: Commands, db: Res<Db>) {
+fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>) {
     let pool = db.pool().clone();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -168,29 +180,29 @@ fn generate_world(mut commands: Commands, db: Res<Db>) {
             tracing::info!(path = %path.display(), "Found cached world map — attempting load");
             match try_load_map_file(&path) {
                 Some(loaded)
-                    if loaded.seed == WORLD_SEED
+                    if loaded.seed == config.seed
+                        && loaded.width == config.width
+                        && loaded.height == config.height
                         && !loaded.road_tiles.is_empty()
-                        && loaded.columns.len()
-                            == fellytip_shared::world::map::MAP_WIDTH
-                                * fellytip_shared::world::map::MAP_HEIGHT =>
+                        && loaded.columns.len() == config.width * config.height =>
                 {
-                    tracing::info!(seed = WORLD_SEED, "World map loaded from cache — skipping generation");
+                    tracing::info!(seed = config.seed, "World map loaded from cache — skipping generation");
                     loaded
                 }
                 Some(_) => {
-                    tracing::warn!(seed = WORLD_SEED, "Cached map failed validation — regenerating");
-                    generate_and_save(&pool, &rt)
+                    tracing::warn!(seed = config.seed, "Cached map failed validation — regenerating");
+                    generate_and_save(&pool, &rt, &config)
                 }
-                None => generate_and_save(&pool, &rt),
+                None => generate_and_save(&pool, &rt, &config),
             }
         }
         None => {
-            tracing::info!(seed = WORLD_SEED, "No cached world map — generating");
-            generate_and_save(&pool, &rt)
+            tracing::info!(seed = config.seed, "No cached world map — generating");
+            generate_and_save(&pool, &rt, &config)
         }
     };
 
-    let settlements = generate_settlements(&map, WORLD_SEED);
+    let settlements = generate_settlements(&map, config.seed);
     tracing::info!(
         surface = settlements.iter().filter(|s| !matches!(s.kind, fellytip_shared::world::civilization::SettlementKind::UndergroundCity)).count(),
         underground = settlements.iter().filter(|s| matches!(s.kind, fellytip_shared::world::civilization::SettlementKind::UndergroundCity)).count(),

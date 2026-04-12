@@ -205,8 +205,10 @@ impl TileColumn {
 /// only; terrain rendering will sample this on spawn/region-load later.
 #[derive(Clone, Debug, Serialize, Deserialize, Reflect, Resource)]
 pub struct WorldMap {
-    /// Flat row-major array: index with `ix + iy * MAP_WIDTH`.
+    /// Flat row-major array: index with `ix + iy * self.width`.
     pub columns: Vec<TileColumn>,
+    pub width: usize,
+    pub height: usize,
     pub seed: u64,
     /// Flat row-major road flag array. `true` = road tile (same indexing as `columns`).
     /// Populated after `generate_map` by [`crate::world::civilization::generate_roads`].
@@ -216,17 +218,19 @@ pub struct WorldMap {
 
 impl WorldMap {
     pub fn column(&self, ix: usize, iy: usize) -> &TileColumn {
-        &self.columns[ix + iy * MAP_WIDTH]
+        &self.columns[ix + iy * self.width]
     }
 
     /// Returns `None` if `(x, y)` is outside the map bounds.
     ///
     /// `x` and `y` are world-space coordinates centered on (0, 0): the map
-    /// spans [-MAP_HALF_WIDTH, MAP_HALF_WIDTH) × [-MAP_HALF_HEIGHT, MAP_HALF_HEIGHT).
+    /// spans [-width/2, width/2) × [-height/2, height/2).
     pub fn column_at(&self, x: f32, y: f32) -> Option<&TileColumn> {
-        let ix = x.floor() as i64 + MAP_HALF_WIDTH;
-        let iy = y.floor() as i64 + MAP_HALF_HEIGHT;
-        if ix < 0 || iy < 0 || ix as usize >= MAP_WIDTH || iy as usize >= MAP_HEIGHT {
+        let half_w = (self.width / 2) as i64;
+        let half_h = (self.height / 2) as i64;
+        let ix = x.floor() as i64 + half_w;
+        let iy = y.floor() as i64 + half_h;
+        if ix < 0 || iy < 0 || ix as usize >= self.width || iy as usize >= self.height {
             return None;
         }
         Some(self.column(ix as usize, iy as usize))
@@ -286,7 +290,7 @@ pub fn find_surface_spawn(map: &WorldMap) -> (f32, f32, f32) {
     // as the ceiling guarantees surface_layer sees all surface layers while
     // still returning the topmost one (underground layers are negative).
     const Z_CEIL: f32 = Z_SCALE * 2.0;
-    for radius in 0..(MAP_WIDTH / 2) {
+    for radius in 0..(map.width.min(map.height) / 2) {
         let r = radius as i64;
         for dy in -r..=r {
             for dx in -r..=r {
@@ -345,7 +349,9 @@ pub fn classify_biome(temperature: f32, moisture: f32) -> TileKind {
 
 // ── Map generation ────────────────────────────────────────────────────────────
 
-/// Generate a world map deterministically from `seed`.
+/// Generate a world map deterministically from `seed` with the given `width` and `height`.
+///
+/// Pass [`MAP_WIDTH`] / [`MAP_HEIGHT`] for the defaults.
 ///
 /// # Passes
 /// 1. **Surface** — fBm terrain noise (6 octaves, continent-scale base frequency)
@@ -357,7 +363,7 @@ pub fn classify_biome(temperature: f32, moisture: f32) -> TileKind {
 /// 3. **Underdark** (Z ≈ -65 to -80) — CA with 30 % initial fill, 3 steps.
 ///    Produces vast, mostly-open caverns with scattered pillars — city-scale voids
 ///    suitable for underground civilizations.
-pub fn generate_map(seed: u64) -> WorldMap {
+pub fn generate_map(seed: u64, width: usize, height: usize) -> WorldMap {
     use crate::math::fbm;
 
     // ── Surface pass ──────────────────────────────────────────────────────────
@@ -369,25 +375,25 @@ pub fn generate_map(seed: u64) -> WorldMap {
     let mox = ((seed.wrapping_mul(1_234_567_891)) % 100_000) as f32;
     let moy = ((seed.wrapping_mul(987_654_321))   % 100_000) as f32;
 
-    // Base frequency: ~4 cycles across the 512-tile map → continent-scale features.
-    const BASE_FREQ: f32 = 4.0 / MAP_WIDTH as f32;
+    // Base frequency: ~4 cycles across the map → continent-scale features.
+    let base_freq: f32 = 4.0 / width as f32;
     // Precipitation varies at a finer scale than elevation.
-    const MOISTURE_FREQ: f32 = 6.0 / MAP_WIDTH as f32;
+    let moisture_freq: f32 = 6.0 / width as f32;
 
-    let heights: Vec<f32> = (0..MAP_WIDTH * MAP_HEIGHT)
+    let heights: Vec<f32> = (0..width * height)
         .map(|idx| {
-            let ix = (idx % MAP_WIDTH) as f32;
-            let iy = (idx / MAP_WIDTH) as f32;
-            fbm((ix + ox) * BASE_FREQ, (iy + oy) * BASE_FREQ, 6, 0.5, 2.0)
+            let ix = (idx % width) as f32;
+            let iy = (idx / width) as f32;
+            fbm((ix + ox) * base_freq, (iy + oy) * base_freq, 6, 0.5, 2.0)
         })
         .collect();
 
     // Precipitation field: independent fBm pass.
-    let moisture: Vec<f32> = (0..MAP_WIDTH * MAP_HEIGHT)
+    let moisture: Vec<f32> = (0..width * height)
         .map(|idx| {
-            let ix = (idx % MAP_WIDTH) as f32;
-            let iy = (idx / MAP_WIDTH) as f32;
-            fbm((ix + mox) * MOISTURE_FREQ, (iy + moy) * MOISTURE_FREQ, 4, 0.5, 2.0)
+            let ix = (idx % width) as f32;
+            let iy = (idx / width) as f32;
+            fbm((ix + mox) * moisture_freq, (iy + moy) * moisture_freq, 4, 0.5, 2.0)
         })
         .collect();
 
@@ -397,20 +403,20 @@ pub fn generate_map(seed: u64) -> WorldMap {
         .collect();
 
     let z_at = |ix: usize, iy: usize| {
-        z_tops[ix.min(MAP_WIDTH - 1) + iy.min(MAP_HEIGHT - 1) * MAP_WIDTH]
+        z_tops[ix.min(width - 1) + iy.min(height - 1) * width]
     };
 
-    let mut columns = Vec::with_capacity(MAP_WIDTH * MAP_HEIGHT);
+    let mut columns = Vec::with_capacity(width * height);
 
-    for iy in 0..MAP_HEIGHT {
-        for ix in 0..MAP_WIDTH {
-            let h = heights[ix + iy * MAP_WIDTH];
-            let m = moisture[ix + iy * MAP_WIDTH];
-            let z_top = z_tops[ix + iy * MAP_WIDTH];
+    for iy in 0..height {
+        for ix in 0..width {
+            let h = heights[ix + iy * width];
+            let m = moisture[ix + iy * width];
+            let z_top = z_tops[ix + iy * width];
 
             // Temperature: increases toward equator (center of map), decreases
             // with altitude.  Latitude factor: 0 at equator, 1 at poles.
-            let lat = (iy as f32 / MAP_HEIGHT as f32 - 0.5).abs() * 2.0;
+            let lat = (iy as f32 / height as f32 - 0.5).abs() * 2.0;
             let alt_penalty = (h - 0.45).max(0.0) * 0.6;
             let temperature = (lat * 0.7 + alt_penalty).clamp(0.0, 1.0);
 
@@ -423,9 +429,9 @@ pub fn generate_map(seed: u64) -> WorldMap {
             };
 
             let ix_m = ix.saturating_sub(1);
-            let ix_p = (ix + 1).min(MAP_WIDTH - 1);
+            let ix_p = (ix + 1).min(width - 1);
             let iy_m = iy.saturating_sub(1);
-            let iy_p = (iy + 1).min(MAP_HEIGHT - 1);
+            let iy_p = (iy + 1).min(height - 1);
 
             let c_tl = (z_at(ix_m,iy_m)+z_at(ix,iy_m)+z_at(ix_m,iy)+z_at(ix,iy)) / 4.0;
             let c_tr = (z_at(ix,iy_m)+z_at(ix_p,iy_m)+z_at(ix,iy)+z_at(ix_p,iy)) / 4.0;
@@ -445,7 +451,7 @@ pub fn generate_map(seed: u64) -> WorldMap {
 
     // ── River pass ────────────────────────────────────────────────────────────
 
-    river_pass(&mut columns, &heights);
+    river_pass(&mut columns, &heights, width, height);
 
     // ── Shallow cave pass ─────────────────────────────────────────────────────
 
@@ -460,6 +466,8 @@ pub fn generate_map(seed: u64) -> WorldMap {
             base_z: SHALLOW_CAVE_BASE,
             kind: TileKind::Cavern,
         },
+        width,
+        height,
     );
 
     // ── Underdark pass ────────────────────────────────────────────────────────
@@ -476,13 +484,15 @@ pub fn generate_map(seed: u64) -> WorldMap {
             base_z: UNDERDARK_BASE,
             kind: TileKind::LuminousGrotto,
         },
+        width,
+        height,
     );
 
     // ── Shaft pass ────────────────────────────────────────────────────────────
 
     shaft_pass(&mut columns, seed.wrapping_add(3));
 
-    WorldMap { columns, seed, road_tiles: vec![false; MAP_WIDTH * MAP_HEIGHT] }
+    WorldMap { columns, width, height, seed, road_tiles: vec![false; width * height] }
 }
 
 /// Parameters for one underground generation pass.
@@ -506,43 +516,43 @@ struct CaveParams {
 /// Initialises a boolean solid/void grid with seeded noise, runs `ca_steps`
 /// smoothing passes, then appends a walkable [`TileLayer`] at `floor_z` to
 /// every void cell in `columns`.
-fn cave_pass(columns: &mut [TileColumn], seed: u64, p: CaveParams) {
+fn cave_pass(columns: &mut [TileColumn], seed: u64, p: CaveParams, width: usize, height: usize) {
     use rand::{RngExt, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
     // true = solid rock, false = open void
-    let mut solid: Vec<bool> = (0..MAP_WIDTH * MAP_HEIGHT)
+    let mut solid: Vec<bool> = (0..width * height)
         .map(|_| rng.random::<f32>() < p.fill_chance)
         .collect();
 
     for _ in 0..p.ca_steps {
         let prev = solid.clone();
-        for iy in 0..MAP_HEIGHT {
-            for ix in 0..MAP_WIDTH {
+        for iy in 0..height {
+            for ix in 0..width {
                 let mut neighbors: u32 = 0;
                 for dy in -1i32..=1 {
                     for dx in -1i32..=1 {
                         if dx == 0 && dy == 0 { continue; }
                         let nx = ix as i32 + dx;
                         let ny = iy as i32 + dy;
-                        if nx < 0 || ny < 0 || nx >= MAP_WIDTH as i32 || ny >= MAP_HEIGHT as i32 {
+                        if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
                             neighbors += 1; // out-of-bounds counts as solid wall
                         } else {
-                            neighbors += prev[nx as usize + ny as usize * MAP_WIDTH] as u32;
+                            neighbors += prev[nx as usize + ny as usize * width] as u32;
                         }
                     }
                 }
-                solid[ix + iy * MAP_WIDTH] = neighbors >= p.solid_threshold;
+                solid[ix + iy * width] = neighbors >= p.solid_threshold;
             }
         }
     }
 
     // Add a walkable layer to every open cell.
-    for iy in 0..MAP_HEIGHT {
-        for ix in 0..MAP_WIDTH {
-            if !solid[ix + iy * MAP_WIDTH] {
+    for iy in 0..height {
+        for ix in 0..width {
+            if !solid[ix + iy * width] {
                 let layer = TileLayer {
                     z_base: p.base_z,
                     z_top: p.floor_z,
@@ -550,9 +560,9 @@ fn cave_pass(columns: &mut [TileColumn], seed: u64, p: CaveParams) {
                     walkable: true,
                     corner_offsets: [0.0; 4], // underground floors are flat
                 };
-                columns[ix + iy * MAP_WIDTH].layers.push(layer);
+                columns[ix + iy * width].layers.push(layer);
                 // Keep sorted ascending by z_base (deepest first).
-                columns[ix + iy * MAP_WIDTH]
+                columns[ix + iy * width]
                     .layers
                     .sort_by(|a, b| a.z_base.partial_cmp(&b.z_base).unwrap());
             }
@@ -640,19 +650,19 @@ fn shaft_pass(columns: &mut [TileColumn], seed: u64) {
 ///    or bridge to cross).
 ///
 /// Water and Mountain tiles are never converted.
-fn river_pass(columns: &mut [TileColumn], heights: &[f32]) {
+fn river_pass(columns: &mut [TileColumn], heights: &[f32], width: usize, height: usize) {
     // Scale threshold proportionally to map area so rivers appear at any map size.
     // At 512×512 this equals 800 tiles (~0.3% of total); shrinks for smaller maps.
     let river_threshold: u32 =
-        ((MAP_WIDTH * MAP_HEIGHT) as u64 * 800 / (512 * 512)).max(2) as u32;
+        ((width * height) as u64 * 800 / (512 * 512)).max(2) as u32;
 
-    let n = MAP_WIDTH * MAP_HEIGHT;
+    let n = width * height;
 
     // ── Build flow-direction map ──────────────────────────────────────────────
     let mut flow_dir = vec![None::<usize>; n];
-    for iy in 0..MAP_HEIGHT {
-        for ix in 0..MAP_WIDTH {
-            let h = heights[ix + iy * MAP_WIDTH];
+    for iy in 0..height {
+        for ix in 0..width {
+            let h = heights[ix + iy * width];
             let mut best_h = h;
             let mut best_idx = None;
             for dy in -1i32..=1 {
@@ -661,19 +671,19 @@ fn river_pass(columns: &mut [TileColumn], heights: &[f32]) {
                     let nx = ix as i32 + dx;
                     let ny = iy as i32 + dy;
                     if nx < 0 || ny < 0
-                        || nx as usize >= MAP_WIDTH
-                        || ny as usize >= MAP_HEIGHT
+                        || nx as usize >= width
+                        || ny as usize >= height
                     {
                         continue;
                     }
-                    let nh = heights[nx as usize + ny as usize * MAP_WIDTH];
+                    let nh = heights[nx as usize + ny as usize * width];
                     if nh < best_h {
                         best_h = nh;
-                        best_idx = Some(nx as usize + ny as usize * MAP_WIDTH);
+                        best_idx = Some(nx as usize + ny as usize * width);
                     }
                 }
             }
-            flow_dir[ix + iy * MAP_WIDTH] = best_idx;
+            flow_dir[ix + iy * width] = best_idx;
         }
     }
 
@@ -713,8 +723,8 @@ mod tests {
 
     #[test]
     fn map_is_deterministic() {
-        let a = generate_map(42);
-        let b = generate_map(42);
+        let a = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let b = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
         assert_eq!(a.columns.len(), b.columns.len());
         for (ca, cb) in a.columns.iter().zip(b.columns.iter()) {
             assert_eq!(ca.layers.len(), cb.layers.len());
@@ -727,7 +737,7 @@ mod tests {
 
     #[test]
     fn map_column_count() {
-        let m = generate_map(1);
+        let m = generate_map(1, MAP_WIDTH, MAP_HEIGHT);
         assert_eq!(m.columns.len(), MAP_WIDTH * MAP_HEIGHT);
     }
 
@@ -735,7 +745,7 @@ mod tests {
     fn surface_layers_have_non_negative_z_top() {
         // Surface-generated kinds (Plains, Forest, etc.) must always be at Z ≥ 0.
         // Underground kinds (Cavern, Tunnel, …) are legitimately negative.
-        let m = generate_map(7);
+        let m = generate_map(7, MAP_WIDTH, MAP_HEIGHT);
         for col in &m.columns {
             for layer in &col.layers {
                 if layer.is_surface_kind() {
@@ -763,7 +773,7 @@ mod tests {
     fn all_surface_kinds_present() {
         let mut seen = std::collections::HashSet::new();
         for seed in 0u64..5 {
-            let m = generate_map(seed);
+            let m = generate_map(seed, MAP_WIDTH, MAP_HEIGHT);
             for col in &m.columns {
                 for layer in &col.layers {
                     seen.insert(layer.kind);
@@ -786,7 +796,7 @@ mod tests {
 
     #[test]
     fn rivers_are_generated() {
-        let m = generate_map(42);
+        let m = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
         let river_count = m.columns.iter()
             .flat_map(|c| c.layers.iter())
             .filter(|l| l.kind == TileKind::River)
@@ -799,7 +809,7 @@ mod tests {
 
     #[test]
     fn rivers_are_not_walkable() {
-        let m = generate_map(1);
+        let m = generate_map(1, MAP_WIDTH, MAP_HEIGHT);
         for col in &m.columns {
             for layer in &col.layers {
                 if layer.kind == TileKind::River {
@@ -832,7 +842,7 @@ mod tests {
 
     #[test]
     fn underground_layers_generated() {
-        let m = generate_map(0);
+        let m = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
 
         let (mut cavern_count, mut grotto_count) = (0usize, 0usize);
         for col in &m.columns {
@@ -855,7 +865,7 @@ mod tests {
 
     #[test]
     fn underground_layers_have_negative_z_top() {
-        let m = generate_map(5);
+        let m = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
         let mut found_cavern = false;
         let mut found_grotto = false;
         for col in &m.columns {
@@ -880,7 +890,7 @@ mod tests {
 
     #[test]
     fn columns_sorted_ascending_by_z_base() {
-        let m = generate_map(3);
+        let m = generate_map(3, MAP_WIDTH, MAP_HEIGHT);
         for (i, col) in m.columns.iter().enumerate() {
             for pair in col.layers.windows(2) {
                 assert!(
@@ -894,7 +904,7 @@ mod tests {
 
     #[test]
     fn surface_and_underground_can_coexist_in_column() {
-        let m = generate_map(0);
+        let m = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
         let has_both = m.columns.iter().any(|col| {
             col.layers.iter().any(|l| l.is_surface_kind())
                 && col.layers.iter().any(|l| l.is_underground_kind())
@@ -904,7 +914,7 @@ mod tests {
 
     #[test]
     fn shafts_are_generated() {
-        let m = generate_map(0);
+        let m = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
         let shaft_count = m.columns.iter()
             .flat_map(|c| c.layers.iter())
             .filter(|l| l.kind == TileKind::Tunnel)
@@ -919,7 +929,7 @@ mod tests {
     fn shaft_z_top_equals_surface_z() {
         // Every Tunnel layer's z_top should equal a walkable surface layer's z_top
         // in the same column, and z_base should equal an underground layer's z_top.
-        let m = generate_map(2);
+        let m = generate_map(2, MAP_WIDTH, MAP_HEIGHT);
         for col in &m.columns {
             for shaft in col.layers.iter().filter(|l| l.kind == TileKind::Tunnel) {
                 let surface_match = col.layers.iter()
@@ -939,7 +949,7 @@ mod tests {
     #[test]
     fn shaft_column_remains_sorted() {
         // Shaft pass must not break z_base sort order.
-        let m = generate_map(7);
+        let m = generate_map(7, MAP_WIDTH, MAP_HEIGHT);
         for (i, col) in m.columns.iter().enumerate() {
             for pair in col.layers.windows(2) {
                 assert!(
@@ -961,7 +971,7 @@ mod tests {
             walkable: true,
             corner_offsets: [0.0; 4],
         };
-        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], seed: 0, road_tiles: vec![] };
+        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], width: MAP_WIDTH, height: MAP_HEIGHT, seed: 0, road_tiles: vec![] };
         map.columns[0] = TileColumn { layers: vec![make_layer(1.0)] };
         map.columns[1] = TileColumn { layers: vec![make_layer(3.0)] };
 
@@ -998,7 +1008,7 @@ mod tests {
 
     #[test]
     fn surface_height_at_returns_none_over_water() {
-        let map = generate_map(0);
+        let map = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
         // Find a water tile and confirm surface_height_at returns None.
         // Convert tile indices to world-space (map centered on (0,0)).
         let water_pos = map.columns.iter().enumerate().find_map(|(i, col)| {
@@ -1024,7 +1034,7 @@ mod tests {
 
     #[test]
     fn is_walkable_at_false_over_water() {
-        let map = generate_map(0);
+        let map = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
         // Convert tile indices to world-space (map centered on (0,0)).
         let water_pos = map.columns.iter().enumerate().find_map(|(i, col)| {
             if col.layers.first().map(|l| l.kind == TileKind::Water).unwrap_or(false) {
@@ -1046,7 +1056,7 @@ mod tests {
 
     #[test]
     fn is_walkable_at_false_out_of_bounds() {
-        let map = generate_map(0);
+        let map = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
         // Map spans [-MAP_HALF_WIDTH, MAP_HALF_WIDTH) in world-space.
         assert!(!is_walkable_at(&map, -(MAP_HALF_WIDTH as f32) - 1.0, 0.0, 0.0));
         assert!(!is_walkable_at(&map,   MAP_HALF_WIDTH as f32  + 1.0, 0.0, 0.0));
@@ -1054,7 +1064,7 @@ mod tests {
 
     #[test]
     fn find_surface_spawn_is_walkable_at_spawn_z() {
-        let map = generate_map(42);
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
         let (x, y, z) = find_surface_spawn(&map);
         // The returned z must be walkable from itself.
         assert!(
@@ -1067,5 +1077,14 @@ mod tests {
             (z - expected_z).abs() < 1e-3,
             "spawn z {z:.4} should match surface z {expected_z:.4}"
         );
+    }
+
+    #[test]
+    fn custom_dimensions_stored_correctly() {
+        let map = generate_map(42, 64, 32);
+        assert_eq!(map.width, 64);
+        assert_eq!(map.height, 32);
+        assert_eq!(map.columns.len(), 64 * 32);
+        assert_eq!(map.road_tiles.len(), 64 * 32);
     }
 }

@@ -4,9 +4,9 @@
 //! to stdout, followed by settlement and civilization statistics.
 //!
 //! Usage:
-//!   cargo run -p world_gen -- [--seed <N>] [--size <WxH>]
+//!   cargo run -p world_gen -- [--seed <N>] [--map-width <W>] [--map-height <H>] [--width <disp_w>] [--height <disp_h>]
 //!
-//! Defaults: seed=42, display size=80x40
+//! Defaults: seed=42, map 1024×1024, display size=80x40
 
 use fellytip_shared::world::{
     civilization::{generate_settlements, generate_roads, SettlementKind},
@@ -16,14 +16,16 @@ use fellytip_shared::world::{
 fn main() {
     // ── Parse args ────────────────────────────────────────────────────────────
     let args: Vec<String> = std::env::args().collect();
-    let seed      = parse_flag(&args, "--seed",  42u64);
-    let disp_w    = parse_flag(&args, "--width",  80usize);
-    let disp_h    = parse_flag(&args, "--height", 40usize);
+    let seed       = parse_flag(&args, "--seed",       42u64);
+    let map_width  = parse_flag(&args, "--map-width",  MAP_WIDTH);
+    let map_height = parse_flag(&args, "--map-height", MAP_HEIGHT);
+    let disp_w     = parse_flag(&args, "--width",      80usize);
+    let disp_h     = parse_flag(&args, "--height",     40usize);
 
-    eprintln!("Generating map (seed={seed}, display={disp_w}×{disp_h})…");
+    eprintln!("Generating map (seed={seed}, map={map_width}×{map_height}, display={disp_w}×{disp_h})…");
 
     // ── Generate world ────────────────────────────────────────────────────────
-    let mut map = generate_map(seed);
+    let mut map = generate_map(seed, map_width, map_height);
     let settlements = generate_settlements(&map, seed);
     generate_roads(&mut map, &settlements);
 
@@ -34,16 +36,16 @@ fn main() {
             *counts.entry(layer.kind).or_insert(0) += 1;
         }
     }
-    let total_tiles = MAP_WIDTH * MAP_HEIGHT;
+    let total_tiles = map_width * map_height;
 
     // ── Collect road/settlement markers for overlay ────────────────────────────
-    // One character per display cell (downsampled from MAP_WIDTH × MAP_HEIGHT).
-    let cell_w = MAP_WIDTH  / disp_w;
-    let cell_h = MAP_HEIGHT / disp_h;
+    // One character per display cell (downsampled from map_width × map_height).
+    let cell_w = map_width  / disp_w;
+    let cell_h = map_height / disp_h;
 
     // ── Render ASCII grid ─────────────────────────────────────────────────────
     println!();
-    println!("  World Map — seed {seed}  ({MAP_WIDTH}×{MAP_HEIGHT} tiles, displayed {disp_w}×{disp_h})");
+    println!("  World Map — seed {seed}  ({map_width}×{map_height} tiles, displayed {disp_w}×{disp_h})");
     println!();
 
     for dy in 0..disp_h {
@@ -64,8 +66,8 @@ fn main() {
                 (0..cell_h).any(|ddy| {
                     let ix = base_ix + ddx;
                     let iy = base_iy + ddy;
-                    if ix < MAP_WIDTH && iy < MAP_HEIGHT {
-                        map.road_tiles[ix + iy * MAP_WIDTH]
+                    if ix < map_width && iy < map_height {
+                        map.road_tiles[ix + iy * map_width]
                     } else {
                         false
                     }
@@ -131,7 +133,7 @@ fn dominant_kind(
         for ddx in 0..cell_w {
             let ix = base_ix + ddx;
             let iy = base_iy + ddy;
-            if ix >= MAP_WIDTH || iy >= MAP_HEIGHT { continue; }
+            if ix >= map.width || iy >= map.height { continue; }
             let col = map.column(ix, iy);
             // Surface layer only (topmost).
             if let Some(layer) = col.layers.iter().rfind(|l| l.is_surface_kind()) {

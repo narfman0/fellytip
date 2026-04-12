@@ -4,12 +4,14 @@ use bevy::prelude::*;
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
 use fellytip_shared::{
-    NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
+    WORLD_SEED, NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Experience, Health, WorldPosition},
     protocol::FellytipProtocolPlugin,
-    world::map::{find_surface_spawn, WorldMap},
+    world::map::{find_surface_spawn, WorldMap, MAP_WIDTH, MAP_HEIGHT},
 };
+
+use plugins::map_gen::MapGenConfig;
 use lightyear::prelude::{server::*, *};
 use std::net::SocketAddr;
 use uuid::Uuid;
@@ -22,7 +24,13 @@ const BRP_PORT: u16 = 15702;
 
 fn main() {
     tracing_subscriber::fmt::init();
-    let combat_test = std::env::args().any(|a| a == "--combat-test");
+    let args: Vec<String> = std::env::args().collect();
+    let combat_test = args.iter().any(|a| a == "--combat-test");
+
+    // Parse map gen CLI args (only meaningful outside combat-test mode).
+    let map_seed   = parse_arg(&args, "--seed",       WORLD_SEED);
+    let map_width  = parse_arg(&args, "--map-width",  MAP_WIDTH);
+    let map_height = parse_arg(&args, "--map-height", MAP_HEIGHT);
 
     // Plugins shared by all run modes.
     let mut app = App::new();
@@ -45,7 +53,9 @@ fn main() {
         app.add_plugins(plugins::combat_test::CombatTestPlugin);
     } else {
         // Full game world with map gen, ecology, factions, and live networking.
-        app.add_plugins(plugins::map_gen::MapGenPlugin)
+        // Insert MapGenConfig before MapGenPlugin so it can read it.
+        app.insert_resource(MapGenConfig { seed: map_seed, width: map_width, height: map_height })
+            .add_plugins(plugins::map_gen::MapGenPlugin)
             .add_plugins(plugins::ecology::EcologyPlugin)
             .add_plugins(plugins::ai::AiPlugin)
             .add_plugins(plugins::party::PartyPlugin)
@@ -63,6 +73,14 @@ fn main() {
     }
 
     app.run();
+}
+
+/// Parse `--flag value` from the arg list, returning `default` if not found.
+fn parse_arg<T: std::str::FromStr>(args: &[String], flag: &str, default: T) -> T {
+    args.windows(2)
+        .find(|w| w[0] == flag)
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(default)
 }
 
 fn spawn_server(mut commands: Commands) {

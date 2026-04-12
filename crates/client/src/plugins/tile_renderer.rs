@@ -6,9 +6,9 @@
 //! ```text
 //! world (x, y, z_elevation) → bevy Vec3(x, z_elevation, y)
 //! ```
-//! A tile at grid cell `(ix, iy)` with surface height `z_top` occupies
-//! Bevy positions `ix..ix+1` on X, `iy..iy+1` on Z, and has its top face
-//! at Bevy Y = `z_top`.
+//! A tile at grid index `(ix, iy)` is placed in world-space Bevy coords:
+//! `(ix − MAP_HALF_WIDTH + 0.5)` on X, `(iy − MAP_HALF_HEIGHT + 0.5)` on Z,
+//! with its top face at Bevy Y = `z_top`.  World origin (0, 0) = map centre.
 //!
 //! # Instancing
 //! All tiles share one `Mesh` handle.  Tiles of the same biome share one
@@ -78,9 +78,11 @@ fn setup_tile_assets(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     // Generate the world map deterministically — same as the server.
+    // Uses MAP_WIDTH/MAP_HEIGHT defaults; a future WorldMeta resource will
+    // propagate custom dimensions from the server (tech debt — deferred).
     // ~150 ms on first run; acceptable at startup.
     tracing::info!(seed = WORLD_SEED, "Client regenerating world map for rendering…");
-    let map = generate_map(WORLD_SEED);
+    let map = generate_map(WORLD_SEED, MAP_WIDTH, MAP_HEIGHT);
     tracing::info!("World map ready");
 
     // One shared flat cuboid: 1 world-unit wide, 0.2 tall, 1 deep.
@@ -109,11 +111,12 @@ fn update_tile_grid(
     // Derive render centre from camera orbit target.
     // Bevy X → world X, Bevy Z → world Y.
     let target = camera_q.single().map(|o| o.target).unwrap_or_else(|_| {
-        Vec3::new(MAP_WIDTH as f32 * 0.5, 3.0, MAP_HEIGHT as f32 * 0.5)
+        Vec3::new(map.width as f32 * 0.5, 3.0, map.height as f32 * 0.5)
     });
 
-    let cx = target.x as i32;
-    let cy = target.z as i32; // Bevy Z corresponds to world Y
+    // target is in world-space (centered at origin); convert to tile indices.
+    let cx = (target.x + (map.width / 2) as f32) as i32;
+    let cy = (target.z + (map.height / 2) as f32) as i32; // Bevy Z corresponds to world Y
 
     let new_center = IVec2::new(cx, cy);
     if new_center == grid.last_center {
@@ -143,7 +146,7 @@ fn update_tile_grid(
             let iy = cy + dy;
 
             // Bounds check.
-            if ix < 0 || iy < 0 || ix >= MAP_WIDTH as i32 || iy >= MAP_HEIGHT as i32 {
+            if ix < 0 || iy < 0 || ix >= map.width as i32 || iy >= map.height as i32 {
                 continue;
             }
 
@@ -174,10 +177,11 @@ fn update_tile_grid(
             };
 
             // Position: top face at Bevy Y = z_top → centre at Y = z_top − 0.1.
-            // Tile occupies ix..ix+1 on Bevy X, iy..iy+1 on Bevy Z.
-            let bx = ix as f32 + 0.5;
+            // Convert tile index back to world-space (centered at origin) so
+            // tiles align with player entities and the orbit camera target.
+            let bx = ix as f32 + 0.5 - (map.width / 2) as f32;
             let by = layer.z_top - 0.1;
-            let bz = iy as f32 + 0.5;
+            let bz = iy as f32 + 0.5 - (map.height / 2) as f32;
 
             let entity = commands
                 .spawn((
