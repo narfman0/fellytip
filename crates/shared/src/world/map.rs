@@ -254,6 +254,16 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
     Some(crate::math::bilerp(corners, fx, fy))
 }
 
+/// Returns `true` if `(x, y)` has a walkable surface (or underground) layer
+/// reachable from `current_z` within one step. Returns `false` over Water,
+/// River, Mountain, void columns, and out-of-bounds positions.
+///
+/// Used by the movement system to prevent entities from walking into impassable
+/// terrain. See `docs/systems/world-map.md` for the wall-slide behaviour.
+pub fn is_walkable_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> bool {
+    smooth_surface_at(map, x, y, current_z).is_some()
+}
+
 // ── Biome classification ──────────────────────────────────────────────────────
 
 /// Classify a surface tile using the Whittaker diagram.
@@ -953,5 +963,30 @@ mod tests {
             );
         }
         // If the seed has no water tiles, the test passes vacuously.
+    }
+
+    #[test]
+    fn is_walkable_at_false_over_water() {
+        let map = generate_map(0);
+        let water_pos = map.columns.iter().enumerate().find_map(|(i, col)| {
+            if col.layers.first().map(|l| l.kind == TileKind::Water).unwrap_or(false) {
+                let ix = i % MAP_WIDTH;
+                let iy = i / MAP_WIDTH;
+                Some((ix as f32 + 0.5, iy as f32 + 0.5))
+            } else {
+                None
+            }
+        });
+        if let Some((wx, wy)) = water_pos {
+            assert!(!is_walkable_at(&map, wx, wy, 0.0), "Water should not be walkable");
+            assert!(!is_walkable_at(&map, wx, wy, 100.0), "Water should not be walkable from above");
+        }
+    }
+
+    #[test]
+    fn is_walkable_at_false_out_of_bounds() {
+        let map = generate_map(0);
+        assert!(!is_walkable_at(&map, -1.0, 0.0, 0.0));
+        assert!(!is_walkable_at(&map, MAP_WIDTH as f32 + 1.0, 0.0, 0.0));
     }
 }

@@ -32,6 +32,18 @@ All variants are listed in the `TileKind` enum in `crates/shared/src/world/map.r
 
 `surface_layer(current_z, step_height)` selects the highest walkable layer whose `z_top ≤ current_z + step_height`. This prevents an entity at ground level from snapping up to a bridge overhead, and an entity in the Underdark from snapping back to the surface.
 
+## Movement walkability
+
+Before applying a horizontal delta, the server calls `is_walkable_at(map, new_x, new_y, current_z)` which delegates to `smooth_surface_at` — returning `false` whenever the destination has no walkable layer reachable within one step height. Non-walkable tile kinds: `Water`, `River`, `Mountain`, and `Void`.
+
+To prevent the player from sticking to walls, the movement system uses a **wall-slide** fallback:
+1. Try the full diagonal move `(new_x, new_y)`.
+2. If blocked, try the X-axis move alone `(new_x, old_y)`.
+3. If still blocked, try the Y-axis move alone `(old_x, new_y)`.
+4. If all three fail, the entity is fully blocked and stays in place.
+
+Height-following via `smooth_surface_at` only runs when the position actually changed, avoiding redundant queries on a blocked frame.
+
 ## Generation pipeline
 
 All generation is deterministic: same seed always produces the same map. The pipeline runs once on server startup in `MapGenPlugin`. Exact parameters (frequencies, fill rates, thresholds) live in `generate_map` in `map.rs`.
