@@ -8,6 +8,7 @@ use fellytip_shared::{
     components::{Experience, WorldPosition},
     inputs::{ActionIntent, PlayerInput},
     protocol::{FellytipProtocolPlugin, PlayerInputChannel},
+    world::map::{is_walkable_at, smooth_surface_at, WorldMap, FALL_SPEED, STEP_HEIGHT, Z_FOLLOW_RATE},
 };
 use lightyear::prelude::{client::*, *};
 use plugins::camera::OrbitCamera;
@@ -270,21 +271,24 @@ fn headless_auto_attack(
     let Some(ref mut s) = sender else { return };
     s.send::<PlayerInputChannel>(PlayerInput {
         move_dir: [0.0, 0.0],
+        pos: [0.0, 0.0, 0.0],
         action: Some(ActionIntent::BasicAttack),
         target: None,
     });
     tracing::debug!("Headless: auto BasicAttack sent");
 }
 
-/// Read keyboard/gamepad input, apply client-side prediction immediately, and
-/// send a `PlayerInput` message to the server every frame.
+/// Read keyboard/gamepad input, apply client-authoritative movement prediction
+/// immediately, and send a `PlayerInput` message (with computed position) to
+/// the server every frame.
 ///
 /// Movement direction is rotated by the camera yaw so W always moves "into the
-/// screen" from the player's point of view regardless of camera orbit angle.
+/// screen" regardless of camera orbit angle.
 ///
-/// The direction is sent **every frame** including the zero-vector when no keys
-/// are held so the server always receives an explicit stop signal even under
-/// packet loss.
+/// The client uses its local `WorldMap` (same deterministic generation as the
+/// server) to enforce terrain walkability and Z elevation following locally,
+/// so prediction is fully accurate.  The computed `pos` is sent to the server,
+/// which accepts it as the authoritative position.
 ///
 /// Uses `Option<Res<...>>` so headless mode (no window, no input plugin) skips
 /// gracefully.
@@ -293,6 +297,7 @@ fn send_player_input(
     mut sender: Single<&mut MessageSender<PlayerInput>>,
     camera_q: Query<&OrbitCamera>,
     mut pred_q: Query<&mut PredictedPosition, With<LocalPlayer>>,
+    map: Option<Res<WorldMap>>,
     time: Res<Time>,
 ) {
     let Some(keyboard) = keyboard else { return };
@@ -335,12 +340,34 @@ fn send_player_input(
     let world_dx =  cos_yaw * raw_x - sin_yaw * raw_y;
     let world_dy = -sin_yaw * raw_x - cos_yaw * raw_y;
 
-    // Apply client-side prediction: move the local visual immediately so the
-    // player feels instant response while waiting for server confirmation.
+    // Apply client-authoritative movement prediction with local terrain checks.
+    // The local WorldMap is the same deterministic generation as the server's,
+    // so walkability and Z elevation are accurate without a server round-trip.
     if let Ok(mut pred) = pred_q.single_mut() {
         let dt = time.delta_secs();
-        pred.x += world_dx * PLAYER_SPEED * dt;
-        pred.y += world_dy * PLAYER_SPEED * dt;
+        let new_x = pred.x + world_dx * PLAYER_SPEED * dt;
+        let new_y = pred.y + world_dy * PLAYER_SPEED * dt;
+
+        if let Some(ref m) = map {
+            // Wall-slide: try full diagonal, then axis-aligned fallbacks.
+            let can_xy = is_walkable_at(m, new_x, new_y, pred.z);
+            let can_x  = is_walkable_at(m, new_x, pred.y, pred.z);
+            let can_y  = is_walkable_at(m, pred.x, new_y, pred.z);
+            if      can_xy { pred.x = new_x; pred.y = new_y; }
+            else if can_x  { pred.x = new_x; }
+            else if can_y  { pred.y = new_y; }
+            // else: fully blocked; position unchanged
+
+            // Z elevation following — client handles this now that it has the map.
+            if let Some(target_z) = smooth_surface_at(m, pred.x, pred.y, pred.z) {
+                let delta = (target_z - pred.z) * Z_FOLLOW_RATE * dt;
+                pred.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
+            }
+        } else {
+            // Map not yet loaded — apply movement without terrain checks.
+            pred.x = new_x;
+            pred.y = new_y;
+        }
     }
 
     // Action: Space → BasicAttack, Q → UseAbility(1).  Only on just_pressed.
@@ -352,27 +379,15 @@ fn send_player_input(
         None
     };
 
-    // Always send, including zero-vector, so the server receives an explicit
-    // stop when all keys are released.  Skip only if there is no action and
-    // the direction is zero (avoids spamming the server when standing still).
-    if world_dx != 0.0 || world_dy != 0.0 || action.is_some() {
-        sender.send::<PlayerInputChannel>(PlayerInput {
-            move_dir: [world_dx, world_dy],
-            action,
-            target: None,
-        });
-    } else {
-        // Send the explicit stop once so the server can clear LastPlayerInput.
-        // `sender.send` is fire-and-forget on an unreliable channel, so sending
-        // it every frame when idle is harmless but unnecessary; we send on every
-        // Update frame when movement is non-zero and send this zero-vector when
-        // not moving.
-        sender.send::<PlayerInputChannel>(PlayerInput {
-            move_dir: [0.0, 0.0],
-            action: None,
-            target: None,
-        });
-    }
+    // Always send the current position so the server stays in sync.
+    // pos defaults to [0,0,0] until the local player entity is tagged.
+    let pos = pred_q.single().map(|p| [p.x, p.y, p.z]).unwrap_or([0.0; 3]);
+    sender.send::<PlayerInputChannel>(PlayerInput {
+        move_dir: [world_dx, world_dy],
+        pos,
+        action,
+        target: None,
+    });
 }
 
 // ── Local-player tagging ──────────────────────────────────────────────────────
@@ -400,34 +415,29 @@ fn tag_local_player(
 
 type LocalPlayerChanged = (With<LocalPlayer>, Changed<WorldPosition>);
 
-/// Reconciles `PredictedPosition` toward the authoritative `WorldPosition`
-/// whenever the server pushes a position update for the local player.
+/// Reconciles `PredictedPosition` when the server sends a position correction.
 ///
-/// Strategy: trust the prediction completely during normal movement.
-/// XY is only overwritten when the server disagrees by > 15 units — this only
-/// happens for genuine server-side corrections (teleports, anti-cheat, severe
-/// collision rejection).  Small drift (< 15 units) is left alone; the client
-/// and server stay within ~1 unit of each other under normal latency so this
-/// threshold is never triggered during regular play.
+/// Since the client is now authoritative for X/Y/Z (it predicts movement using
+/// its local terrain map), the server's replicated `WorldPosition` should stay
+/// very close to `PredictedPosition` under normal conditions.
 ///
-/// Z is always taken from the server because the client has no terrain map and
-/// cannot predict elevation changes on its own.
+/// The only case where the server diverges is a `PositionSanityTimer` override
+/// (client position was non-walkable for > 10 s) or a server-side teleport.
+/// In that case the gap will be > 100 units and we snap to the server value.
 fn reconcile_prediction(
     mut query: Query<(&WorldPosition, &mut PredictedPosition), LocalPlayerChanged>,
 ) {
     for (server, mut pred) in &mut query {
-        // Always accept server elevation; client cannot predict terrain height.
-        pred.z = server.z;
-
         let dx = server.x - pred.x;
         let dy = server.y - pred.y;
-        // 15 units ≈ 1.5 seconds of full-speed movement — only reachable via a
-        // true server correction (teleport, wall push-back, anti-cheat).
-        // Never triggered by normal network lag or dt accumulation.
-        if dx * dx + dy * dy > 225.0 {
+        let dz = server.z - pred.z;
+        // 100 units ≈ 10 seconds of full-speed movement.
+        // Only reachable via a genuine server enforcement event.
+        if dx * dx + dy * dy + dz * dz > 10_000.0 {
             pred.x = server.x;
             pred.y = server.y;
+            pred.z = server.z;
         }
-        // else: prediction is close enough — leave it alone.
+        // else: prediction is authoritative — leave it alone.
     }
 }

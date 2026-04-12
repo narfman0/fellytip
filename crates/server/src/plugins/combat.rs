@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use bevy::{ecs::message::MessageWriter, prelude::*};
 use fellytip_shared::{
-    TICK_HZ, PLAYER_SPEED,
+    TICK_HZ,
     combat::{
         hit_die_for_class, hp_on_level_up, xp_to_next_level,
         interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
@@ -23,7 +23,7 @@ use fellytip_shared::{
     inputs::{ActionIntent, PlayerInput},
     world::{
         faction::{kill_standing_delta, standing_tier, PlayerReputationMap},
-        map::{is_walkable_at, smooth_surface_at, WorldMap, FALL_SPEED, STEP_HEIGHT, Z_FOLLOW_RATE},
+        map::{is_walkable_at, WorldMap},
         story::{GameEntityId, StoryEvent, StoryEventKind, WriteStoryEvent},
     },
 };
@@ -60,12 +60,26 @@ pub struct ExperienceReward(pub u32);
 
 /// Stores the most-recently-received movement direction for a player entity.
 ///
-/// Applied every `FixedUpdate` tick so movement continues smoothly even when a
-/// UDP input packet is dropped.  Reset to `[0.0, 0.0]` by the client sending an
-/// explicit zero-vector when all movement keys are released.
+/// No longer used to drive position (the client sends its computed position
+/// directly).  Kept for potential future use (e.g. AI context, aggression
+/// range prediction).
 #[derive(Component, Default)]
 pub struct LastPlayerInput {
     pub move_dir: [f32; 2],
+}
+
+/// Tracks how long the client's sent position has been outside a walkable tile.
+///
+/// Resets on each valid position.  After 10 s continuously in non-walkable
+/// terrain the server snaps the player back to the last known valid position.
+/// This is the only server-side position enforcement in the client-authoritative
+/// movement model.
+#[derive(Component, Default)]
+pub struct PositionSanityTimer {
+    pub excess_secs:  f32,
+    pub last_valid_x: f32,
+    pub last_valid_y: f32,
+    pub last_valid_z: f32,
 }
 
 /// Marker: this entity has a pending attack against `target`.
@@ -145,19 +159,17 @@ fn check_faction_aggression(
 
 // ── Input processing ──────────────────────────────────────────────────────────
 
-/// Read `PlayerInput` messages arriving from clients, update the stored last
-/// direction, apply movement every tick, and queue combat action markers.
+/// Read `PlayerInput` messages arriving from clients, accept the client's
+/// authoritative position, and queue combat action markers.
 ///
-/// Movement is applied from `LastPlayerInput` **every** FixedUpdate tick so the
-/// player glides smoothly even when an individual UDP input packet is dropped.
-/// The client sends the zero-vector when keys are released, guaranteeing clean
-/// stops without needing reliable delivery.
-///
-/// When a [`WorldMap`] resource is present, `pos.z` smoothly follows the
-/// terrain surface after each horizontal move (fluid height traversal).
+/// The client predicts movement locally (with terrain walkability checks using
+/// its local copy of `WorldMap`) and sends its computed `pos` every frame.
+/// The server accepts this position directly.  If the client's position has
+/// been in non-walkable terrain for > 10 seconds, the server snaps it back to
+/// the last valid position via [`PositionSanityTimer`].
 fn process_player_input(
     mut clients: Query<(&mut MessageReceiver<PlayerInput>, &PlayerEntity), With<ClientOf>>,
-    mut player_state: Query<(&mut WorldPosition, &mut LastPlayerInput)>,
+    mut player_state: Query<(&mut WorldPosition, &mut LastPlayerInput, &mut PositionSanityTimer)>,
     enemies: Query<(Entity, &CombatParticipant), With<ExperienceReward>>,
     map: Option<Res<WorldMap>>,
     mut commands: Commands,
@@ -166,57 +178,59 @@ fn process_player_input(
 
     for (mut receiver, player_entity) in clients.iter_mut() {
         // Phase 1: drain all received messages this tick.
-        // Keep only the last move_dir (most recent wins); collect all actions.
+        // Keep only the last pos/move_dir (most recent wins); collect all actions.
         let mut pending_actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)> = Vec::new();
-        let mut got_new_dir = false;
+        let mut got_new_input = false;
         let mut new_dir = [0.0_f32; 2];
+        let mut new_pos = [0.0_f32; 3];
 
         for input in receiver.receive() {
             new_dir = input.move_dir;
-            got_new_dir = true;
+            new_pos = input.pos;
+            got_new_input = true;
             pending_actions.push((input.action, input.target));
         }
 
         // Phase 2: update LastPlayerInput if we received any message this tick.
-        if got_new_dir {
-            if let Ok((_, mut last)) = player_state.get_mut(player_entity.0) {
+        if got_new_input {
+            if let Ok((_, mut last, _)) = player_state.get_mut(player_entity.0) {
                 last.move_dir = new_dir;
             }
         }
 
-        // Phase 3: apply LastPlayerInput movement every tick (not just on receive).
-        if let Ok((mut pos, last)) = player_state.get_mut(player_entity.0) {
-            let [dx, dy] = last.move_dir;
-            if dx != 0.0 || dy != 0.0 {
-                let old_x = pos.x;
-                let old_y = pos.y;
-                let new_x = pos.x + dx * PLAYER_SPEED * dt;
-                let new_y = pos.y + dy * PLAYER_SPEED * dt;
+        // Phase 3: accept client-authoritative position.
+        //
+        // If input was received this tick, apply the client's sent position
+        // directly.  If no message arrived (packet drop), the position is left
+        // unchanged — the client will send again next frame.
+        //
+        // The sanity check enforces a server correction only when the client
+        // position has been continuously off-terrain for > 10 seconds.
+        if let Ok((mut pos, _, mut sanity)) = player_state.get_mut(player_entity.0) {
+            if got_new_input {
+                pos.x = new_pos[0];
+                pos.y = new_pos[1];
+                pos.z = new_pos[2];
+            }
 
-                if let Some(ref m) = map {
-                    // Attempt full diagonal move first; fall back to axis-aligned slides
-                    // so the player slides along walls rather than stopping dead.
-                    let can_xy = is_walkable_at(m, new_x, new_y, pos.z);
-                    let can_x  = is_walkable_at(m, new_x, pos.y, pos.z);
-                    let can_y  = is_walkable_at(m, pos.x, new_y, pos.z);
-                    if can_xy      { pos.x = new_x; pos.y = new_y; }
-                    else if can_x  { pos.x = new_x; }
-                    else if can_y  { pos.y = new_y; }
-                    // else: fully blocked; position unchanged
-
-                    // Height follow only when the position actually changed.
-                    if pos.x != old_x || pos.y != old_y {
-                        if let Some(target_z) = smooth_surface_at(m, pos.x, pos.y, pos.z) {
-                            let delta = (target_z - pos.z) * Z_FOLLOW_RATE * dt;
-                            // Ascent: limited to one step per tick (prevents tunnelling).
-                            // Descent: FALL_SPEED cap so shafts take ~1-2 s to traverse.
-                            pos.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
-                        }
-                    }
+            if let Some(ref m) = map {
+                if is_walkable_at(m, pos.x, pos.y, pos.z) {
+                    sanity.excess_secs  = 0.0;
+                    sanity.last_valid_x = pos.x;
+                    sanity.last_valid_y = pos.y;
+                    sanity.last_valid_z = pos.z;
                 } else {
-                    // Map not yet loaded — apply movement unrestricted.
-                    pos.x = new_x;
-                    pos.y = new_y;
+                    sanity.excess_secs += dt;
+                    if sanity.excess_secs > 10.0 {
+                        pos.x = sanity.last_valid_x;
+                        pos.y = sanity.last_valid_y;
+                        pos.z = sanity.last_valid_z;
+                        sanity.excess_secs = 0.0;
+                        tracing::debug!(
+                            entity = ?player_entity.0,
+                            "Position sanity override: snapped back to last valid position"
+                        );
+                    }
                 }
             }
         }

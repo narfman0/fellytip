@@ -6,7 +6,7 @@ use core::time::Duration;
 use fellytip_shared::{
     WORLD_SEED, NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
-    components::{Experience, Health, WorldPosition},
+    components::{Experience, Health, WorldMeta, WorldPosition},
     protocol::FellytipProtocolPlugin,
     world::{
         map::{find_surface_spawn, WorldMap, MAP_WIDTH, MAP_HEIGHT},
@@ -20,7 +20,7 @@ use lightyear::prelude::{server::*, *};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use plugins::combat::{CombatParticipant, LastPlayerInput, PlayerEntity};
+use plugins::combat::{CombatParticipant, LastPlayerInput, PlayerEntity, PositionSanityTimer};
 use plugins::persistence::Db;
 
 /// BRP HTTP port for the server (used by ralph scenarios and tooling).
@@ -213,6 +213,7 @@ fn on_client_connected(
     trigger: On<Add, Connected>,
     query: Query<(), With<ClientOf>>,
     map: Option<Res<WorldMap>>,
+    map_config: Option<Res<MapGenConfig>>,
     mut count: ResMut<ConnectedCount>,
     mut commands: Commands,
 ) {
@@ -226,6 +227,19 @@ fn on_client_connected(
         .as_deref()
         .map(find_surface_spawn)
         .unwrap_or((0.0, 0.0, 0.0));
+
+    // WorldMeta tells the client which seed/dimensions were used so it can
+    // regenerate an identical local WorldMap for client-authoritative movement.
+    let world_meta = map_config.as_deref().map(|cfg| WorldMeta {
+        seed:   cfg.seed,
+        width:  cfg.width  as u32,
+        height: cfg.height as u32,
+    }).unwrap_or(WorldMeta {
+        seed:   WORLD_SEED,
+        width:  MAP_WIDTH  as u32,
+        height: MAP_HEIGHT as u32,
+    });
+
     let player_uuid = Uuid::new_v4();
     let player = commands
         .spawn((
@@ -247,6 +261,13 @@ fn on_client_connected(
             GameEntityId(player_uuid),
             Experience::new(),
             LastPlayerInput::default(),
+            PositionSanityTimer {
+                last_valid_x: spawn_x,
+                last_valid_y: spawn_y,
+                last_valid_z: spawn_z,
+                ..default()
+            },
+            world_meta,
             Replicate::to_clients(NetworkTarget::All),
         ))
         .id();

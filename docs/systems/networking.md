@@ -24,14 +24,15 @@ These components in `crates/shared/src/components.rs` are registered in `Fellyti
 
 | Component | Sync mode | Notes |
 |---|---|---|
-| `WorldPosition { x, y, z }` | Full prediction + linear interpolation | Predicted on client; authoritative on server |
+| `WorldPosition { x, y, z }` | Client-authoritative; server echoes back | Client predicts with local terrain; server only overrides after 10 s walkability violation |
 | `Health { current, max }` | Simple interpolation | Client renders health bars |
 | `Experience { xp, level, xp_to_next }` | Simple interpolation | Client renders level/XP |
 | `EntityKind` | Simple | Enum: FactionNpc / Wildlife / Settlement — drives visual differentiation on client |
+| `WorldMeta { seed, width, height }` | Server → client (once on connect) | Client regenerates local `WorldMap` so terrain walkability matches the server exactly |
 
-All four are serializable (`serde`) and reflectable (`bevy::reflect`).
+All five are serializable (`serde`) and reflectable (`bevy::reflect`).
 
-Players do **not** carry `EntityKind`. Its absence on a replicated entity indicates a player.
+Players carry `WorldMeta` but not `EntityKind`. Absence of `EntityKind` on a replicated entity indicates a player.
 
 ## Messages
 
@@ -40,21 +41,25 @@ Players do **not** carry `EntityKind`. Its absence on a replicated entity indica
 | `PlayerInput` | Client → Server | Unordered unreliable UDP |
 | `GreetMsg` | Server → Client | Ordered reliable |
 
-`PlayerInput` carries `move_dir: [f32; 2]`, an optional `ActionIntent`, and an optional target UUID.
+`PlayerInput` carries `move_dir: [f32; 2]`, `pos: [f32; 3]` (client-computed position), an optional `ActionIntent`, and an optional target UUID.
 
-## Client-side input
+## Client-side input and movement
 
-`send_player_input` runs in `FixedUpdate` on the client. It reads keyboard state (WASD / arrows for movement, Space for BasicAttack), normalises the direction vector, and sends a `PlayerInput` only when there is actual input. The `MessageSender<PlayerInput>` component is automatically added to the `Client` entity by Lightyear's registration.
+`send_player_input` runs in `Update` on the client. It reads WASD/arrow keys, normalises the direction, rotates by camera yaw, and applies movement to `PredictedPosition` using the local `WorldMap` (same deterministic generation as the server). Terrain walkability (`is_walkable_at`) and Z elevation (`smooth_surface_at`) are computed locally — no server round-trip needed.
+
+The computed `pos: [f32; 3]` is included in every `PlayerInput` message sent to the server.
+
+`PredictedPosition` drives the local player's Bevy `Transform` for zero-latency visual feedback. Remote entities use the replicated `WorldPosition`.
 
 ## Server-side input processing
 
-`process_player_input` reads `MessageReceiver<PlayerInput>` on each `ClientOf` entity, applies movement to the linked player entity's `WorldPosition`, and queues attacks. The `PlayerEntity(Entity)` component on the `ClientOf` entity provides the link.
-
-Replication is pushed to all clients at the interval configured in `SendUpdatesMode` (see `crates/server/src/plugins/combat.rs`).
+`process_player_input` reads `MessageReceiver<PlayerInput>` on each `ClientOf` entity. It accepts the client's sent `pos` directly as the new `WorldPosition` (client is authoritative for XY and Z). A `PositionSanityTimer` component tracks how long the position has been in non-walkable terrain; after 10 continuous seconds it snaps the player back to the last valid position.
 
 ## Connection lifecycle
 
-On `Add<Connected>` (netcode handshake complete), the server spawns a player entity with `WorldPosition`, `Health`, `CombatParticipant`, `Experience`, and `Replicate::to_clients(NetworkTarget::All)`, then attaches `PlayerEntity(player)` to the `ClientOf` entity.
+On `Add<Connected>` (netcode handshake complete), the server spawns a player entity with `WorldPosition`, `Health`, `CombatParticipant`, `Experience`, `WorldMeta`, `PositionSanityTimer`, and `Replicate::to_clients(NetworkTarget::All)`, then attaches `PlayerEntity(player)` to the `ClientOf` entity.
+
+The client's `TerrainPlugin` watches for `WorldMeta` arriving on the replicated player entity. If the seed or dimensions differ from the default, it regenerates `WorldMap` and marks all terrain chunks dirty for re-render.
 
 On `Add<LinkOf>`, a `ReplicationSender` is added to the link entity so the server can push updates to that specific client.
 

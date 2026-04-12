@@ -74,3 +74,19 @@ pub enum EntityKind {
     /// Static settlement marker (capital, town, underground city).
     Settlement,
 }
+
+/// World generation parameters — attached to the local player entity and
+/// replicated to the client so the client can regenerate an identical
+/// `WorldMap` for client-authoritative movement prediction.
+///
+/// Using `u32` (not `usize`) for stable cross-platform serialization.
+#[derive(
+    Component, Clone, PartialEq, Debug,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub struct WorldMeta {
+    pub seed:   u64,
+    pub width:  u32,
+    pub height: u32,
+}

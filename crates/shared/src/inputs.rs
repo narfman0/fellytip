@@ -17,6 +17,10 @@ pub enum ActionIntent {
 pub struct PlayerInput {
     /// Normalised movement direction; zero = standing still.
     pub move_dir: [f32; 2],
+    /// Client-authoritative position [x, y, z].  The server accepts this
+    /// directly and only enforces its own position after a sustained
+    /// walkability violation (see `PositionSanityTimer`).
+    pub pos: [f32; 3],
     /// Optional action to perform this frame.
     pub action: Option<ActionIntent>,
     /// Optional target entity (stable cross-session UUID).
