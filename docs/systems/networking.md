@@ -51,11 +51,13 @@ Players carry `WorldMeta` but not `EntityKind`. Absence of `EntityKind` on a rep
 
 Each connected client has a two-tier active zone centred on its player entity:
 
-| Zone | Chebyshev chunk radius | Effect |
-|---|---|---|
-| Hot | 0–2 | Replicated + fully simulated |
-| Warm | 3–8 | Replicated, reduced simulation |
-| Frozen | > 8 | Not replicated; simulation skipped |
+| Zone | Chebyshev chunk radius | Replication | Individual NPC sim speed |
+|---|---|---|---|
+| Hot | 0–2 | Yes | 1.0× (full speed) |
+| Warm | 3–8 | Yes | 0.25× (quarter speed) |
+| Frozen | > 8 | No | 0.05× (~20× slower) |
+
+Aggregate systems (birth counters, ecology, faction goals) always run at full speed — only per-NPC systems (aging, movement, battle rounds) are zone-gated.
 
 `update_chunk_temperature` rebuilds zone maps once per `WorldSimSchedule` tick (1 Hz) from current player positions. `update_npc_replication` then re-targets each NPC's `Replicate` component so only clients near the NPC receive its replication traffic.
 

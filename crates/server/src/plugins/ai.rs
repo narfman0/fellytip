@@ -78,6 +78,10 @@ pub struct ActiveBattle {
     pub battle_y: f32,
     pub attacker_casualties: u32,
     pub defender_casualties: u32,
+    /// Fractional round accumulator. Zone speed is added each tick; a round
+    /// fires when the accumulator crosses 1.0. Battles near no player resolve
+    /// at FROZEN_SPEED (0.05) rounds per tick = ~20 ticks per round.
+    pub round_acc: f32,
 }
 
 /// Per-settlement mutable population state — one entry per settlement.
@@ -466,11 +470,19 @@ fn tick_population_system(
     }
 }
 
-/// Increment `GrowthStage` each tick. Children mature at GrowthStage 1.0.
-fn age_npcs_system(mut query: Query<(&mut GrowthStage, &mut Health), With<FactionMember>>) {
-    for (mut growth, mut health) in &mut query {
+/// Increment `GrowthStage` each tick, scaled by the NPC's zone speed.
+///
+/// An NPC in the Hot zone (near a player) matures in 300 ticks (~5 min).
+/// In the Warm zone (0.25×) it takes ~20 min; in Frozen (0.05×) ~100 min.
+/// Aggregate systems (births, faction goals) are unaffected.
+fn age_npcs_system(
+    mut query: Query<(&mut GrowthStage, &mut Health, &WorldPosition), With<FactionMember>>,
+    temp: Res<ChunkTemperature>,
+) {
+    for (mut growth, mut health, pos) in &mut query {
+        let speed = temp.speed_at_world(pos.x, pos.y);
         let prev = growth.0;
-        growth.0 = (growth.0 + 1.0 / 300.0).min(1.0); // 1 tick per 300 world-sim ticks
+        growth.0 = (growth.0 + speed / 300.0).min(1.0);
         // On maturity: upgrade health to adult values.
         if prev < 1.0 && growth.0 >= 1.0 {
             health.max = 20;
@@ -514,20 +526,25 @@ fn check_war_party_formation(
 }
 
 /// Move war-party NPCs toward their target. Spawn `ActiveBattle` when they arrive.
+///
+/// Movement is scaled by zone speed: warriors march at full [`MARCH_SPEED`] near
+/// a player, quarter-speed in the Warm zone, and 5 % speed in Frozen areas.
 fn march_war_parties(
     mut warriors: Query<(&WarPartyMember, &mut WorldPosition)>,
     battles: Query<&ActiveBattle>,
     pop: Res<FactionPopulationState>,
+    temp: Res<ChunkTemperature>,
     mut commands: Commands,
     mut msg_sender: ServerMultiMessageSender,
     server: Single<&Server>,
 ) {
     for (war_member, mut pos) in &mut warriors {
+        let speed = temp.speed_at_world(pos.x, pos.y);
         let dx = war_member.target_x - pos.x;
         let dy = war_member.target_y - pos.y;
         let dist = (dx * dx + dy * dy).sqrt();
         if dist > 0.01 {
-            let step = (MARCH_SPEED / dist).min(1.0);
+            let step = (MARCH_SPEED * speed / dist).min(1.0);
             pos.x += dx * step;
             pos.y += dy * step;
         }
@@ -573,6 +590,7 @@ fn march_war_parties(
                     battle_y: war_member.target_y,
                     attacker_casualties: 0,
                     defender_casualties: 0,
+                    round_acc: 0.0,
                 }).id();
 
                 let msg = BattleStartMsg {
@@ -609,6 +627,10 @@ type BattleNpcQuery<'w, 's> = Query<
 >;
 
 /// Run one combat round per attacker-defender pair for each active battle.
+///
+/// Battle pace is zone-gated: the `round_acc` accumulator on `ActiveBattle`
+/// advances by zone speed each tick and a round only fires when it crosses 1.0.
+/// Near a player (Hot) that is every tick; in Frozen it's roughly every 20 ticks.
 #[allow(clippy::too_many_arguments)]
 fn run_battle_rounds(
     mut battles: Query<(Entity, &mut ActiveBattle)>,
@@ -619,8 +641,18 @@ fn run_battle_rounds(
     mut commands: Commands,
     mut msg_sender: ServerMultiMessageSender,
     server: Single<&Server>,
+    temp: Res<ChunkTemperature>,
 ) {
     for (battle_entity, mut battle) in &mut battles {
+        // Advance the fractional accumulator by this tick's zone speed.
+        // A round only fires once the accumulator reaches a full tick's worth.
+        let speed = temp.speed_at_world(battle.battle_x, battle.battle_y);
+        battle.round_acc += speed;
+        if battle.round_acc < 1.0 {
+            continue;
+        }
+        battle.round_acc -= 1.0;
+
         let bx = battle.battle_x;
         let by = battle.battle_y;
 

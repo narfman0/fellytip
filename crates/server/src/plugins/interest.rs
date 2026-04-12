@@ -37,6 +37,19 @@ const HOT_RADIUS: i32 = 2;
 /// Chebyshev chunk radius for the Warm zone (replicated, stub simulation).
 const WARM_RADIUS: i32 = 8;
 
+// ── Per-zone simulation speed multipliers ──────────────────────────────��──────
+//
+// Applied to individual NPC systems (aging, marching, battle rounds).
+// Aggregate systems (births, ecology, faction goals) are not zone-gated.
+
+/// Full simulation speed: applied when any player has the NPC's chunk in Hot zone.
+pub const HOT_SPEED: f32 = 1.0;
+/// Quarter speed: applied when the nearest player has the chunk in Warm zone only.
+pub const WARM_SPEED: f32 = 0.25;
+/// 5 % speed: applied when no player has the chunk in Hot or Warm zone (Frozen).
+/// An NPC that matures in 300 ticks near a player takes 6000 ticks (~100 min) here.
+pub const FROZEN_SPEED: f32 = 0.05;
+
 // ── Resource ──────────────────────────────────────────────────────────────────
 
 /// Per-client chunk zone maps, rebuilt every [`WorldSimSchedule`] tick.
@@ -55,6 +68,31 @@ impl ChunkTemperature {
     pub fn is_active(&self, chunk: (i32, i32)) -> bool {
         self.hot.values().any(|s| s.contains(&chunk))
             || self.warm.values().any(|s| s.contains(&chunk))
+    }
+
+    /// Simulation speed multiplier [0.05, 1.0] for a chunk.
+    ///
+    /// - Hot (any player within `HOT_RADIUS`)   → [`HOT_SPEED`]   (1.0)
+    /// - Warm (nearest player in `WARM_RADIUS`) → [`WARM_SPEED`]  (0.25)
+    /// - Frozen (no player nearby)              → [`FROZEN_SPEED`] (0.05)
+    ///
+    /// Used by individual-NPC systems (`age_npcs`, `march_war_parties`,
+    /// `run_battle_rounds`) to slow down unobserved simulation without
+    /// affecting aggregate systems (births, ecology, faction goals).
+    pub fn zone_speed(&self, chunk: (i32, i32)) -> f32 {
+        if self.hot.values().any(|s| s.contains(&chunk)) {
+            HOT_SPEED
+        } else if self.warm.values().any(|s| s.contains(&chunk)) {
+            WARM_SPEED
+        } else {
+            FROZEN_SPEED
+        }
+    }
+
+    /// Convenience wrapper: converts world-space (x, y) to a chunk coordinate
+    /// and returns the zone speed for that chunk.
+    pub fn speed_at_world(&self, x: f32, y: f32) -> f32 {
+        self.zone_speed(world_to_chunk(x, y))
     }
 
     /// Returns all peers that have the chunk in Hot or Warm zone.

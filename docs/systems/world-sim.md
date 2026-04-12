@@ -48,6 +48,22 @@ At equilibrium, a well-resourced faction expands; a food-stressed faction raids;
 
 NPC entities wander toward their faction's active goal each world-sim tick. Individual NPC pathfinding runs in `FixedUpdate`.
 
+## Zone-gated simulation speed (`plugins/interest.rs` + `plugins/ai.rs`)
+
+Individual NPC simulation is scaled by the player-proximity zone of the NPC's chunk:
+
+| Zone | Condition | Speed multiplier |
+|---|---|---|
+| Hot | Any player within `HOT_RADIUS` (2) chunks | 1.0 — full speed |
+| Warm | Nearest player within `WARM_RADIUS` (8) chunks | 0.25 — quarter speed |
+| Frozen | No player nearby | 0.05 — 5 % speed (~20× slower) |
+
+Systems affected: `age_npcs_system` (growth), `march_war_parties` (movement), `run_battle_rounds` (combat pace via `ActiveBattle.round_acc` accumulator).
+
+Systems **not** affected: `tick_population_system` (birth counter), `update_faction_goals`, `run_ecology_tick`. These aggregate systems always run at full speed so the world's macro-level history progresses at a constant rate regardless of player presence.
+
+When no players are connected every chunk is Frozen, so individual NPCs age and move at 5 % speed, but births, ecology, and faction decisions continue as normal.
+
 ## Settlement population (`world/population.rs` + `plugins/ai.rs`)
 
 Each settlement has a `SettlementPopulation` entry in the `FactionPopulationState` resource. One `tick_population` call per settlement per world-sim tick drives:
