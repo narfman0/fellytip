@@ -25,7 +25,7 @@
 
 use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
-use fellytip_shared::components::{EntityKind, WorldPosition};
+use fellytip_shared::components::{EntityKind, GrowthStage, WorldPosition};
 use lightyear::prelude::Replicated;
 
 pub struct EntityRendererPlugin;
@@ -38,6 +38,7 @@ impl Plugin for EntityRendererPlugin {
                 (
                     spawn_entity_visuals,
                     sync_remote_transforms,
+                    sync_growth_stage_scale,
                     sync_local_player_transform.in_set(ClientSet::SyncVisuals),
                 ),
             );
@@ -124,15 +125,17 @@ fn pillar_translation(pos: &WorldPosition) -> Vec3 {
 type NewReplicatedPos = (Added<WorldPosition>, With<Replicated>);
 type ChangedRemotePos = (Changed<WorldPosition>, With<Replicated>, Without<LocalPlayer>);
 type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
+type SpawnVisualQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static WorldPosition, Option<&'static EntityKind>, Option<&'static GrowthStage>), NewReplicatedPos>;
 
 /// Fires once per entity the first time `WorldPosition` is added by replication.
 /// Inserts the visual components directly onto the replicated entity.
 fn spawn_entity_visuals(
     mut commands: Commands,
     assets: Res<EntityVisualAssets>,
-    query: Query<(Entity, &WorldPosition, Option<&EntityKind>), NewReplicatedPos>,
+    query: SpawnVisualQuery,
 ) {
-    for (entity, pos, kind) in &query {
+    for (entity, pos, kind, growth) in &query {
         let (mesh, material, translation) = match kind {
             Some(EntityKind::FactionNpc) => (
                 assets.capsule_mesh.clone(),
@@ -156,11 +159,26 @@ fn spawn_entity_visuals(
             ),
         };
 
+        // Apply initial scale from GrowthStage (0.0 = newborn, 1.0 = adult).
+        let scale = growth
+            .map(|g| 0.3 + 0.7 * g.0.clamp(0.0, 1.0))
+            .unwrap_or(1.0);
+
         commands.entity(entity).insert((
-            Transform::from_translation(translation),
+            Transform::from_translation(translation).with_scale(Vec3::splat(scale)),
             Mesh3d(mesh),
             MeshMaterial3d(material),
         ));
+    }
+}
+
+/// Update capsule scale whenever `GrowthStage` changes (fractional growth each tick).
+fn sync_growth_stage_scale(
+    mut query: Query<(&GrowthStage, &mut Transform), Changed<GrowthStage>>,
+) {
+    for (gs, mut transform) in &mut query {
+        let scale = 0.3 + 0.7 * gs.0.clamp(0.0, 1.0);
+        transform.scale = Vec3::splat(scale);
     }
 }
 

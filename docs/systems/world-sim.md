@@ -48,6 +48,26 @@ At equilibrium, a well-resourced faction expands; a food-stressed faction raids;
 
 NPC entities wander toward their faction's active goal each world-sim tick. Individual NPC pathfinding runs in `FixedUpdate`.
 
+## Settlement population (`world/population.rs` + `plugins/ai.rs`)
+
+Each settlement has a `SettlementPopulation` entry in the `FactionPopulationState` resource. One `tick_population` call per settlement per world-sim tick drives:
+
+- **Birth** — an integer tick counter (`birth_ticks`) advances by 1 each tick. When it reaches `BIRTH_PERIOD = 300` (5 minutes), a child NPC is spawned with `GrowthStage(0.0)` and `Health { current: 5, max: 5 }`. The counter resets to 0.
+- **Growth** — `age_npcs_system` increments `GrowthStage` by `1/300` per tick. When `GrowthStage` crosses 1.0, health is upgraded to adult values (`max: 20`).
+- **War party** — when `adult_count >= WAR_PARTY_THRESHOLD (15)` and the cooldown is zero, a `FormWarPartyEvent` is emitted. `check_war_party_formation` picks up to `WAR_PARTY_SIZE (10)` adults and tags them with `WarPartyMember`. A `WAR_PARTY_COOLDOWN (600)` tick pause prevents immediate re-formation.
+
+Targeting is pure: `tick_population` receives a pre-filtered `hostile_targets: &[(Uuid, f32, f32)]` list from the caller, derived from `FactionRegistry` disposition maps.
+
+## War parties and battles (`plugins/ai.rs`)
+
+`march_war_parties` advances each `WarPartyMember` NPC `MARCH_SPEED (2.0)` tiles per world-sim tick toward its target settlement. When the first warrior arrives within `BATTLE_RADIUS (3.0)` tiles and no `ActiveBattle` entity exists for that settlement, an `ActiveBattle` is spawned and `BattleStartMsg` is broadcast to all clients via `CombatEventChannel`.
+
+`run_battle_rounds` fires once per active battle per tick:
+- Combatants within `BATTLE_RADIUS` of the battle site are collected as snapshots.
+- Dice are drawn from `seeded_dice(settlement_id, tick)` — deterministic `ChaCha8Rng` seeded on `settlement_id XOR tick`.
+- `tick_battle_round` wraps `resolve_round()` for each attacker-defender pair. `BattleAttackMsg` is sent per hit.
+- When one side is eliminated, `ActiveBattle` is despawned, `BattleEndMsg` is broadcast, and the losing faction's `military_strength` is reduced.
+
 ## Faction NPC spawning (`plugins/ai.rs`)
 
 On server startup — after `MapGenPlugin` inserts `Settlements` — `spawn_faction_npcs` runs once and creates three guard NPCs per faction at their assigned home settlement. Each faction is mapped to a settlement by index (`faction_idx % settlements.len()`), so factions distribute evenly across available settlements.

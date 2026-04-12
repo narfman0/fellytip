@@ -14,3 +14,4 @@ bevy_egui          = { workspace = true, features = ["render"] }
 anyhow             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid               = { workspace = true }

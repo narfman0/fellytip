@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use fellytip_shared::components::{Experience, Health};
 use lightyear::prelude::Replicated;
+use crate::plugins::battle::BattleLog;
 
 type LocalPlayerQuery<'w, 's> =
     Query<'w, 's, (&'static Health, &'static Experience), (With<Replicated>, With<Experience>)>;
@@ -17,7 +18,7 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
-            .add_systems(EguiPrimaryContextPass, draw_hud);
+            .add_systems(EguiPrimaryContextPass, (draw_hud, draw_battle_log));
     }
 }
 
@@ -51,6 +52,23 @@ fn draw_hud(
                 Err(_) => {
                     ui.label("Connecting…");
                 }
+            }
+        });
+    Ok(())
+}
+
+/// Draw the battle log panel anchored to the top-right corner.
+fn draw_battle_log(
+    mut ctx: EguiContexts,
+    log: Res<BattleLog>,
+) -> Result {
+    egui::Window::new("Battle Log")
+        .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
+        .resizable(false)
+        .show(ctx.ctx_mut()?, |ui| {
+            let entries = log.entries.iter().rev().take(20);
+            for entry in entries {
+                ui.label(entry.as_str());
             }
         });
     Ok(())

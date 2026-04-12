@@ -75,6 +75,17 @@ pub enum EntityKind {
     Settlement,
 }
 
+/// Growth stage for faction NPCs — 0.0 = newborn, 1.0 = full adult.
+///
+/// Replicated so the client can scale capsule meshes proportionally.
+/// Absent on NPCs spawned as adults (treated as 1.0 by the renderer).
+#[derive(
+    Component, Clone, PartialEq, Debug, Default,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub struct GrowthStage(pub f32);
+
 /// World generation parameters — attached to the local player entity and
 /// replicated to the client so the client can regenerate an identical
 /// `WorldMap` for client-authoritative movement prediction.

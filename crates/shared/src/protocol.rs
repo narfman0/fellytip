@@ -2,12 +2,13 @@
 //! Must be added AFTER `ServerPlugins`/`ClientPlugins` but BEFORE any
 //! `Server`/`Client` entity is spawned.
 
-use crate::components::{EntityKind, Experience, Health, WorldMeta, WorldPosition};
+use crate::components::{EntityKind, Experience, GrowthStage, Health, WorldMeta, WorldPosition};
 use crate::inputs::PlayerInput;
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 // ── Channels ─────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,40 @@ pub struct CombatEventChannel;
 #[derive(Serialize, Deserialize, Debug, Clone, Event)]
 pub struct GreetMsg {
     pub message: String,
+}
+
+/// Sent by the server when a faction war party arrives at a rival settlement
+/// and a battle begins.
+#[derive(Serialize, Deserialize, Debug, Clone, Event)]
+pub struct BattleStartMsg {
+    pub settlement_id: Uuid,
+    pub attacker_faction: String,
+    pub defender_faction: String,
+    /// World-space X of the battle site.
+    pub x: f32,
+    /// World-space Y of the battle site.
+    pub y: f32,
+    /// Elevation of the battle site.
+    pub z: f32,
+}
+
+/// Sent by the server when a battle concludes (one side eliminated).
+#[derive(Serialize, Deserialize, Debug, Clone, Event)]
+pub struct BattleEndMsg {
+    pub settlement_id: Uuid,
+    pub winner_faction: String,
+    pub attacker_casualties: u32,
+    pub defender_casualties: u32,
+}
+
+/// Sent by the server for each attack during a battle — drives NPC damage
+/// flash on the client.
+#[derive(Serialize, Deserialize, Debug, Clone, Event)]
+pub struct BattleAttackMsg {
+    /// `CombatantId.0` of the entity that was hit.
+    pub target_combatant_id: Uuid,
+    pub damage: i32,
+    pub is_kill: bool,
 }
 
 // ── Plugin ───────────────────────────────────────────────────────────────────
@@ -62,6 +97,7 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<Experience>();
         app.register_type::<EntityKind>();
         app.register_type::<WorldMeta>();
+        app.register_type::<GrowthStage>();
 
         // Register components with lightyear for network replication.
         app.register_component::<WorldPosition>();
@@ -69,11 +105,18 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_component::<Experience>();
         app.register_component::<EntityKind>();
         app.register_component::<WorldMeta>();
+        app.register_component::<GrowthStage>();
 
         // Messages
         app.register_message::<GreetMsg>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<PlayerInput>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<BattleStartMsg>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<BattleEndMsg>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<BattleAttackMsg>()
+            .add_direction(NetworkDirection::ServerToClient);
     }
 }

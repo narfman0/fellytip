@@ -95,11 +95,23 @@ Three systems run in order every `Update` frame:
 
 A system (`sync_remote_transforms`) updates the Bevy `Transform` every frame from `WorldPosition`, using the same coordinate mapping as the terrain. The local player's transform is driven by `PredictedPosition` instead for zero-latency movement.
 
+`GrowthStage` (replicated `f32` in [0.0, 1.0]) drives capsule scale: `scale = 0.3 + 0.7 × GrowthStage`. Newborn NPCs appear at 30% capsule size and grow to full size over 300 world-sim ticks (~5 minutes). `sync_growth_stage_scale` updates the `Transform` on each change.
+
+## Battle visualizations (`crates/client/src/plugins/battle.rs`)
+
+`BattleVisualsPlugin` (windowed only) subscribes to server battle messages and renders:
+
+- **Battle ring** — a `Torus` mesh at the battle site using translucent red `AlphaMode::Blend` material. Its alpha pulses via `0.25 + 0.25 × sin(phase)` at 2 rad/s. One ring per active battle; despawned when `BattleEndMsg` arrives.
+- **Battle Log** — a rolling 50-entry `BattleLog` resource of human-readable event strings, written by `on_battle_start` and `on_battle_end`.
+
+Messages are received via the lightyear client `MessageReceiver<T>` pattern on the `Client` entity.
+
 ## HUD (`crates/client/src/plugins/hud.rs`)
 
-`HudPlugin` draws a compact stats overlay via `bevy_egui`. Only added in windowed mode.
+`HudPlugin` draws two egui windows via `bevy_egui`. Only added in windowed mode.
 
-- **Bottom-left panel**: HP bar (`Health.current / Health.max`) + XP progress bar (`Experience.xp / xp_to_next`) + level label. Populated from the first replicated entity that has both `Replicated` and `Experience` (the local player). Shows "Connecting…" before the player entity arrives.
+- **Bottom-left panel** (`##stats`): HP bar (`Health.current / Health.max`) + XP progress bar (`Experience.xp / xp_to_next`) + level label. Populated from the first replicated entity that has both `Replicated` and `Experience` (the local player). Shows "Connecting…" before the player entity arrives.
+- **Top-right panel** (`Battle Log`): last 20 entries from `BattleLog`, newest first. Shows active faction battles.
 - Controls: Space → BasicAttack; Q → StrongAttack (ability 1).
 
 ## Upgrade path
