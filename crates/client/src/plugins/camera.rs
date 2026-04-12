@@ -8,14 +8,14 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     prelude::*,
 };
-use crate::{LocalPlayer, PredictedPosition};
+use crate::{ClientSet, LocalPlayer, PredictedPosition};
 
 pub struct OrbitCameraPlugin;
 
 impl Plugin for OrbitCameraPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_camera)
-            .add_systems(Update, update_orbit_camera);
+            .add_systems(Update, update_orbit_camera.in_set(ClientSet::SyncCamera));
     }
 }
 

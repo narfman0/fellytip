@@ -14,6 +14,24 @@ use lightyear::prelude::{client::*, *};
 use plugins::camera::OrbitCamera;
 use std::net::SocketAddr;
 
+/// System-set ordering for client `Update` systems.
+///
+/// Every frame must flow:  Input → SyncVisuals → SyncCamera
+///
+/// Without this guarantee, `send_player_input` can update `PredictedPosition`
+/// *between* `sync_local_player_transform` and `update_orbit_camera`, leaving
+/// the capsule transform and the camera target one frame out of phase and
+/// producing visible jitter.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ClientSet {
+    /// Reads keyboard input and writes `PredictedPosition`.
+    Input,
+    /// Propagates `PredictedPosition` into Bevy `Transform` for rendered meshes.
+    SyncVisuals,
+    /// Updates the orbit-camera target from `PredictedPosition`.
+    SyncCamera,
+}
+
 /// Marker component inserted on the single entity that belongs to this client.
 ///
 /// Used to route client-side prediction: the local player's visual transform
@@ -143,6 +161,7 @@ fn main() {
         )
         .add_plugins(plugins::SceneLightingPlugin)
         .add_plugins(plugins::OrbitCameraPlugin)
+        .add_plugins(plugins::SkyboxPlugin)
         .add_plugins(plugins::TerrainPlugin)
         .add_plugins(plugins::EntityRendererPlugin)
         .add_plugins(plugins::HudPlugin);
@@ -156,6 +175,10 @@ fn main() {
             CONNECT_RETRY_SECS,
             TimerMode::Repeating,
         )))
+        .configure_sets(
+            Update,
+            (ClientSet::Input, ClientSet::SyncVisuals, ClientSet::SyncCamera).chain(),
+        )
         .add_systems(
             Update,
             (
@@ -163,7 +186,7 @@ fn main() {
                 log_replicated_positions,
                 tag_local_player,
                 reconcile_prediction,
-                send_player_input,
+                send_player_input.in_set(ClientSet::Input),
             ),
         )
         .add_observer(on_connected)

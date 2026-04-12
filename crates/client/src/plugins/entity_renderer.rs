@@ -24,7 +24,7 @@
 //! track the authoritative `WorldPosition` from replication.
 
 use bevy::prelude::*;
-use crate::{LocalPlayer, PredictedPosition};
+use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, WorldPosition};
 use lightyear::prelude::Replicated;
 
@@ -35,7 +35,11 @@ impl Plugin for EntityRendererPlugin {
         app.add_systems(Startup, setup_entity_assets)
             .add_systems(
                 Update,
-                (spawn_entity_visuals, sync_remote_transforms, sync_local_player_transform),
+                (
+                    spawn_entity_visuals,
+                    sync_remote_transforms,
+                    sync_local_player_transform.in_set(ClientSet::SyncVisuals),
+                ),
             );
     }
 }
