@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::world::map::{TileKind, WorldMap, UNDERDARK_Z};
+use crate::world::map::{TileKind, WorldMap};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -24,7 +24,6 @@ use crate::world::map::{TileKind, WorldMap, UNDERDARK_Z};
 pub enum SettlementKind {
     Capital,
     Town,
-    UndergroundCity,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,7 +55,7 @@ pub type TerritoryMap = Vec<Option<usize>>;
 
 /// Surface habitability score in `[0.0, 1.0]`.
 ///
-/// `0.0` — uninhabitable (water, river, mountain, underground).
+/// `0.0` — uninhabitable (water, river, mountain).
 pub fn habitability(kind: TileKind) -> f32 {
     match kind {
         TileKind::Grassland | TileKind::Plains           => 1.0,
@@ -81,18 +80,13 @@ const GRID_CELL: usize = 32;
 /// Fraction of cells that become Capitals (~1 in 8).
 const CAPITAL_PROB: f32 = 0.12;
 
-/// Generate all surface and underground settlements deterministically from `seed`.
+/// Generate all settlements deterministically from `seed`.
 ///
-/// Surface: Poisson-disk grid approximation — divides the map into
+/// Uses a Poisson-disk grid approximation: divides the map into
 /// `GRID_CELL×GRID_CELL` cells, picks the most habitable walkable tile in each,
 /// rejects candidates too close to existing settlements.
-///
-/// Underground: Connected-component BFS of [`TileKind::LuminousGrotto`] tiles;
-/// one city per component exceeding [`MIN_UNDERGROUND_AREA`].
 pub fn generate_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
-    let mut out = surface_settlements(map, seed);
-    out.extend(underground_settlements(map, seed.wrapping_add(1)));
-    out
+    surface_settlements(map, seed)
 }
 
 fn surface_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
@@ -168,87 +162,6 @@ fn surface_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
     placed
 }
 
-/// Minimum Underdark connected-component area to qualify for a city.
-const MIN_UNDERGROUND_AREA: usize = 500;
-
-fn underground_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
-    use rand::SeedableRng;
-    use rand_chacha::ChaCha8Rng;
-
-    let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let n = map.width * map.height;
-
-    // Mark walkable LuminousGrotto tiles.
-    let is_grotto: Vec<bool> = (0..n)
-        .map(|i| {
-            map.columns[i]
-                .layers
-                .iter()
-                .any(|l| l.kind == TileKind::LuminousGrotto && l.walkable)
-        })
-        .collect();
-
-    // BFS connected-component labeling.
-    let mut component: Vec<Option<usize>> = vec![None; n];
-    let mut components: Vec<Vec<usize>> = Vec::new();
-
-    for start in 0..n {
-        if !is_grotto[start] || component[start].is_some() {
-            continue;
-        }
-        let comp_id = components.len();
-        components.push(Vec::new());
-        let mut queue = VecDeque::new();
-        queue.push_back(start);
-        component[start] = Some(comp_id);
-
-        while let Some(idx) = queue.pop_front() {
-            components[comp_id].push(idx);
-            let ix = idx % map.width;
-            let iy = idx / map.width;
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    if dx == 0 && dy == 0 { continue; }
-                    let nx = ix as i32 + dx;
-                    let ny = iy as i32 + dy;
-                    if nx < 0 || ny < 0
-                        || nx as usize >= map.width
-                        || ny as usize >= map.height
-                    { continue; }
-                    let ni = nx as usize + ny as usize * map.width;
-                    if is_grotto[ni] && component[ni].is_none() {
-                        component[ni] = Some(comp_id);
-                        queue.push_back(ni);
-                    }
-                }
-            }
-        }
-    }
-
-    // One city per large component (centroid placement).
-    let mut out = Vec::new();
-    for (city_idx, cells) in components.iter().enumerate() {
-        if cells.len() < MIN_UNDERGROUND_AREA {
-            continue;
-        }
-        let sum_x: usize = cells.iter().map(|&i| i % map.width).sum();
-        let sum_y: usize = cells.iter().map(|&i| i / map.width).sum();
-        let cx = sum_x / cells.len();
-        let cy = sum_y / cells.len();
-
-        out.push(Settlement {
-            id:   deterministic_uuid(&mut rng),
-            name: SmolStr::new(format!("Deepcity_{city_idx}")),
-            kind: SettlementKind::UndergroundCity,
-            x:    cx as f32 + 0.5,
-            y:    cy as f32 + 0.5,
-            z:    UNDERDARK_Z,
-        });
-    }
-
-    out
-}
-
 // ── Territory assignment ───────────────────────────────────────────────────────
 
 /// Assign each surface tile to the nearest settlement via BFS flood-fill.
@@ -307,14 +220,8 @@ pub fn assign_territories(map: &WorldMap, settlements: &[Settlement]) -> Territo
 /// 2. Kruskal's MST on that graph.
 /// 3. For each MST edge, draw a road by straight-line Bresenham walk and mark
 ///    `map.road_tiles[ix + iy * MAP_WIDTH] = true`.
-///
-/// Only surface settlements are connected (underground cities are excluded since
-/// they can't be reached by surface roads).
 pub fn generate_roads(map: &mut WorldMap, settlements: &[Settlement]) {
-    let surface: Vec<&Settlement> = settlements
-        .iter()
-        .filter(|s| !matches!(s.kind, SettlementKind::UndergroundCity))
-        .collect();
+    let surface: Vec<&Settlement> = settlements.iter().collect();
 
     if surface.len() < 2 {
         return;
@@ -409,23 +316,7 @@ mod tests {
     fn surface_settlements_are_generated() {
         let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 42);
-        let surface_count = settlements
-            .iter()
-            .filter(|s| !matches!(s.kind, SettlementKind::UndergroundCity))
-            .count();
-        assert!(surface_count >= 5, "expected ≥5 surface settlements, got {surface_count}");
-    }
-
-    #[test]
-    fn underground_cities_are_generated() {
-        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
-        let settlements = generate_settlements(&map, 42);
-        let underground_count = settlements
-            .iter()
-            .filter(|s| matches!(s.kind, SettlementKind::UndergroundCity))
-            .count();
-        assert!(underground_count >= 1,
-            "expected ≥1 underground city, got {underground_count}");
+        assert!(settlements.len() >= 5, "expected ≥5 settlements, got {}", settlements.len());
     }
 
     #[test]
@@ -489,12 +380,6 @@ mod tests {
             for j in (i + 1)..settlements.len() {
                 let si = &settlements[i];
                 let sj = &settlements[j];
-                // Underground cities aren't subject to surface Poisson-disk.
-                if matches!(si.kind, SettlementKind::UndergroundCity)
-                    || matches!(sj.kind, SettlementKind::UndergroundCity)
-                {
-                    continue;
-                }
                 let dx = si.x - sj.x;
                 let dy = si.y - sj.y;
                 let dist = (dx * dx + dy * dy).sqrt();

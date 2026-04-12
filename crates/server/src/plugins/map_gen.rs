@@ -2,7 +2,7 @@
 //!
 //! On startup:
 //! 1. Generate the tile map from a fixed seed using fBm + biome + river passes.
-//! 2. Place surface and underground settlements.
+//! 2. Place settlements.
 //! 3. Assign territories and stamp the road network onto the map.
 //! 4. Seed ecology from the world map biomes.
 //! 5. Spawn faction guard NPCs at their home settlements.
@@ -205,11 +205,7 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
     };
 
     let settlements = generate_settlements(&map, config.seed);
-    tracing::info!(
-        surface = settlements.iter().filter(|s| !matches!(s.kind, fellytip_shared::world::civilization::SettlementKind::UndergroundCity)).count(),
-        underground = settlements.iter().filter(|s| matches!(s.kind, fellytip_shared::world::civilization::SettlementKind::UndergroundCity)).count(),
-        "Settlements placed"
-    );
+    tracing::info!(count = settlements.len(), "Settlements placed");
 
     let territory = assign_territories(&map, &settlements);
     let assigned = territory.iter().filter(|t| t.is_some()).count();

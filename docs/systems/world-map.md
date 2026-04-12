@@ -28,7 +28,13 @@ All variants are listed in the `TileKind` enum in `crates/shared/src/world/map.r
 
 ## Height system
 
-`WorldPosition.z` is the entity's current elevation. After each horizontal move the server queries `smooth_surface_at(map, x, y, current_z)` and lerps `z` toward the result. The lerp speed, maximum fall speed, and per-tick step-height cap are `Z_FOLLOW_RATE`, `FALL_SPEED`, and `STEP_HEIGHT` in `map.rs`.
+`WorldPosition.z` is the entity's current elevation. The client integrates velocity-based gravity each tick:
+
+- **Grounded** (`pred.z ≤ terrain_z + LAND_SNAP`): snap to terrain surface, zero `z_vel`.
+- **Airborne** (`pred.z > terrain_z + LAND_SNAP`): accumulate `z_vel += GRAVITY * dt` (clamped to `MAX_FALL_SPEED`), then `pred.z += z_vel * dt`. If the integration steps through the terrain in one frame, clamp to terrain and zero velocity.
+- **No surface reachable** (void / water / mountain edge): gravity still applies.
+
+The relevant constants in `map.rs` are `GRAVITY`, `MAX_FALL_SPEED`, `LAND_SNAP`, and `STEP_HEIGHT`.
 
 `smooth_surface_at` returns a bilinearly interpolated height using the current tile's pre-computed corner offsets. The four corners are the averages of the four adjacent tile centers that share each corner, giving a continuous height field with no visible seams.
 

@@ -8,7 +8,7 @@ use fellytip_shared::{
     components::{Experience, WorldPosition},
     inputs::{ActionIntent, PlayerInput},
     protocol::{FellytipProtocolPlugin, PlayerInputChannel},
-    world::map::{is_walkable_at, smooth_surface_at, WorldMap, FALL_SPEED, STEP_HEIGHT, Z_FOLLOW_RATE},
+    world::map::{is_walkable_at, smooth_surface_at, WorldMap, GRAVITY, LAND_SNAP, MAX_FALL_SPEED},
 };
 use lightyear::prelude::{client::*, *};
 use plugins::camera::OrbitCamera;
@@ -29,6 +29,9 @@ pub struct PredictedPosition {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+    /// Vertical velocity in world units/sec. Positive = up, negative = down.
+    /// Accumulated each frame under gravity when the entity is airborne.
+    pub z_vel: f32,
 }
 
 /// Seconds between client connection attempts.  Gives the server time to finish
@@ -358,10 +361,26 @@ fn send_player_input(
             else if can_y  { pred.y = new_y; }
             // else: fully blocked; position unchanged
 
-            // Z elevation following — client handles this now that it has the map.
-            if let Some(target_z) = smooth_surface_at(m, pred.x, pred.y, pred.z) {
-                let delta = (target_z - pred.z) * Z_FOLLOW_RATE * dt;
-                pred.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
+            // Z physics — velocity-integrated gravity with terrain contact.
+            if let Some(terrain_z) = smooth_surface_at(m, pred.x, pred.y, pred.z) {
+                if pred.z <= terrain_z + LAND_SNAP {
+                    // Grounded: snap to surface and kill vertical velocity.
+                    pred.z = terrain_z;
+                    pred.z_vel = 0.0;
+                } else {
+                    // Airborne above terrain: integrate gravity.
+                    pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
+                    pred.z += pred.z_vel * dt;
+                    // Clamp if we stepped through the surface in one frame.
+                    if pred.z < terrain_z {
+                        pred.z = terrain_z;
+                        pred.z_vel = 0.0;
+                    }
+                }
+            } else {
+                // No walkable surface reachable (void / water / mountain edge).
+                pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
+                pred.z += pred.z_vel * dt;
             }
         } else {
             // Map not yet loaded — apply movement without terrain checks.
@@ -405,7 +424,7 @@ fn tag_local_player(
     for (entity, pos) in &query {
         commands.entity(entity).insert((
             LocalPlayer,
-            PredictedPosition { x: pos.x, y: pos.y, z: pos.z },
+            PredictedPosition { x: pos.x, y: pos.y, z: pos.z, z_vel: 0.0 },
         ));
         tracing::debug!("Tagged local player entity {entity:?}");
     }
@@ -437,6 +456,7 @@ fn reconcile_prediction(
             pred.x = server.x;
             pred.y = server.y;
             pred.z = server.z;
+            pred.z_vel = 0.0;
         }
         // else: prediction is authoritative — leave it alone.
     }

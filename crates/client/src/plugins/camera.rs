@@ -44,8 +44,9 @@ pub struct OrbitCamera {
 impl Default for OrbitCamera {
     fn default() -> Self {
         Self {
-            // World-space origin (0, 3, 0) = centre of the map; y≈3 is typical surface elevation.
-            target: Vec3::new(0.0, 3.0, 0.0),
+            // World-space origin (0, 8, 0) = centre of the map; y≈8 is typical surface elevation
+            // with Z_SCALE=20.0 and moderate terrain height.
+            target: Vec3::new(0.0, 8.0, 0.0),
             distance: 60.0,
             yaw: PI * 0.25,   // 45° diagonal — isometric
             pitch: 0.615,     // ~35.3° — classic isometric elevation

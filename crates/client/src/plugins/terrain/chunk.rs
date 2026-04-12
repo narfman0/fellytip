@@ -22,10 +22,10 @@ use bevy::{
     prelude::*,
     render::render_resource::PrimitiveTopology,
 };
-use fellytip_shared::world::map::{TileKind, WorldMap};
+use fellytip_shared::world::map::WorldMap;
 
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
-use super::material::{biome_color, corner_biome_color};
+use super::material::corner_biome_color;
 
 // ── Chunk coordinate ──────────────────────────────────────────────────────────
 
@@ -187,61 +187,6 @@ fn vertex_height(map: &WorldMap, gx: usize, gy: usize) -> f32 {
     } else {
         0.0
     }
-}
-
-// ── Underground mesh builder ─────────────────────────────────────────────────
-
-/// Build a flat mesh for underground tier `kind` in chunk `coord`.
-///
-/// Underground floors have `corner_offsets = [0.0; 4]`, so no height
-/// interpolation or LOD stitching is needed — each open cell is a flat quad
-/// at the layer's fixed `z_top`.  Solid cells (no walkable layer of `kind`)
-/// are skipped, producing the natural cave-wall gaps.
-pub fn build_underground_chunk_mesh(map: &WorldMap, coord: ChunkCoord, kind: TileKind) -> Mesh {
-    let half_w = (map.width  / 2) as i32;
-    let half_h = (map.height / 2) as i32;
-    let c = biome_color(kind);
-    let col_arr = [c.x, c.y, c.z, 1.0];
-
-    let mut positions = Vec::<[f32; 3]>::new();
-    let mut normals   = Vec::<[f32; 3]>::new();
-    let mut colors    = Vec::<[f32; 4]>::new();
-    let mut indices   = Vec::<u32>::new();
-
-    for dy in 0..CHUNK_TILES {
-        for dx in 0..CHUNK_TILES {
-            let ix = (coord.cx as usize * CHUNK_TILES + dx).min(map.width  - 1);
-            let iy = (coord.cy as usize * CHUNK_TILES + dy).min(map.height - 1);
-            let Some(layer) = map.column(ix, iy)
-                .layers.iter().find(|l| l.kind == kind && l.walkable)
-            else {
-                continue;
-            };
-
-            let y  = layer.z_top;
-            let bx = ix as f32 - half_w as f32;
-            let bz = iy as f32 - half_h as f32;
-            let b  = positions.len() as u32;
-
-            positions.extend_from_slice(&[
-                [bx,       y, bz      ],   // TL
-                [bx + 1.0, y, bz      ],   // TR
-                [bx,       y, bz + 1.0],   // BL
-                [bx + 1.0, y, bz + 1.0],   // BR
-            ]);
-            normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
-            colors.extend_from_slice(&[col_arr; 4]);
-            // CCW from +Y: TL→BL→TR, TR→BL→BR
-            indices.extend_from_slice(&[b, b + 2, b + 1,  b + 1, b + 2, b + 3]);
-        }
-    }
-
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
 }
 
 // ── Edge stitching ────────────────────────────────────────────────────────────

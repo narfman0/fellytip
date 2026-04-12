@@ -81,9 +81,8 @@ fn main() {
                 match settlements.iter().find(|s| {
                     s.x as usize / cell_w == dx && s.y as usize / cell_h == dy
                 }) {
-                    Some(s) if matches!(s.kind, SettlementKind::Capital)          => '★',
-                    Some(s) if matches!(s.kind, SettlementKind::UndergroundCity)  => '⚑',
-                    _                                                               => '•',
+                    Some(s) if matches!(s.kind, SettlementKind::Capital) => '★',
+                    _                                                       => '•',
                 }
             } else if has_road {
                 '+'
@@ -109,10 +108,8 @@ fn main() {
     println!("  Settlements ({}):", settlements.len());
     let capitals  = settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Capital)).count();
     let towns     = settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Town)).count();
-    let udcities  = settlements.iter().filter(|s| matches!(s.kind, SettlementKind::UndergroundCity)).count();
     println!("    Capitals:         {capitals}  (★)");
     println!("    Towns:            {towns}  (•)");
-    println!("    Underground:      {udcities}  (⚑)");
 
     let road_tiles = map.road_tiles.iter().filter(|&&r| r).count();
     println!();
@@ -167,10 +164,6 @@ fn tile_char(kind: TileKind) -> char {
         TileKind::PolarDesert     => 'p',
         TileKind::Arctic          => '*',
         TileKind::River           => '=',
-        TileKind::Cavern          => 'c',
-        TileKind::DeepRock        => 'D',
-        TileKind::LuminousGrotto  => 'L',
-        TileKind::Tunnel          => '|',
         TileKind::Void            => ' ',
     }
 }

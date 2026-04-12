@@ -71,7 +71,7 @@ pub enum EntityKind {
     FactionNpc,
     /// Ecology-driven predator or prey creature.
     Wildlife,
-    /// Static settlement marker (capital, town, underground city).
+    /// Static settlement marker (capital or town).
     Settlement,
 }
 

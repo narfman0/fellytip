@@ -11,34 +11,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::prelude::*;
-use fellytip_shared::world::map::{TileKind, WorldMap};
+use fellytip_shared::world::map::WorldMap;
 
-use super::chunk::{build_chunk_mesh, build_underground_chunk_mesh, ChunkCoord};
+use super::chunk::{build_chunk_mesh, ChunkCoord};
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
 use crate::plugins::camera::OrbitCamera;
-
-// ── Active layer ──────────────────────────────────────────────────────────────
-
-/// Which rendering layer is currently active, determined by the player's depth.
-///
-/// `OrbitCamera.target.y` equals `PredictedPosition.z` (player elevation in
-/// Bevy Y-up coordinates).  Thresholds are midpoints between tier floors:
-/// surface ≈ 0, Cavern = −15, DeepRock = −38, LuminousGrotto = −65.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum ActiveLayer {
-    #[default]
-    Surface,
-    Cave(TileKind),
-}
-
-impl ActiveLayer {
-    pub fn from_camera_y(y: f32) -> Self {
-        if      y > -7.5  { Self::Surface }
-        else if y > -26.5 { Self::Cave(TileKind::Cavern) }
-        else if y > -51.5 { Self::Cave(TileKind::DeepRock) }
-        else              { Self::Cave(TileKind::LuminousGrotto) }
-    }
-}
 
 // ── Resource ──────────────────────────────────────────────────────────────────
 
@@ -49,19 +26,15 @@ pub struct ChunkManager {
     pub spawned: HashMap<ChunkCoord, Entity>,
     /// Most-recent LOD assigned to each visible chunk.
     pub lod_cache: HashMap<ChunkCoord, LodLevel>,
-    /// Cached mesh handles keyed by (coord, lod, layer) to avoid rebuilding unchanged meshes.
-    /// Underground meshes always use `LodLevel::Full` as the LOD key (flat floors need no LOD).
-    pub mesh_cache: HashMap<(ChunkCoord, LodLevel, ActiveLayer), Handle<Mesh>>,
+    /// Cached mesh handles keyed by (coord, lod) to avoid rebuilding unchanged meshes.
+    pub mesh_cache: HashMap<(ChunkCoord, LodLevel), Handle<Mesh>>,
     /// Chunks whose mesh must be (re)built this frame.
     pub dirty: HashSet<ChunkCoord>,
     /// Camera chunk from the previous frame — skip work when camera hasn't moved.
     pub last_cam_chunk: Option<ChunkCoord>,
-    /// View radius in chunks.  13 chunks × 32 tiles = 416 tiles, which exceeds
-    /// the camera's max zoom distance of 400 world units.
+    /// View radius in chunks.  20 chunks × 32 tiles = 640 tiles, which exceeds
+    /// the camera's max zoom distance of 400 world units with room for Eighth LOD.
     pub render_radius: i32,
-    /// Which layer (surface or underground tier) is currently being rendered.
-    /// Changing this clears `lod_cache` so all chunks rebuild with new content.
-    pub active_layer: ActiveLayer,
 }
 
 impl Default for ChunkManager {
@@ -72,8 +45,7 @@ impl Default for ChunkManager {
             mesh_cache:     HashMap::new(),
             dirty:          HashSet::new(),
             last_cam_chunk: None,
-            render_radius:  13,
-            active_layer:   ActiveLayer::default(),
+            render_radius:  20,
         }
     }
 }
@@ -84,29 +56,6 @@ impl Default for ChunkManager {
 #[derive(Resource)]
 pub struct TerrainAssets {
     pub material: Handle<StandardMaterial>,
-}
-
-// ── System 0: active layer detection ─────────────────────────────────────────
-
-/// Detect when the player's depth crosses a tier boundary and invalidate the
-/// chunk cache so `rebuild_dirty_chunks` rebuilds all visible chunks with the
-/// correct layer content (surface terrain or underground floor quads).
-///
-/// Runs before `update_chunk_visibility` so the layer is stable for the rest
-/// of the frame's terrain pipeline.
-pub fn sync_active_layer(
-    camera_q: Query<&OrbitCamera>,
-    mut mgr: ResMut<ChunkManager>,
-) {
-    let Ok(cam) = camera_q.single() else { return };
-    let new_layer = ActiveLayer::from_camera_y(cam.target.y);
-    if new_layer != mgr.active_layer {
-        mgr.active_layer    = new_layer;
-        mgr.lod_cache.clear();
-        mgr.last_cam_chunk  = None;
-        // mesh_cache is intentionally kept: cached meshes for the new layer
-        // may already exist from a prior visit, avoiding redundant rebuilds.
-    }
 }
 
 // ── System 1: visibility + LOD selection ─────────────────────────────────────
@@ -212,33 +161,19 @@ pub fn rebuild_dirty_chunks(
 
     let dirty: Vec<ChunkCoord> = mgr.dirty.drain().collect();
 
-    let active = mgr.active_layer;
-
     for coord in dirty {
         let Some(&lod) = mgr.lod_cache.get(&coord) else { continue };
 
-        let mesh = match active {
-            ActiveLayer::Surface => {
-                // Compute edge-transition flags from neighbour LODs.
-                let transitions = EdgeTransitions {
-                    north: is_coarser_neighbor(&mgr.lod_cache, coord,  0, -1, lod),
-                    south: is_coarser_neighbor(&mgr.lod_cache, coord,  0,  1, lod),
-                    west:  is_coarser_neighbor(&mgr.lod_cache, coord, -1,  0, lod),
-                    east:  is_coarser_neighbor(&mgr.lod_cache, coord,  1,  0, lod),
-                };
-                build_chunk_mesh(&map, coord, lod, transitions)
-            }
-            ActiveLayer::Cave(kind) => build_underground_chunk_mesh(&map, coord, kind),
+        // Compute edge-transition flags from neighbour LODs.
+        let transitions = EdgeTransitions {
+            north: is_coarser_neighbor(&mgr.lod_cache, coord,  0, -1, lod),
+            south: is_coarser_neighbor(&mgr.lod_cache, coord,  0,  1, lod),
+            west:  is_coarser_neighbor(&mgr.lod_cache, coord, -1,  0, lod),
+            east:  is_coarser_neighbor(&mgr.lod_cache, coord,  1,  0, lod),
         };
-
-        // Underground meshes are always cached under LodLevel::Full — flat floors
-        // have no height seams so LOD stitching is unnecessary.
-        let cache_lod = match active {
-            ActiveLayer::Surface => lod,
-            ActiveLayer::Cave(_) => LodLevel::Full,
-        };
+        let mesh = build_chunk_mesh(&map, coord, lod, transitions);
         let handle = meshes.add(mesh);
-        mgr.mesh_cache.insert((coord, cache_lod, active), handle);
+        mgr.mesh_cache.insert((coord, lod), handle);
     }
 }
 
@@ -276,18 +211,13 @@ pub fn apply_chunk_meshes(
 
     // ── Spawn or update visible chunks ────────────────────────────────────────
 
-    let active = mgr.active_layer;
     let to_update: Vec<(ChunkCoord, LodLevel)> = mgr.lod_cache
         .iter()
         .map(|(&c, &l)| (c, l))
         .collect();
 
     for (coord, lod) in to_update {
-        let cache_lod = match active {
-            ActiveLayer::Surface => lod,
-            ActiveLayer::Cave(_) => LodLevel::Full,
-        };
-        let Some(handle) = mgr.mesh_cache.get(&(coord, cache_lod, active)).cloned() else { continue };
+        let Some(handle) = mgr.mesh_cache.get(&(coord, lod)).cloned() else { continue };
 
         if let Some(&entity) = mgr.spawned.get(&coord) {
             // Entity already exists — just update its mesh handle.

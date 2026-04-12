@@ -27,10 +27,6 @@ pub fn biome_color(kind: TileKind) -> Vec3 {
         TileKind::Stone               => Vec3::new(0.50, 0.48, 0.45),
         TileKind::Water               => Vec3::new(0.15, 0.40, 0.75),
         TileKind::River               => Vec3::new(0.22, 0.52, 0.88),
-        TileKind::Cavern              => Vec3::new(0.25, 0.22, 0.20),
-        TileKind::DeepRock            => Vec3::new(0.18, 0.16, 0.15),
-        TileKind::LuminousGrotto      => Vec3::new(0.10, 0.35, 0.32),
-        TileKind::Tunnel              => Vec3::new(0.15, 0.15, 0.14),
         TileKind::Void                => Vec3::ZERO,
     }
 }

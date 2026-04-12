@@ -19,8 +19,8 @@ use fellytip_shared::{
 use lightyear::prelude::Replicated;
 
 use manager::{
-    apply_chunk_meshes, rebuild_dirty_chunks, sync_active_layer, update_chunk_visibility,
-    ActiveLayer, ChunkManager, TerrainAssets,
+    apply_chunk_meshes, rebuild_dirty_chunks, update_chunk_visibility,
+    ChunkManager, TerrainAssets,
 };
 use material::create_terrain_material;
 use fellytip_shared::world::map::WorldMap;
@@ -34,7 +34,6 @@ impl Plugin for TerrainPlugin {
                 Update,
                 (
                     apply_world_meta,
-                    sync_active_layer,
                     update_chunk_visibility,
                     rebuild_dirty_chunks,
                     apply_chunk_meshes,
@@ -91,12 +90,9 @@ fn apply_world_meta(
     *map = generate_map(meta.seed, meta.width as usize, meta.height as usize);
 
     // Reset chunk manager so all chunks are rebuilt from the new map data.
-    // active_layer resets to Surface so stale underground meshes from the old
-    // map are not reused.
     mgr.lod_cache.clear();
     mgr.mesh_cache.clear();
     mgr.last_cam_chunk = None;
-    mgr.active_layer   = ActiveLayer::default();
     // Spawned chunk entities will be despawned by apply_chunk_meshes on the
     // next frame (lod_cache is now empty, so all spawned are out-of-range).
 }
