@@ -143,8 +143,10 @@ pub fn build_chunk_mesh(
             let i10 = (vy       * vps + vx + 1) as u32;
             let i01 = ((vy + 1) * vps + vx    ) as u32;
             let i11 = ((vy + 1) * vps + vx + 1) as u32;
-            // CCW winding viewed from above (Bevy Y-up).
-            indices.extend_from_slice(&[i00, i10, i01, i10, i11, i01]);
+            // CCW winding viewed from +Y (above). Proof: for a flat quad at z=0,
+            // edge1 = i01-i00 = (0,0,+step) and edge2 = i10-i00 = (+step,0,0),
+            // so cross = (+Z)×(+X) = (0,+1,0) → normal points up. ✓
+            indices.extend_from_slice(&[i00, i01, i10, i10, i01, i11]);
         }
     }
 
@@ -228,12 +230,19 @@ fn stitch_row(indices: &mut Vec<u32>, vps: usize, vy_edge: usize, is_south: bool
         let m1 = vy_inner * vps + k + 1;
         let m2 = vy_inner * vps + k + 2;
 
+        // All triangles must be CCW from +Y (same rule as main quads).
+        // North: vy_inner > vy_e (larger Z, south of edge).
+        //   [e0,m1,e2]: (1,+1)×(2,0) → b·c−a·d = 2 > 0 ✓
+        //   [e0,m0,m1]: (0,+1)×(1,+1) → 1 > 0 ✓
+        //   [e2,m1,m2]: (−1,+1)×(0,+1) → 1 > 0 ✓
+        // South: vy_inner < vy_e (smaller Z, north of edge).
+        //   [e0,e2,m1]: (2,0)×(1,−1) → 2 > 0 ✓
+        //   [e0,m1,m0]: (1,−1)×(0,−1) → 1 > 0 ✓
+        //   [e2,m2,m1]: (0,−1)×(−1,−1) → 1 > 0 ✓
         if is_south {
-            // South edge: interior row is above (smaller vy).
-            indices.extend_from_slice(&[e0, m0, e2,  e2, m0, m1,  e2, m1, m2]);
+            indices.extend_from_slice(&[e0, e2, m1,  e0, m1, m0,  e2, m2, m1]);
         } else {
-            // North edge: interior row is below (larger vy).
-            indices.extend_from_slice(&[e0, e2, m0,  e2, m2, m0,  m0, m2, m1]);
+            indices.extend_from_slice(&[e0, m1, e2,  e0, m0, m1,  e2, m1, m2]);
         }
         k += 2;
     }
@@ -261,10 +270,18 @@ fn stitch_col(indices: &mut Vec<u32>, vps: usize, vx_edge: usize, is_east: bool)
         let m1 = (k + 1) * vps + vx_inner;
         let m2 = (k + 2) * vps + vx_inner;
 
+        // East: vx_inner < vx_e (west of edge, smaller X).
+        //   [e0,m1,e2]: (−1,+1)×(0,+2) → 2 > 0 ✓
+        //   [e0,m0,m1]: (−1,0)×(−1,+1) → 1 > 0 ✓
+        //   [e2,m1,m2]: (−1,−1)×(−1,0) → 1 > 0 ✓
+        // West: vx_inner > vx_e (east of edge, larger X).
+        //   [e0,e2,m1]: (0,+2)×(+1,+1) → 2 > 0 ✓
+        //   [e0,m1,m0]: (+1,+1)×(+1,0) → 1 > 0 ✓
+        //   [e2,m2,m1]: (+1,0)×(+1,−1) → 1 > 0 ✓
         if is_east {
-            indices.extend_from_slice(&[e0, e2, m0,  e2, m2, m0,  m0, m2, m1]);
+            indices.extend_from_slice(&[e0, m1, e2,  e0, m0, m1,  e2, m1, m2]);
         } else {
-            indices.extend_from_slice(&[e0, m0, e2,  e2, m0, m1,  e2, m1, m2]);
+            indices.extend_from_slice(&[e0, e2, m1,  e0, m1, m0,  e2, m2, m1]);
         }
         k += 2;
     }
