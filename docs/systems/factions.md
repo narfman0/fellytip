@@ -6,14 +6,16 @@ Pure faction logic lives in `crates/shared/src/world/faction.rs`. Server-only EC
 
 ## Faction roster
 
-| Faction | ID | Default Standing | Aggressive | Lore |
-|---|---|---|---|---|
-| Iron Wolves | `iron_wolves` | 0 (Neutral) | No | Mercenary warband guarding northern mines. Respects strength; will trade. |
-| Merchant Guild | `merchant_guild` | 0 (Neutral) | No | Trade consortium controlling southern ports. Prefers alliances to war. |
-| Ash Covenant | `ash_covenant` | −500 (Hostile) | Yes | Zealot order that treats ancient ruins as sacred ground. Purges all outsiders on sight. |
-| Deep Tide | `deep_tide` | −500 (Hostile) | Yes | Underdark raiders that surface seasonally to plunder before retreating below. |
+| Faction | ID | Default Standing | Aggressive | Wars Against | Lore |
+|---|---|---|---|---|---|
+| Iron Wolves | `iron_wolves` | 0 (Neutral) | No | Ash Covenant | Mercenary warband guarding northern mines. Respects strength; will trade. |
+| Merchant Guild | `merchant_guild` | 0 (Neutral) | No | Deep Tide | Trade consortium controlling southern ports. Prefers alliances to war. |
+| Ash Covenant | `ash_covenant` | −500 (Hostile) | Yes | Iron Wolves | Zealot order that treats ancient ruins as sacred ground. Purges all outsiders on sight. |
+| Deep Tide | `deep_tide` | −500 (Hostile) | Yes | Merchant Guild | Underdark raiders that surface seasonally to plunder before retreating below. |
 
 Default standing is applied when a player has no prior interaction with the faction. Ash Covenant and Deep Tide always begin at Hostile, meaning their NPCs attack players on sight from the first encounter.
+
+Disposition maps are seeded in `seed_factions` so that Iron Wolves and Ash Covenant are mutually `Disposition::Hostile`, as are Merchant Guild and Deep Tide. These dispositions drive war-party targeting in `tick_population`.
 
 ## Standing tiers
 
@@ -75,16 +77,19 @@ Each faction NPC carries `FactionNpcRank(NpcRank)` — a server-only component s
 | Component | Location | Description |
 |---|---|---|
 | `FactionMember(FactionId)` | `plugins/ai.rs` | Which faction this NPC belongs to |
-| `FactionNpcRank(NpcRank)` | `plugins/ai.rs` | Rank for kill-penalty calculation; derives `Reflect` |
+| `FactionNpcRank(NpcRank)` | `plugins/ai.rs` | Rank for kill-penalty calculation |
 | `CurrentGoal(Option<FactionGoal>)` | `plugins/ai.rs` | Active AI goal being pursued |
-| `HomePosition(WorldPosition)` | `plugins/ai.rs` | Origin for future bounded-wander pathfinding |
+| `HomePosition(WorldPosition)` | `plugins/ai.rs` | Origin for bounded-wander pathfinding |
+| `WarPartyMember { target_settlement_id, target_x, target_y }` | `plugins/ai.rs` | Tags an NPC as a war-party warrior marching to the target settlement |
+| `ActiveBattle { settlement_id, attacker_faction, defender_faction, battle_x, battle_y, attacker_casualties, defender_casualties }` | `plugins/ai.rs` | Bookkeeping entity spawned when a war party arrives; despawned when the battle ends |
 
 ## Resources (server)
 
 | Resource | Type | Description |
 |---|---|---|
-| `FactionRegistry` | `Resource` | All live faction data (`Vec<Faction>`) |
+| `FactionRegistry` | `Resource` | All live faction data (`Vec<Faction>`), including disposition maps |
 | `PlayerReputationMap` | `Resource` | Per-player, per-faction standing scores |
+| `FactionPopulationState` | `Resource` | Per-settlement birth counters and adult/child counts for the population simulation |
 
 ## Current state
 
@@ -93,4 +98,8 @@ Each faction NPC carries `FactionNpcRank(NpcRank)` — a server-only component s
 - Aggression check fires every `FixedUpdate` tick (62.5 Hz).
 - Kill penalties applied live in `resolve_interrupts`.
 - Persistence schema (`003_reputation.sql`) exists; load/save hooks are stubs.
-- Faction goal AI runs at 1 Hz (`WorldSimSchedule`) but NPC movement is stationary pending pathfinding.
+- Faction goal AI runs at 1 Hz (`WorldSimSchedule`).
+- Settlement populations grow via `tick_population_system` and `age_npcs_system` (1 Hz).
+- War parties form when `adult_count ≥ 15` and march toward hostile-faction settlements via `march_war_parties` (1 Hz).
+- Battles resolve via `run_battle_rounds` using seeded deterministic dice; results broadcast to clients.
+- Non-war-party NPCs (guards) are stationary pending pathfinding implementation.

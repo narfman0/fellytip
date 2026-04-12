@@ -10,6 +10,7 @@
 | `tools/ralph` | BRP HTTP test driver — automated end-to-end scenario assertions |
 | `tools/combat_sim` | proptest harness for combat and ecology rules, no ECS |
 | `tools/world_gen` | Standalone ASCII world preview: `cargo run -p world_gen -- --seed N` |
+| `tools/worldwatch` | eframe desktop monitor: reads BRP + SQLite and displays live world state |
 
 ## Design constraints
 
@@ -24,14 +25,14 @@ This constraint means:
 
 ### Dice injection at the boundary
 
-Randomness is never generated inside pure logic. Every function that needs a random value takes `rng: &mut impl Iterator<Item=i32>` and reads from it. The ECS bridge feeds real dice; test harnesses feed deterministic values. This applies to combat (attack rolls, damage) and world generation (fBm is deterministic from seed; only procedural cave/shaft placement uses an RNG passed in).
+Randomness is never generated inside pure logic. Every function that needs a random value takes `rng: &mut impl Iterator<Item=i32>` and reads from it. The ECS bridge feeds real dice; test harnesses feed deterministic values. This applies to combat (attack rolls, damage) and faction war battles (`seeded_dice` in `world/war.rs` uses `ChaCha8Rng` keyed on settlement ID + tick).
 
 ### Two tick rates
 
 | Schedule | Rate | What runs |
 |---|---|---|
 | `FixedUpdate` | 62.5 Hz | Combat resolution, player movement, input application |
-| `WorldSimSchedule` | 1 Hz | Faction AI, ecology, story event flush |
+| `WorldSimSchedule` | 1 Hz | Faction AI, population, ecology, war parties, story event flush |
 
 These schedules never share mutable state during a tick. If a system needs to cross the boundary it must document why.
 
@@ -55,14 +56,23 @@ Client keyboard input
       → applies Vec<Effect> to Health components
       → awards XP, emits WriteStoryEvent, despawns dead entities
   → Replication (50 ms interval)
-      → WorldPosition + Health replicated to all clients
+      → WorldPosition + Health + GrowthStage replicated to clients
+        (only to peers that have the entity's chunk in Hot or Warm zone)
 ```
 
 ```
 World sim tick (1 Hz)
-  → EcologyPlugin  → Lotka-Volterra per region → emits StoryEvents on collapse
-  → AiPlugin       → faction utility scoring → updates faction goals
-  → StoryPlugin    → flushes WriteStoryEvent messages → StoryLog resource + SQLite
+  → update_chunk_temperature → ChunkTemperature zones per client
+  → update_npc_replication   → re-targets Replicate on each NPC
+  → update_faction_goals     → utility scoring → active FactionGoal
+  → tick_population_system   → birth counters, war party formation events
+  → age_npcs_system          → GrowthStage += 1/300; adult health upgrade
+  → check_war_party_formation→ tags adults as WarPartyMember
+  → march_war_parties        → moves warriors; spawns ActiveBattle + BattleStartMsg
+  → run_battle_rounds        → seeded combat; BattleAttackMsg; BattleEndMsg
+  → wander_npcs              → placeholder (non-war-party guards stationary)
+  → EcologyPlugin            → Lotka-Volterra per region; StoryEvents on collapse
+  → StoryPlugin              → flushes WriteStoryEvent → StoryLog + SQLite
 ```
 
 ## Key version pins
@@ -78,10 +88,9 @@ World sim tick (1 Hz)
 
 ## Coordinate system
 
-- `WorldPosition { x, y, z }` — `x` and `y` are tile-space coordinates (1 unit = 1 tile). `z` is elevation in world units (0 = sea level, positive = above ground, negative = underground).
-- `TILE_W = 32`, `TILE_H = 16` pixels — used only in rendering projection.
-- Top-down projection: `(x * TILE_W, y * TILE_H)`.
-- Isometric projection: `((x - y) * TILE_W/2, (x + y) * TILE_H/4 + z * TILE_H/2)` — available via `iso_project()` in `crates/shared/src/math.rs`, gated behind `isometric` feature flag.
+- `WorldPosition { x, y, z }` — `x` and `y` are tile-space coordinates (1 unit = 1 tile). `z` is elevation in world units (0 = sea level, positive = above ground).
+- Bevy render space: world `(x, y, z_elevation)` → Bevy `(x, z_elevation, y)`. Bevy is Y-up; the world's Z elevation becomes Bevy's Y.
+- Chunk coordinates: `chunk = ((tile_x) / CHUNK_TILES, (tile_y) / CHUNK_TILES)` where `tile_x = pos.x + MAP_HALF_WIDTH`.
 
 ## Entity identity
 
@@ -95,7 +104,9 @@ World sim tick (1 Hz)
 |---|---|
 | `WorldMap` | Generated tile grid; not replicated to clients |
 | `Settlements` | List of generated settlements; used for NPC spawn placement |
-| `FactionRegistry` | All live `Faction` structs; mutated by world-sim AI |
+| `FactionRegistry` | All live `Faction` structs (including disposition maps); mutated by world-sim AI |
+| `FactionPopulationState` | Per-settlement `SettlementPopulation` (birth ticks, adult/child counts, cooldowns) |
+| `ChunkTemperature` | Per-client Hot/Warm zone chunk sets; rebuilt every WorldSim tick |
 | `PlayerReputationMap` | Per-player, per-faction standing scores (`HashMap<Uuid, HashMap<FactionId, i32>>`); clamped to `[-999, 1000]`; persisted to `player_faction_standing` SQLite table |
 | `EcologyState` | Per-region predator/prey population counts |
 | `StoryLog` | In-memory ordered event log; flushed to SQLite periodically |

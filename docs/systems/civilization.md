@@ -2,7 +2,7 @@
 
 The civilization system generates settlements, assigns territory, and connects settlements with roads. All generation is pure and deterministic from a seed; it runs after `generate_map` returns and before the server accepts player connections.
 
-Exact placement parameters (grid cell size, minimum spacing, habitability thresholds, component size cutoffs) live in `crates/shared/src/world/civilization.rs` — that file is the authority.
+Exact placement parameters (grid cell size, minimum spacing, habitability thresholds) live in `crates/shared/src/world/civilization.rs` — that file is the authority.
 
 ## Settlements
 
@@ -12,19 +12,14 @@ A settlement has a kind, a world-space position, a name, and a stable UUID. The 
 
 | Kind | Description |
 |---|---|
-| `Capital` | Major surface settlement |
+| `Capital` | Major surface settlement (~1 in 8 accepted candidates) |
 | `Town` | Ordinary surface settlement |
-| `UndergroundCity` | Located in a large Underdark cavern |
 
 ### Surface placement — Poisson-disk grid approximation
 
 The map is divided into fixed-size cells. Within each cell, the most habitable walkable tile is identified as a candidate. A candidate is accepted only if no existing settlement lies within the minimum spacing distance. This produces spacing similar to Poisson-disk sampling without the rejection-loop cost.
 
 Habitability scores per biome are defined in the `habitability()` function in `civilization.rs`. Cells whose best tile falls below the minimum habitability threshold produce no settlement.
-
-### Underground placement — connected-component analysis
-
-All walkable `LuminousGrotto` tiles are labeled by BFS flood-fill into connected components. Each component large enough (area threshold in `civilization.rs`) receives one `UndergroundCity` at the component's centroid.
 
 ## Territory assignment
 
@@ -46,10 +41,15 @@ Roads are not yet enforced as preferred paths by AI or movement; the flags are a
 
 ```
 Startup (after seed_factions):
-  generate_map(seed)           → WorldMap resource
-  generate_settlements(&map, seed) → Vec<Settlement>
-  generate_roads(&mut map, &settlements) → populates map.road_tiles
-  assign_territories(&map, &settlements) → TerritoryMap
+  generate_map(seed)                         → WorldMap resource
+  generate_settlements(&map, seed)           → Vec<Settlement>
+  generate_roads(&mut map, &settlements)     → populates map.road_tiles
+  assign_territories(&map, &settlements)     → TerritoryMap
   insert WorldMap, Settlements as Bevy resources
-  run WorldSimSchedule × HISTORY_WARP_TICKS  (see map_gen.rs)
+  seed_ecology                               → EcologyState per macro-region
+  spawn_faction_npcs                         → 3 guard NPCs per faction
+  init_population_state                      → FactionPopulationState (birth counters)
+  spawn_settlement_markers                   → replicated Settlement entities
+  history_warp × HISTORY_WARP_TICKS         → pre-ages factions, ecology, population
+  flush_factions_to_db                       → persists initial faction state
 ```

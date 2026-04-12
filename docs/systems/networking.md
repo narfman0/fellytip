@@ -29,19 +29,35 @@ These components in `crates/shared/src/components.rs` are registered in `Fellyti
 | `Experience { xp, level, xp_to_next }` | Simple interpolation | Client renders level/XP |
 | `EntityKind` | Simple | Enum: FactionNpc / Wildlife / Settlement — drives visual differentiation on client |
 | `WorldMeta { seed, width, height }` | Server → client (once on connect) | Client regenerates local `WorldMap` so terrain walkability matches the server exactly |
+| `GrowthStage(f32)` | Simple | 0.0 = newborn, 1.0 = adult; drives NPC capsule scale (0.3 → 1.0) on client |
 
-All five are serializable (`serde`) and reflectable (`bevy::reflect`).
+All six are serializable (`serde`) and reflectable (`bevy::reflect`).
 
 Players carry `WorldMeta` but not `EntityKind`. Absence of `EntityKind` on a replicated entity indicates a player.
 
 ## Messages
 
-| Message | Direction | Channel |
-|---|---|---|
-| `PlayerInput` | Client → Server | Unordered unreliable UDP |
-| `GreetMsg` | Server → Client | Ordered reliable |
+| Message | Direction | Channel | Notes |
+|---|---|---|---|
+| `PlayerInput` | Client → Server | Unordered unreliable UDP | Movement + action intent every frame |
+| `GreetMsg` | Server → Client | Ordered reliable | Sent on connect to verify channel |
+| `BattleStartMsg` | Server → Client | Sequenced reliable | Broadcast when war party arrives at target settlement |
+| `BattleEndMsg` | Server → Client | Sequenced reliable | Broadcast when one side is eliminated |
+| `BattleAttackMsg` | Server → Client | Sequenced reliable | Broadcast per hit during a battle |
 
 `PlayerInput` carries `move_dir: [f32; 2]`, `pos: [f32; 3]` (client-computed position), an optional `ActionIntent`, and an optional target UUID.
+
+## Interest management (`crates/server/src/plugins/interest.rs`)
+
+Each connected client has a two-tier active zone centred on its player entity:
+
+| Zone | Chebyshev chunk radius | Effect |
+|---|---|---|
+| Hot | 0–2 | Replicated + fully simulated |
+| Warm | 3–8 | Replicated, reduced simulation |
+| Frozen | > 8 | Not replicated; simulation skipped |
+
+`update_chunk_temperature` rebuilds zone maps once per `WorldSimSchedule` tick (1 Hz) from current player positions. `update_npc_replication` then re-targets each NPC's `Replicate` component so only clients near the NPC receive its replication traffic.
 
 ## Client-side input and movement
 
