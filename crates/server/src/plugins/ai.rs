@@ -357,6 +357,11 @@ pub fn init_population_state(
         let settlement = &settlements.0[faction_idx % settlements.0.len()];
         let home_x = settlement.x - MAP_HALF_WIDTH as f32;
         let home_y = settlement.y - MAP_HALF_HEIGHT as f32;
+        let military_strength = registry.factions
+            .iter()
+            .find(|f| f.id == faction.id)
+            .map(|f| f.resources.military_strength)
+            .unwrap_or(0.0);
         pop.settlements.insert(
             settlement.id,
             SettlementPopulation {
@@ -369,6 +374,7 @@ pub fn init_population_state(
                 home_y,
                 home_z: settlement.z,
                 war_party_cooldown: 0,
+                military_strength,
             },
         );
     }
@@ -377,12 +383,25 @@ pub fn init_population_state(
 
 // ── WorldSim systems ──────────────────────────────────────────────────────────
 
+/// Military strength recovered per adult NPC per world-sim tick.
+/// At 10 adults and 0 strength, recovery rate = 0.5/tick → 15.0 in 30 ticks (~30 s).
+const MILITARY_REGEN_PER_ADULT: f32 = 0.05;
+/// Hard ceiling on faction military strength.
+const MILITARY_CAP: f32 = 50.0;
+/// Fraction of prey count added to faction food per tick.
+/// 100 prey × 0.01 = 1.0 food/tick.
+const PREY_TO_FOOD_RATE: f32 = 0.01;
+/// Food upkeep per adult NPC per tick.
+/// 200 adults × 0.005 = 1.0 food/tick consumed (balanced against moderate prey).
+const FOOD_UPKEEP_PER_ADULT: f32 = 0.005;
+
 /// Advance each settlement's population by one tick.
 /// Spawns child NPCs and emits `FormWarPartyEvent` when threshold is reached.
 fn tick_population_system(
     mut pop: ResMut<FactionPopulationState>,
     npc_query: Query<(&FactionMember, Option<&GrowthStage>, Has<WarPartyMember>)>,
-    registry: Res<FactionRegistry>,
+    mut registry: ResMut<FactionRegistry>,
+    ecology: Res<crate::plugins::ecology::EcologyState>,
     tick: Res<WorldSimTick>,
     mut commands: Commands,
     mut war_events: MessageWriter<FormWarPartyEvent>,
@@ -397,6 +416,29 @@ fn tick_population_system(
         } else if !is_war_party {
             *faction_adults.entry(member.0.clone()).or_insert(0) += 1;
         }
+    }
+
+    // ── Military strength recovery ────────────────────────────────────────────
+    // Each adult NPC contributes a small regen each tick, capped at MILITARY_CAP.
+    for faction in &mut registry.factions {
+        let adults = *faction_adults.get(&faction.id).unwrap_or(&0);
+        let regen = adults as f32 * MILITARY_REGEN_PER_ADULT;
+        faction.resources.military_strength =
+            (faction.resources.military_strength + regen).min(MILITARY_CAP);
+    }
+
+    // ── Ecology → food integration ────────────────────────────────────────────
+    // Sum prey across all ecology regions (global average; faction territories
+    // use label IDs that don't map spatially to ecology macro-regions).
+    let total_prey: f64 = ecology.regions.iter().map(|r| r.prey.count).sum();
+    let faction_count = registry.factions.len().max(1) as f64;
+    let prey_per_faction = (total_prey / faction_count) as f32;
+
+    for faction in &mut registry.factions {
+        let adults = *faction_adults.get(&faction.id).unwrap_or(&0);
+        let food_gain = prey_per_faction * PREY_TO_FOOD_RATE;
+        let food_cost = adults as f32 * FOOD_UPKEEP_PER_ADULT;
+        faction.resources.food = (faction.resources.food + food_gain - food_cost).clamp(0.0, 100.0);
     }
 
     // Build faction-id → hostile settlement positions map.
@@ -421,8 +463,13 @@ fn tick_population_system(
     let settlement_ids: Vec<Uuid> = pop.settlements.keys().copied().collect();
     for sid in settlement_ids {
         let Some(mut state) = pop.settlements.remove(&sid) else { continue };
-        state.adult_count   = *faction_adults.get(&state.faction_id).unwrap_or(&0);
-        state.child_count   = *faction_children.get(&state.faction_id).unwrap_or(&0);
+        state.adult_count        = *faction_adults.get(&state.faction_id).unwrap_or(&0);
+        state.child_count        = *faction_children.get(&state.faction_id).unwrap_or(&0);
+        state.military_strength  = registry.factions
+            .iter()
+            .find(|f| f.id == state.faction_id)
+            .map(|f| f.resources.military_strength)
+            .unwrap_or(0.0);
         let targets = faction_hostile_targets.get(&state.faction_id).map(|v| v.as_slice()).unwrap_or(&[]);
         let (next, effects) = tick_population(state, targets);
 
@@ -623,6 +670,7 @@ type BattleNpcQuery<'w, 's> = Query<
         &'static FactionMember,
         Option<&'static WarPartyMember>,
         &'static WorldPosition,
+        Option<&'static HomePosition>,
     ),
 >;
 
@@ -657,10 +705,11 @@ fn run_battle_rounds(
         let by = battle.battle_y;
 
         // Collect snapshots of attackers and defenders near the battle site.
-        let mut attacker_snaps: Vec<(Entity, CombatantSnapshot, i32)> = Vec::new(); // (entity, snap, current_hp)
-        let mut defender_snaps: Vec<(Entity, CombatantSnapshot, i32)> = Vec::new();
+        // attacker tuple: (entity, snap, current_hp, home_pos)
+        let mut attacker_snaps: Vec<(Entity, CombatantSnapshot, i32, Option<WorldPosition>)> = Vec::new();
+        let mut defender_snaps: Vec<(Entity, CombatantSnapshot, i32, Option<WorldPosition>)> = Vec::new();
 
-        for (entity, cp, health, member, war_member, pos) in &all_npcs {
+        for (entity, cp, health, member, war_member, pos, home_pos) in &all_npcs {
             let dist = ((pos.x - bx).powi(2) + (pos.y - by).powi(2)).sqrt();
             if dist > BATTLE_RADIUS * 4.0 {
                 continue;
@@ -680,10 +729,11 @@ fn run_battle_rounds(
                 level: cp.level,
                 armor_class: cp.armor_class,
             };
+            let home = home_pos.map(|h| h.0.clone());
             if member.0 == battle.attacker_faction && war_member.is_some() {
-                attacker_snaps.push((entity, snap, health.current));
+                attacker_snaps.push((entity, snap, health.current, home));
             } else if member.0 == battle.defender_faction && war_member.is_none() {
-                defender_snaps.push((entity, snap, health.current));
+                defender_snaps.push((entity, snap, health.current, home));
             }
         }
 
@@ -721,9 +771,13 @@ fn run_battle_rounds(
                 }
             }
 
-            // Remove WarPartyMember from surviving attackers.
-            for (entity, _, _) in &attacker_snaps {
-                commands.entity(*entity).remove::<WarPartyMember>();
+            // Remove WarPartyMember from surviving attackers and teleport them home.
+            for (entity, _, _, home) in &attacker_snaps {
+                let mut cmd = commands.entity(*entity);
+                cmd.remove::<WarPartyMember>();
+                if let Some(home_pos) = home {
+                    cmd.insert(home_pos.clone());
+                }
             }
             commands.entity(battle_entity).despawn();
             continue;
@@ -731,7 +785,7 @@ fn run_battle_rounds(
 
         // Build combined CombatState for this tick's rounds.
         let all_combatants: Vec<CombatantState> = attacker_snaps.iter().chain(defender_snaps.iter())
-            .map(|(_, snap, hp)| CombatantState { snapshot: snap.clone(), health: *hp, statuses: vec![] })
+            .map(|(_, snap, hp, _)| CombatantState { snapshot: snap.clone(), health: *hp, statuses: vec![] })
             .collect();
         let mut state = CombatState { combatants: all_combatants, round: tick.0 as u32 };
 
@@ -739,9 +793,9 @@ fn run_battle_rounds(
 
         // Each attacker targets a defender (seeded round-robin).
         let def_count = defender_snaps.len();
-        for (atk_idx, (_, atk_snap, _)) in attacker_snaps.iter().enumerate() {
+        for (atk_idx, (_, atk_snap, _, _)) in attacker_snaps.iter().enumerate() {
             let def_idx = (atk_idx + tick.0 as usize) % def_count;
-            let (def_entity, def_snap, _) = &defender_snaps[def_idx];
+            let (def_entity, def_snap, _, _) = &defender_snaps[def_idx];
 
             let (next_state, effects) = tick_battle_round(state.clone(), &atk_snap.id, &def_snap.id, &mut dice);
             state = next_state;
@@ -751,8 +805,8 @@ fn run_battle_rounds(
                     Effect::TakeDamage { target, amount } => {
                         // Find the entity matching this CombatantId.
                         let target_entity = attacker_snaps.iter().chain(defender_snaps.iter())
-                            .find(|(_, s, _)| &s.id == target)
-                            .map(|(e, _, _)| *e);
+                            .find(|(_, s, _, _)| &s.id == target)
+                            .map(|(e, _, _, _)| *e);
                         if let Some(entity) = target_entity {
                             let is_defender = entity == *def_entity;
                             let atk_msg = BattleAttackMsg {
@@ -766,10 +820,10 @@ fn run_battle_rounds(
                     }
                     Effect::Die { target } => {
                         let target_entity = attacker_snaps.iter().chain(defender_snaps.iter())
-                            .find(|(_, s, _)| &s.id == target)
-                            .map(|(e, _, _)| *e);
+                            .find(|(_, s, _, _)| &s.id == target)
+                            .map(|(e, _, _, _)| *e);
                         if let Some(entity) = target_entity {
-                            let is_attacker = attacker_snaps.iter().any(|(e, _, _)| *e == entity);
+                            let is_attacker = attacker_snaps.iter().any(|(e, _, _, _)| *e == entity);
                             if is_attacker {
                                 battle.attacker_casualties += 1;
                             } else {
@@ -790,7 +844,7 @@ fn run_battle_rounds(
         }
 
         // Sync health from the updated CombatState back to ECS Health components.
-        for (entity, snap, _) in attacker_snaps.iter().chain(defender_snaps.iter()) {
+        for (entity, snap, _, _) in attacker_snaps.iter().chain(defender_snaps.iter()) {
             if let Some(cs) = state.get(&snap.id) {
                 if let Ok(mut health) = health_query.get_mut(*entity) {
                     health.current = cs.health;

@@ -29,6 +29,13 @@ pub const BATTLE_RADIUS: f32 = 3.0;
 /// 600 ticks = 10 real minutes.
 pub const WAR_PARTY_COOLDOWN: u32 = 600;
 
+/// Hard ceiling on NPCs per settlement (adults + children combined).
+/// Prevents unbounded growth when war casualties don't keep up with births.
+pub const MAX_SETTLEMENT_POP: u32 = 30;
+
+/// Minimum military strength required before a war party can be dispatched.
+pub const WAR_PARTY_MILITARY_MIN: f32 = 15.0;
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Per-settlement mutable population state (runtime, not world-gen output).
@@ -48,6 +55,9 @@ pub struct SettlementPopulation {
     pub home_z: f32,
     /// Ticks remaining before another war party can form (0 = ready).
     pub war_party_cooldown: u32,
+    /// Mirror of `FactionResources.military_strength` — synced by the ECS caller
+    /// before each `tick_population` call so the pure function can gate war parties.
+    pub military_strength: f32,
 }
 
 // ── Effects emitted by the tick ───────────────────────────────────────────────
@@ -90,20 +100,25 @@ pub fn tick_population(
     state.birth_ticks += 1;
     if state.birth_ticks >= BIRTH_PERIOD {
         state.birth_ticks = 0;
-        // Deterministic jitter without RNG: golden-ratio angular spread.
-        let angle = 1.618_034_f32 * std::f32::consts::TAU;
-        effects.push(PopulationEffect::SpawnChild {
-            settlement_id: state.settlement_id,
-            x: state.home_x + angle.cos(),
-            y: state.home_y + angle.sin(),
-            z: state.home_z,
-        });
+        // Only spawn if the settlement is below its population cap.
+        if state.adult_count + state.child_count < MAX_SETTLEMENT_POP {
+            // Deterministic jitter without RNG: golden-ratio angular spread.
+            let angle = 1.618_034_f32 * std::f32::consts::TAU;
+            effects.push(PopulationEffect::SpawnChild {
+                settlement_id: state.settlement_id,
+                x: state.home_x + angle.cos(),
+                y: state.home_y + angle.sin(),
+                z: state.home_z,
+            });
+        }
     }
 
     // ── War party formation ───────────────────────────────────────────────────
     if state.war_party_cooldown > 0 {
         state.war_party_cooldown -= 1;
-    } else if state.adult_count >= WAR_PARTY_THRESHOLD {
+    } else if state.adult_count >= WAR_PARTY_THRESHOLD
+        && state.military_strength >= WAR_PARTY_MILITARY_MIN
+    {
         if let Some(&(target_id, tx, ty)) = nearest_target(state.home_x, state.home_y, hostile_targets) {
             effects.push(PopulationEffect::FormWarParty {
                 attacker_faction: state.faction_id.clone(),
@@ -146,6 +161,7 @@ mod tests {
             home_y: 0.0,
             home_z: 0.0,
             war_party_cooldown: 0,
+            military_strength: WAR_PARTY_MILITARY_MIN,
         }
     }
 
@@ -229,5 +245,59 @@ mod tests {
         let (r2, e2) = tick_population(state2, &[]);
         assert_eq!(r1.birth_ticks, r2.birth_ticks);
         assert_eq!(e1, e2);
+    }
+
+    #[test]
+    fn birth_capped_at_max_pop() {
+        // Settlement already at MAX_SETTLEMENT_POP: no births should occur.
+        let mut state = make_pop(MAX_SETTLEMENT_POP / 2);
+        state.child_count = MAX_SETTLEMENT_POP - state.adult_count;
+        let mut spawn_count = 0u32;
+        for _ in 0..300 {
+            let (next, effects) = tick_population(state, &[]);
+            state = next;
+            spawn_count += effects.iter()
+                .filter(|e| matches!(e, PopulationEffect::SpawnChild { .. }))
+                .count() as u32;
+        }
+        assert_eq!(spawn_count, 0, "no birth when at population cap");
+    }
+
+    #[test]
+    fn birth_allowed_below_cap() {
+        // One slot below the cap: exactly one birth in 300 ticks.
+        let mut state = make_pop(MAX_SETTLEMENT_POP / 2);
+        state.child_count = MAX_SETTLEMENT_POP - state.adult_count - 1;
+        let mut spawn_count = 0u32;
+        for _ in 0..300 {
+            let (next, effects) = tick_population(state, &[]);
+            state = next;
+            spawn_count += effects.iter()
+                .filter(|e| matches!(e, PopulationEffect::SpawnChild { .. }))
+                .count() as u32;
+        }
+        assert_eq!(spawn_count, 1, "exactly one birth when one slot below cap");
+    }
+
+    #[test]
+    fn war_party_requires_military_strength() {
+        let target = (Uuid::new_v4(), 100.0f32, 100.0f32);
+
+        // Below military threshold: no war party.
+        let mut low_mil = make_pop(WAR_PARTY_THRESHOLD);
+        low_mil.military_strength = WAR_PARTY_MILITARY_MIN - 1.0;
+        let (_, effects) = tick_population(low_mil, &[target]);
+        assert!(
+            !effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
+            "war party should not form below military threshold"
+        );
+
+        // At military threshold: war party forms.
+        let high_mil = make_pop(WAR_PARTY_THRESHOLD);
+        let (_, effects) = tick_population(high_mil, &[target]);
+        assert!(
+            effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
+            "war party should form at military threshold"
+        );
     }
 }

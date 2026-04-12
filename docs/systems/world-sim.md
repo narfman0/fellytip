@@ -68,11 +68,20 @@ When no players are connected every chunk is Frozen, so individual NPCs age and 
 
 Each settlement has a `SettlementPopulation` entry in the `FactionPopulationState` resource. One `tick_population` call per settlement per world-sim tick drives:
 
-- **Birth** — an integer tick counter (`birth_ticks`) advances by 1 each tick. When it reaches `BIRTH_PERIOD = 300` (5 minutes), a child NPC is spawned with `GrowthStage(0.0)` and `Health { current: 5, max: 5 }`. The counter resets to 0.
-- **Growth** — `age_npcs_system` increments `GrowthStage` by `1/300` per tick. When `GrowthStage` crosses 1.0, health is upgraded to adult values (`max: 20`).
-- **War party** — when `adult_count >= WAR_PARTY_THRESHOLD (15)` and the cooldown is zero, a `FormWarPartyEvent` is emitted. `check_war_party_formation` picks up to `WAR_PARTY_SIZE (10)` adults and tags them with `WarPartyMember`. A `WAR_PARTY_COOLDOWN (600)` tick pause prevents immediate re-formation.
+- **Birth** — an integer tick counter (`birth_ticks`) advances by 1 each tick. When it reaches `BIRTH_PERIOD = 300` (5 minutes), a child NPC is spawned **if** `adult_count + child_count < MAX_SETTLEMENT_POP (30)`. The counter resets to 0 regardless of whether a spawn occurred.
+- **Growth** — `age_npcs_system` increments `GrowthStage` by `1/300` per tick (zone-speed scaled). When `GrowthStage` crosses 1.0, health is upgraded to adult values (`max: 20`).
+- **War party** — when `adult_count >= WAR_PARTY_THRESHOLD (15)` **and** `military_strength >= WAR_PARTY_MILITARY_MIN (15.0)` and the cooldown is zero, a `FormWarPartyEvent` is emitted. `check_war_party_formation` picks up to `WAR_PARTY_SIZE (10)` adults and tags them with `WarPartyMember`. A `WAR_PARTY_COOLDOWN (600)` tick pause prevents immediate re-formation.
+- **Population cap** — `MAX_SETTLEMENT_POP = 30` is a hard ceiling. Once reached, births pause until the count drops (e.g. via war casualties).
 
-Targeting is pure: `tick_population` receives a pre-filtered `hostile_targets: &[(Uuid, f32, f32)]` list from the caller, derived from `FactionRegistry` disposition maps.
+Targeting is pure: `tick_population` receives a pre-filtered `hostile_targets: &[(Uuid, f32, f32)]` list from the caller, derived from `FactionRegistry` disposition maps. The `military_strength` field is synced from `FactionResources` by the ECS caller before each call.
+
+### Equilibrium mechanisms
+
+`tick_population_system` runs several passes each tick to produce a self-regulating civilization:
+
+1. **Military strength recovery** — after counting adults, each faction's `military_strength` increases by `adult_count × 0.05` per tick, capped at 50.0. A faction wiped to 0 with 10 adults recovers ~0.5/tick, reaching `WAR_PARTY_MILITARY_MIN` in ~30 ticks.
+2. **Ecology → food** — total prey across all ecology regions is divided by faction count and added at `PREY_TO_FOOD_RATE (0.01)` per tick; each adult costs `FOOD_UPKEEP_PER_ADULT (0.005)` food/tick. Ecology collapses reduce faction food, which shifts `score_goal` weights toward `RaidResource` and away from `ExpandTerritory`.
+3. **Survivor return** — when a battle ends, surviving attackers have `WarPartyMember` removed and are teleported back to their `HomePosition`, restoring them to the home settlement's adult pool within 1 tick.
 
 ## War parties and battles (`plugins/ai.rs`)
 
@@ -82,7 +91,7 @@ Targeting is pure: `tick_population` receives a pre-filtered `hostile_targets: &
 - Combatants within `BATTLE_RADIUS` of the battle site are collected as snapshots.
 - Dice are drawn from `seeded_dice(settlement_id, tick)` — deterministic `ChaCha8Rng` seeded on `settlement_id XOR tick`.
 - `tick_battle_round` wraps `resolve_round()` for each attacker-defender pair. `BattleAttackMsg` is sent per hit.
-- When one side is eliminated, `ActiveBattle` is despawned, `BattleEndMsg` is broadcast, and the losing faction's `military_strength` is reduced.
+- When one side is eliminated, `ActiveBattle` is despawned, `BattleEndMsg` is broadcast, the losing faction's `military_strength` is reduced, and surviving attackers are teleported back to their `HomePosition`.
 
 ## Faction NPC spawning (`plugins/ai.rs`)
 
