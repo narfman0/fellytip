@@ -4,20 +4,23 @@
 //! `RegionEcology`. The function is pure — no RNG, no I/O — so it is
 //! trivially unit-testable and proptest-fuzzable.
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 // ── Identifiers ───────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SpeciesId(pub SmolStr);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct RegionId(pub SmolStr);
 
 // ── Population state ──────────────────────────────────────────────────────────
 
 /// Population of one species in one region.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Population {
     pub species: SpeciesId,
     /// Current population count (clamped to ≥ 0).
@@ -25,7 +28,7 @@ pub struct Population {
 }
 
 /// All species populations inside one region plus their interaction parameters.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegionEcology {
     pub region: RegionId,
     /// Prey population (index 0) and predator population (index 1).

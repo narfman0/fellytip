@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use bevy::prelude::*;
+use crate::plugins::persistence::Db;
 use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Health, WorldPosition},
@@ -47,7 +48,7 @@ impl Plugin for EcologyPlugin {
         app.init_resource::<EcologyState>();
         app.add_systems(
             WorldSimSchedule,
-            (run_ecology_tick, sync_wildlife_entities).chain(),
+            (run_ecology_tick, sync_wildlife_entities, flush_ecology_to_db).chain(),
         );
     }
 }
@@ -243,6 +244,67 @@ fn sync_wildlife_entities(
             spawns_this_tick += 1;
         }
     }
+}
+
+/// How many world-sim ticks between ecology SQLite flushes (30 s at 1 Hz).
+const ECOLOGY_FLUSH_INTERVAL: u64 = 30;
+
+/// Persist current ecology population counts to SQLite every
+/// `ECOLOGY_FLUSH_INTERVAL` world-sim ticks.
+///
+/// Worldwatch reads `ecology_state` directly from the DB. Follows the same
+/// block_on flush pattern as `flush_story_log` in story.rs.
+fn flush_ecology_to_db(
+    state: Res<EcologyState>,
+    tick: Res<crate::plugins::world_sim::WorldSimTick>,
+    db: Res<Db>,
+) {
+    if tick.0 == 0 || !tick.0.is_multiple_of(ECOLOGY_FLUSH_INTERVAL) {
+        return;
+    }
+
+    let pool = db.pool().clone();
+    let regions = state.regions.clone();
+    let flush_tick = tick.0;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for ecology flush");
+
+    rt.block_on(async move {
+        for ecology in &regions {
+            let region_id = ecology.region.0.as_str().to_owned();
+
+            let res_prey = sqlx::query(
+                "INSERT OR REPLACE INTO ecology_state (species_id, region_id, count) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(ecology.prey.species.0.as_str())
+            .bind(&region_id)
+            .bind(ecology.prey.count as i64)
+            .execute(&pool)
+            .await;
+
+            let res_pred = sqlx::query(
+                "INSERT OR REPLACE INTO ecology_state (species_id, region_id, count) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(ecology.predator.species.0.as_str())
+            .bind(&region_id)
+            .bind(ecology.predator.count as i64)
+            .execute(&pool)
+            .await;
+
+            if let Err(e) = res_prey {
+                tracing::warn!(region = %region_id, "Prey flush failed: {e}");
+            }
+            if let Err(e) = res_pred {
+                tracing::warn!(region = %region_id, "Predator flush failed: {e}");
+            }
+        }
+        tracing::debug!(tick = flush_tick, "Ecology state flushed to SQLite");
+    });
 }
 
 /// Extract (x, y) tile-space center for a macro-region ID of the form "macro_{rx}_{ry}".

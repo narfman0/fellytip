@@ -1,17 +1,19 @@
 //! Faction data, goals, dispositions, and the pure utility-scoring function.
 
 use crate::world::ecology::RegionId;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use std::collections::HashMap;
 
 // ── Identifiers ───────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct FactionId(pub SmolStr);
 
 // ── Disposition ───────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Disposition {
     Allied,
     Friendly,
@@ -21,7 +23,7 @@ pub enum Disposition {
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct FactionResources {
     pub food: f32,
     pub gold: f32,
@@ -30,7 +32,7 @@ pub struct FactionResources {
 
 // ── Goals ─────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum FactionGoal {
     ExpandTerritory { target_region: RegionId },
     DefendSettlement { settlement_id: SmolStr },
@@ -41,7 +43,7 @@ pub enum FactionGoal {
 
 // ── Faction ───────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Faction {
     pub id: FactionId,
     pub name: SmolStr,

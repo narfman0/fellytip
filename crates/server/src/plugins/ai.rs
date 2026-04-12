@@ -2,6 +2,7 @@
 //! each WorldSimSchedule tick (1 Hz).
 
 use bevy::prelude::*;
+use crate::plugins::persistence::Db;
 use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Health, WorldPosition},
@@ -48,8 +49,8 @@ impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FactionRegistry>();
         app.add_systems(WorldSimSchedule, (update_faction_goals, wander_npcs).chain());
-        // spawn_faction_npcs is registered in MapGenPlugin's Startup chain so it
-        // runs after generate_world inserts the Settlements resource.
+        // spawn_faction_npcs and flush_factions_to_db are registered in MapGenPlugin's
+        // Startup chain so they run after generate_world inserts the Settlements resource.
     }
 }
 
@@ -130,6 +131,51 @@ pub fn spawn_faction_npcs(
             "Faction NPCs spawned"
         );
     }
+}
+
+/// Persist the current faction registry to SQLite so worldwatch can read it.
+///
+/// Runs at Startup after `seed_factions`. Uses the same block_on pattern as
+/// `on_client_disconnected` in server/main.rs.
+pub fn flush_factions_to_db(registry: Res<FactionRegistry>, db: Res<Db>) {
+    let pool = db.pool().clone();
+    let factions = registry.factions.clone();
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for faction flush");
+
+    rt.block_on(async move {
+        for faction in &factions {
+            let id = faction.id.0.as_str().to_owned();
+            let name = faction.name.as_str().to_owned();
+            let resources = serde_json::to_string(&faction.resources)
+                .unwrap_or_else(|_| "{}".to_owned());
+            let territory = serde_json::to_string(&faction.territory)
+                .unwrap_or_else(|_| "[]".to_owned());
+            let goals = serde_json::to_string(&faction.goals)
+                .unwrap_or_else(|_| "[]".to_owned());
+
+            let res = sqlx::query(
+                "INSERT OR REPLACE INTO factions (id, name, resources, territory, goals) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&name)
+            .bind(&resources)
+            .bind(&territory)
+            .bind(&goals)
+            .execute(&pool)
+            .await;
+
+            match res {
+                Ok(_) => tracing::debug!(faction = %name, "Faction flushed to DB"),
+                Err(e) => tracing::warn!(faction = %name, "Faction flush failed: {e}"),
+            }
+        }
+        tracing::info!(count = factions.len(), "Factions persisted to SQLite");
+    });
 }
 
 /// Seed the faction registry with two starter factions for testing.

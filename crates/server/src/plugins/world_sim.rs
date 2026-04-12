@@ -7,6 +7,7 @@
 
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
+use bevy::reflect::Reflect;
 
 /// The custom schedule that world-sim systems are added to.
 #[derive(ScheduleLabel, Clone, Debug, Hash, PartialEq, Eq)]
@@ -17,7 +18,8 @@ pub struct WorldSimSchedule;
 struct WorldSimTimer(Timer);
 
 /// Number of world sim ticks elapsed since the server started.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 pub struct WorldSimTick(pub u64);
 
 pub struct WorldSimPlugin;
@@ -30,6 +32,7 @@ impl Plugin for WorldSimPlugin {
             TimerMode::Repeating,
         )));
         app.init_resource::<WorldSimTick>();
+        app.register_type::<WorldSimTick>();
         app.add_systems(Update, tick_world_sim);
     }
 }
