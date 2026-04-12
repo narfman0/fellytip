@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use bevy::{ecs::message::MessageWriter, prelude::*};
 use fellytip_shared::{
-    TICK_HZ,
+    TICK_HZ, PLAYER_SPEED,
     combat::{
         hit_die_for_class, hp_on_level_up, xp_to_next_level,
         interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
@@ -57,6 +57,16 @@ pub struct CombatParticipant {
 /// XP granted to the killer when this entity dies. Server-only (NPCs/bosses).
 #[derive(Component)]
 pub struct ExperienceReward(pub u32);
+
+/// Stores the most-recently-received movement direction for a player entity.
+///
+/// Applied every `FixedUpdate` tick so movement continues smoothly even when a
+/// UDP input packet is dropped.  Reset to `[0.0, 0.0]` by the client sending an
+/// explicit zero-vector when all movement keys are released.
+#[derive(Component, Default)]
+pub struct LastPlayerInput {
+    pub move_dir: [f32; 2],
+}
 
 /// Marker: this entity has a pending attack against `target`.
 #[derive(Component)]
@@ -135,64 +145,87 @@ fn check_faction_aggression(
 
 // ── Input processing ──────────────────────────────────────────────────────────
 
-/// Read `PlayerInput` messages arriving from clients, apply movement, and
-/// queue `PendingAttack` markers on player entities.
+/// Read `PlayerInput` messages arriving from clients, update the stored last
+/// direction, apply movement every tick, and queue combat action markers.
+///
+/// Movement is applied from `LastPlayerInput` **every** FixedUpdate tick so the
+/// player glides smoothly even when an individual UDP input packet is dropped.
+/// The client sends the zero-vector when keys are released, guaranteeing clean
+/// stops without needing reliable delivery.
 ///
 /// When a [`WorldMap`] resource is present, `pos.z` smoothly follows the
 /// terrain surface after each horizontal move (fluid height traversal).
 fn process_player_input(
     mut clients: Query<(&mut MessageReceiver<PlayerInput>, &PlayerEntity), With<ClientOf>>,
-    mut positions: Query<&mut WorldPosition>,
+    mut player_state: Query<(&mut WorldPosition, &mut LastPlayerInput)>,
     enemies: Query<(Entity, &CombatParticipant), With<ExperienceReward>>,
     map: Option<Res<WorldMap>>,
     mut commands: Commands,
 ) {
     let dt = (1.0 / TICK_HZ) as f32;
-    const SPEED: f32 = 5.0;
 
     for (mut receiver, player_entity) in clients.iter_mut() {
+        // Phase 1: drain all received messages this tick.
+        // Keep only the last move_dir (most recent wins); collect all actions.
+        let mut pending_actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)> = Vec::new();
+        let mut got_new_dir = false;
+        let mut new_dir = [0.0_f32; 2];
+
         for input in receiver.receive() {
-            // Apply movement with walkability check and wall-slide.
-            let [dx, dy] = input.move_dir;
+            new_dir = input.move_dir;
+            got_new_dir = true;
+            pending_actions.push((input.action, input.target));
+        }
+
+        // Phase 2: update LastPlayerInput if we received any message this tick.
+        if got_new_dir {
+            if let Ok((_, mut last)) = player_state.get_mut(player_entity.0) {
+                last.move_dir = new_dir;
+            }
+        }
+
+        // Phase 3: apply LastPlayerInput movement every tick (not just on receive).
+        if let Ok((mut pos, last)) = player_state.get_mut(player_entity.0) {
+            let [dx, dy] = last.move_dir;
             if dx != 0.0 || dy != 0.0 {
-                if let Ok(mut pos) = positions.get_mut(player_entity.0) {
-                    let old_x = pos.x;
-                    let old_y = pos.y;
-                    let new_x = pos.x + dx * SPEED * dt;
-                    let new_y = pos.y + dy * SPEED * dt;
+                let old_x = pos.x;
+                let old_y = pos.y;
+                let new_x = pos.x + dx * PLAYER_SPEED * dt;
+                let new_y = pos.y + dy * PLAYER_SPEED * dt;
 
-                    if let Some(ref m) = map {
-                        // Attempt full diagonal move first; fall back to axis-aligned slides
-                        // so the player slides along walls rather than stopping dead.
-                        let can_xy = is_walkable_at(m, new_x, new_y, pos.z);
-                        let can_x  = is_walkable_at(m, new_x, pos.y, pos.z);
-                        let can_y  = is_walkable_at(m, pos.x, new_y, pos.z);
-                        if can_xy      { pos.x = new_x; pos.y = new_y; }
-                        else if can_x  { pos.x = new_x; }
-                        else if can_y  { pos.y = new_y; }
-                        // else: fully blocked; position unchanged
+                if let Some(ref m) = map {
+                    // Attempt full diagonal move first; fall back to axis-aligned slides
+                    // so the player slides along walls rather than stopping dead.
+                    let can_xy = is_walkable_at(m, new_x, new_y, pos.z);
+                    let can_x  = is_walkable_at(m, new_x, pos.y, pos.z);
+                    let can_y  = is_walkable_at(m, pos.x, new_y, pos.z);
+                    if can_xy      { pos.x = new_x; pos.y = new_y; }
+                    else if can_x  { pos.x = new_x; }
+                    else if can_y  { pos.y = new_y; }
+                    // else: fully blocked; position unchanged
 
-                        // Height follow only when the position actually changed.
-                        if pos.x != old_x || pos.y != old_y {
-                            if let Some(target_z) = smooth_surface_at(m, pos.x, pos.y, pos.z) {
-                                let delta = (target_z - pos.z) * Z_FOLLOW_RATE * dt;
-                                // Ascent: limited to one step per tick (prevents tunnelling).
-                                // Descent: FALL_SPEED cap so shafts take ~1-2 s to traverse.
-                                pos.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
-                            }
+                    // Height follow only when the position actually changed.
+                    if pos.x != old_x || pos.y != old_y {
+                        if let Some(target_z) = smooth_surface_at(m, pos.x, pos.y, pos.z) {
+                            let delta = (target_z - pos.z) * Z_FOLLOW_RATE * dt;
+                            // Ascent: limited to one step per tick (prevents tunnelling).
+                            // Descent: FALL_SPEED cap so shafts take ~1-2 s to traverse.
+                            pos.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
                         }
-                    } else {
-                        // Map not yet loaded — apply movement unrestricted.
-                        pos.x = new_x;
-                        pos.y = new_y;
                     }
+                } else {
+                    // Map not yet loaded — apply movement unrestricted.
+                    pos.x = new_x;
+                    pos.y = new_y;
                 }
             }
+        }
 
-            // Handle combat action
-            match input.action {
+        // Phase 4: handle combat actions from this tick's messages.
+        for (action, target_uuid) in pending_actions {
+            match action {
                 Some(ActionIntent::BasicAttack) => {
-                    let target = if let Some(uuid) = input.target {
+                    let target = if let Some(uuid) = target_uuid {
                         enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
                     } else {
                         enemies.iter().next().map(|(e, _)| e)
@@ -209,7 +242,7 @@ fn process_player_input(
                     }
                 }
                 Some(ActionIntent::UseAbility(ability_id)) => {
-                    let target = if let Some(uuid) = input.target {
+                    let target = if let Some(uuid) = target_uuid {
                         enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
                     } else {
                         enemies.iter().next().map(|(e, _)| e)

@@ -68,22 +68,16 @@ async fn insert_story_event(
     Ok(())
 }
 
-/// Every `FLUSH_INTERVAL_TICKS` world-sim ticks: write accumulated events to SQLite.
-fn flush_story_log(
-    mut log: ResMut<StoryLog>,
-    tick: Res<WorldSimTick>,
-    db: Res<Db>,
-) {
-    if tick.0 == 0 || !tick.0.is_multiple_of(FLUSH_INTERVAL_TICKS) {
-        return;
-    }
-
+/// Flush all pending story events to SQLite immediately (blocking).
+///
+/// Called by the timed flush system and by the graceful shutdown hook so that
+/// both code paths share the same SQL logic.
+pub fn flush_story_now(log: &mut StoryLog, db: &Db) {
     let events: Vec<StoryEvent> = log.events.drain(..).collect();
     if events.is_empty() {
         return;
     }
 
-    let flush_tick = tick.0;
     let pool = db.pool().clone();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -98,6 +92,14 @@ fn flush_story_log(
                 Err(e) => tracing::warn!(event_id = %ev.id, "Story event flush failed: {e}"),
             }
         }
-        tracing::info!(flushed = ok, total = events.len(), tick = flush_tick, "Story log flushed to SQLite");
+        tracing::info!(flushed = ok, total = events.len(), "Story log flushed to SQLite");
     });
+}
+
+/// Every `FLUSH_INTERVAL_TICKS` world-sim ticks: write accumulated events to SQLite.
+fn flush_story_log(mut log: ResMut<StoryLog>, tick: Res<WorldSimTick>, db: Res<Db>) {
+    if tick.0 == 0 || !tick.0.is_multiple_of(FLUSH_INTERVAL_TICKS) {
+        return;
+    }
+    flush_story_now(&mut log, &db);
 }

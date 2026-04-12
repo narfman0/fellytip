@@ -250,23 +250,13 @@ fn sync_wildlife_entities(
 /// How many world-sim ticks between ecology SQLite flushes (30 s at 1 Hz).
 const ECOLOGY_FLUSH_INTERVAL: u64 = 30;
 
-/// Persist current ecology population counts to SQLite every
-/// `ECOLOGY_FLUSH_INTERVAL` world-sim ticks.
+/// Flush current ecology population counts to SQLite immediately (blocking).
 ///
-/// Worldwatch reads `ecology_state` directly from the DB. Follows the same
-/// block_on flush pattern as `flush_story_log` in story.rs.
-fn flush_ecology_to_db(
-    state: Res<EcologyState>,
-    tick: Res<crate::plugins::world_sim::WorldSimTick>,
-    db: Res<Db>,
-) {
-    if tick.0 == 0 || !tick.0.is_multiple_of(ECOLOGY_FLUSH_INTERVAL) {
-        return;
-    }
-
+/// Called by the timed flush system and by the graceful shutdown hook so that
+/// both code paths share the same SQL logic.
+pub fn flush_ecology_now(state: &EcologyState, db: &Db) {
     let pool = db.pool().clone();
     let regions = state.regions.clone();
-    let flush_tick = tick.0;
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -304,8 +294,24 @@ fn flush_ecology_to_db(
                 tracing::warn!(region = %region_id, "Predator flush failed: {e}");
             }
         }
-        tracing::debug!(tick = flush_tick, "Ecology state flushed to SQLite");
+        tracing::debug!("Ecology state flushed to SQLite");
     });
+}
+
+/// Persist current ecology population counts to SQLite every
+/// `ECOLOGY_FLUSH_INTERVAL` world-sim ticks.
+///
+/// Worldwatch reads `ecology_state` directly from the DB. Follows the same
+/// block_on flush pattern as `flush_story_log` in story.rs.
+fn flush_ecology_to_db(
+    state: Res<EcologyState>,
+    tick: Res<crate::plugins::world_sim::WorldSimTick>,
+    db: Res<Db>,
+) {
+    if tick.0 == 0 || !tick.0.is_multiple_of(ECOLOGY_FLUSH_INTERVAL) {
+        return;
+    }
+    flush_ecology_now(&state, &db);
 }
 
 /// Extract (x, y) tile-space center for a macro-region ID of the form "macro_{rx}_{ry}".

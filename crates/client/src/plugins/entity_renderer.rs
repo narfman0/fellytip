@@ -8,8 +8,14 @@
 //! Same convention as `tile_renderer`: world (x, y, z_elevation) → Bevy (x, z_elevation, y).
 //! The capsule center is placed half a unit above the tile surface so the
 //! entity visually stands on the ground.
+//!
+//! # Local-player vs remote entities
+//! The local player's transform tracks `PredictedPosition` (updated every frame
+//! on input) for zero-latency visual response.  Remote entity transforms still
+//! track the authoritative `WorldPosition` from replication.
 
 use bevy::prelude::*;
+use crate::{LocalPlayer, PredictedPosition};
 use fellytip_shared::components::WorldPosition;
 use lightyear::prelude::Replicated;
 
@@ -18,7 +24,10 @@ pub struct EntityRendererPlugin;
 impl Plugin for EntityRendererPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_entity_assets)
-            .add_systems(Update, (spawn_entity_visuals, sync_entity_transforms));
+            .add_systems(
+                Update,
+                (spawn_entity_visuals, sync_remote_transforms, sync_local_player_transform),
+            );
     }
 }
 
@@ -59,7 +68,8 @@ fn world_to_bevy(pos: &WorldPosition) -> Vec3 {
 // ── Systems ───────────────────────────────────────────────────────────────────
 
 type NewReplicatedPos = (Added<WorldPosition>, With<Replicated>);
-type ChangedReplicatedPos = (Changed<WorldPosition>, With<Replicated>);
+type ChangedRemotePos = (Changed<WorldPosition>, With<Replicated>, Without<LocalPlayer>);
+type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
 
 /// Fires once per entity the first time `WorldPosition` is added by replication.
 /// Inserts the visual components directly onto the replicated entity.
@@ -77,11 +87,22 @@ fn spawn_entity_visuals(
     }
 }
 
-/// Keeps the Bevy `Transform` in sync whenever the server pushes a position update.
-fn sync_entity_transforms(
-    mut query: Query<(&WorldPosition, &mut Transform), ChangedReplicatedPos>,
-) {
+/// Keeps remote-entity transforms in sync with authoritative `WorldPosition`.
+///
+/// Excludes the local player: its transform is driven by `PredictedPosition`
+/// in `sync_local_player_transform` for zero-latency visual feedback.
+fn sync_remote_transforms(mut query: Query<(&WorldPosition, &mut Transform), ChangedRemotePos>) {
     for (pos, mut transform) in &mut query {
         transform.translation = world_to_bevy(pos);
+    }
+}
+
+/// Keeps the local player's transform in sync with `PredictedPosition` so
+/// visual movement is immediate — no 50 ms server round-trip required.
+fn sync_local_player_transform(
+    mut query: Query<(&PredictedPosition, &mut Transform), ChangedPredictedPos>,
+) {
+    for (pred, mut transform) in &mut query {
+        transform.translation = Vec3::new(pred.x, pred.z + CAPSULE_HALF_HEIGHT, pred.y);
     }
 }

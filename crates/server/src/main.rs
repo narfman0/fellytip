@@ -10,30 +10,50 @@ use fellytip_shared::{
     protocol::FellytipProtocolPlugin,
     world::{
         map::{find_surface_spawn, WorldMap, MAP_WIDTH, MAP_HEIGHT},
-        story::GameEntityId,
+        story::{GameEntityId, StoryLog},
     },
 };
 
+use plugins::ecology::EcologyState;
 use plugins::map_gen::MapGenConfig;
 use lightyear::prelude::{server::*, *};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use plugins::combat::{CombatParticipant, PlayerEntity};
+use plugins::combat::{CombatParticipant, LastPlayerInput, PlayerEntity};
 use plugins::persistence::Db;
 
 /// BRP HTTP port for the server (used by ralph scenarios and tooling).
 const BRP_PORT: u16 = 15702;
 
+/// Tracks how many clients are currently connected and whether any have ever
+/// connected.  Used by the idle-shutdown system.
+#[derive(Resource, Default)]
+struct ConnectedCount {
+    /// Number of currently-connected clients.
+    current: u32,
+    /// True once the first client has connected since server start.
+    /// Prevents idle-shutdown from firing on a server that nobody ever joined.
+    ever_connected: bool,
+}
+
+/// One-shot timer driving the idle-shutdown grace period.
+/// Ticks only while `ConnectedCount::current == 0` and `ever_connected == true`.
+/// Reset to zero whenever a client is online.
+#[derive(Resource)]
+struct IdleTimer(Timer);
+
 fn main() {
     tracing_subscriber::fmt::init();
     let args: Vec<String> = std::env::args().collect();
-    let combat_test = args.iter().any(|a| a == "--combat-test");
+    let combat_test     = args.iter().any(|a| a == "--combat-test");
+    let no_idle_shutdown = args.iter().any(|a| a == "--no-idle-shutdown");
 
     // Parse map gen CLI args (only meaningful outside combat-test mode).
     let map_seed   = parse_arg(&args, "--seed",       WORLD_SEED);
     let map_width  = parse_arg(&args, "--map-width",  MAP_WIDTH);
     let map_height = parse_arg(&args, "--map-height", MAP_HEIGHT);
+    let idle_secs: f32 = parse_arg(&args, "--idle-secs", 300.0);
 
     // Plugins shared by all run modes.
     let mut app = App::new();
@@ -58,6 +78,8 @@ fn main() {
         // Full game world with map gen, ecology, factions, and live networking.
         // Insert MapGenConfig before MapGenPlugin so it can read it.
         app.insert_resource(MapGenConfig { seed: map_seed, width: map_width, height: map_height })
+            .insert_resource(ConnectedCount::default())
+            .insert_resource(IdleTimer(Timer::from_seconds(idle_secs, TimerMode::Once)))
             .add_plugins(plugins::map_gen::MapGenPlugin)
             .add_plugins(plugins::ecology::EcologyPlugin)
             .add_plugins(plugins::ai::AiPlugin)
@@ -73,6 +95,13 @@ fn main() {
             .add_observer(on_link_spawned)
             .add_observer(on_client_connected)
             .add_observer(on_client_disconnected);
+
+        if !no_idle_shutdown {
+            app.add_systems(Update, idle_shutdown);
+            tracing::info!(idle_secs, "Idle-shutdown enabled");
+        } else {
+            tracing::info!("Idle-shutdown disabled (--no-idle-shutdown)");
+        }
     }
 
     app.run();
@@ -118,11 +147,14 @@ fn on_link_spawned(trigger: On<Add, LinkOf>, mut commands: Commands) {
 
 /// When a client disconnects, save its player's current state to SQLite.
 fn on_client_disconnected(
-    trigger: On<Add, Disconnected>,
+    trigger:  On<Add, Disconnected>,
     client_q: Query<&PlayerEntity>,
     player_q: Query<(&CombatParticipant, &WorldPosition, &Health, &Experience)>,
+    mut count: ResMut<ConnectedCount>,
     db: Res<Db>,
 ) {
+    count.current = count.current.saturating_sub(1);
+
     let Ok(PlayerEntity(player_entity)) = client_q.get(trigger.entity) else {
         return;
     };
@@ -181,11 +213,15 @@ fn on_client_connected(
     trigger: On<Add, Connected>,
     query: Query<(), With<ClientOf>>,
     map: Option<Res<WorldMap>>,
+    mut count: ResMut<ConnectedCount>,
     mut commands: Commands,
 ) {
     if query.get(trigger.entity).is_err() {
         return;
     }
+    count.current += 1;
+    count.ever_connected = true;
+
     let (spawn_x, spawn_y, spawn_z) = map
         .as_deref()
         .map(find_surface_spawn)
@@ -210,9 +246,50 @@ fn on_client_connected(
             },
             GameEntityId(player_uuid),
             Experience::new(),
+            LastPlayerInput::default(),
             Replicate::to_clients(NetworkTarget::All),
         ))
         .id();
     commands.entity(trigger.entity).insert(PlayerEntity(player));
     tracing::info!("Client {:?} connected → player entity {:?}", trigger.entity, player);
+}
+
+// ── Idle shutdown ─────────────────────────────────────────────────────────────
+
+/// Flush server state and terminate after all clients have been gone for the
+/// configured idle period.
+///
+/// The countdown only begins once at least one client has ever connected, so a
+/// bare dedicated server (without `--no-idle-shutdown`) doesn't self-terminate
+/// if nobody ever joins.  Resets to zero whenever a client is online.
+///
+/// Flushes story events and ecology state before terminating so no data is
+/// lost.  On the idle-shutdown path all clients will already have disconnected
+/// (triggering `on_client_disconnected`), so there are no online players to
+/// save.  Uses `std::process::exit` to avoid Bevy/lightyear event-API
+/// compatibility issues.
+fn idle_shutdown(
+    time:          Res<Time>,
+    count:         Res<ConnectedCount>,
+    mut timer:     ResMut<IdleTimer>,
+    mut story:     ResMut<StoryLog>,
+    ecology:       Option<Res<EcologyState>>,
+    db:            Res<Db>,
+) {
+    if count.current > 0 {
+        timer.0.reset();
+        return;
+    }
+    if !count.ever_connected {
+        return;
+    }
+    if timer.0.tick(time.delta()).just_finished() {
+        tracing::info!("All players gone for idle period — flushing and shutting down");
+        plugins::story::flush_story_now(&mut story, &db);
+        if let Some(eco) = ecology {
+            plugins::ecology::flush_ecology_now(&eco, &db);
+        }
+        tracing::info!("Server state flushed — goodbye");
+        std::process::exit(0);
+    }
 }

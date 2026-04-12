@@ -27,3 +27,7 @@ pub const NET_PORT: u16 = 5000;
 
 /// Fixed-update tick rate (Hz) for combat / movement.
 pub const TICK_HZ: f64 = 62.5;
+
+/// Player movement speed in world units per second.
+/// Shared between server authoritative movement and client-side prediction.
+pub const PLAYER_SPEED: f32 = 10.0;
