@@ -74,10 +74,10 @@ fn maybe_spawn_server() -> Option<std::process::Child> {
         path
     };
 
-    // Forward all args except the binary name and --headless to the server.
+    // Forward all args except client-only flags to the server.
     let forward: Vec<String> = std::env::args()
         .skip(1)
-        .filter(|a| a != "--headless")
+        .filter(|a| a != "--headless" && a != "--auto-launch")
         .collect();
 
     let child = std::process::Command::new(&server_bin)
@@ -108,10 +108,12 @@ fn maybe_spawn_server() -> Option<std::process::Child> {
 fn main() {
     let headless = std::env::args().any(|a| a == "--headless");
 
-    // In windowed mode, ensure a local server is running before the Bevy app
-    // starts.  We hold the Child handle for the duration of main() so the handle
-    // isn't released prematurely (dropping it does not kill the server process).
-    let _server_child = if !headless { maybe_spawn_server() } else { None };
+    // In windowed debug builds, ensure a local server is running before the Bevy
+    // app starts.  Disabled in release builds (server must be started separately).
+    // Pass --auto-launch to force auto-launch in release builds.
+    let auto_launch = cfg!(debug_assertions)
+        || std::env::args().any(|a| a == "--auto-launch");
+    let _server_child = if !headless && auto_launch { maybe_spawn_server() } else { None };
 
     let mut app = App::new();
 
