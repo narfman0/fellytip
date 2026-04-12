@@ -16,7 +16,7 @@ use fellytip_shared::{
     },
 };
 
-use crate::plugins::{ai::seed_factions, world_sim::WorldSimTick};
+use crate::plugins::{ai::seed_factions, ecology::seed_ecology, world_sim::WorldSimTick};
 
 /// WorldSim ticks to run before the server accepts connections.
 ///
@@ -30,7 +30,7 @@ impl Plugin for MapGenPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Startup,
-            (generate_world, history_warp)
+            (generate_world, seed_ecology, history_warp)
                 .chain()
                 .after(seed_factions),
         );

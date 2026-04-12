@@ -48,6 +48,45 @@ At equilibrium, a well-resourced faction expands; a food-stressed faction raids;
 
 NPC entities wander toward their faction's active goal each world-sim tick. Individual NPC pathfinding runs in `FixedUpdate`.
 
+## Faction NPC spawning (`plugins/ai.rs`)
+
+On server startup — after `MapGenPlugin` inserts `Settlements` — `spawn_faction_npcs` runs once and creates three guard NPCs per faction at their assigned home settlement. Each faction is mapped to a settlement by index (`faction_idx % settlements.len()`), so factions distribute evenly across available settlements.
+
+Each NPC spawns with:
+- `WorldPosition` at the settlement centre, offset by a fixed tile-unit delta so they are not stacked
+- `Health { current: 20, max: 20 }`
+- `CombatParticipant` — Warrior, level 1, AC 11 (leather), STR 10, DEX 10, CON 10
+- `ExperienceReward(50)` — CR 1/4 per the SRD CR→XP table
+- `FactionMember`, `CurrentGoal(None)`, `HomePosition` components
+
+NPCs are stationary until pathfinding is implemented. The `wander_npcs` WorldSimSchedule system is a placeholder that does nothing; it will be replaced with goal-directed movement in a later milestone.
+
+## Wildlife entity spawning (`plugins/ecology.rs`)
+
+`seed_ecology` runs once at startup (registered in `MapGenPlugin`'s Startup chain, between `generate_world` and `history_warp`). It divides the 512×512 tile map into a 4×4 grid of macro-regions and assigns Lotka-Volterra parameters to each based on its dominant biome:
+
+| Biome group | prey_start | pred_start | r | K |
+|---|---|---|---|---|
+| Temperate forest, Grassland, Plains, Savanna | 100 | 20 | 0.5 | 200 |
+| Tropical forest / Rainforest | 80 | 18 | 0.5 | 180 |
+| Taiga (boreal) | 60 | 12 | 0.4 | 120 |
+| Stone | 40 | 8 | 0.4 | 80 |
+| Desert / Tundra / Polar | 20 | 4 | 0.3 | 50 |
+| Water / Mountain / Underground | skipped | — | — | — |
+
+After history warp runs, `sync_wildlife_entities` executes each WorldSimSchedule tick. It maintains a live pool of `WildlifeNpc` entities whose count tracks the simulated predator population:
+
+- Desired entity count = `floor(predator.count / 20)` per region
+- Spawning is capped at `MAX_SPAWNS_PER_TICK = 5` new entities per tick to prevent history-warp spikes
+- When predator population falls below `SPAWN_THRESHOLD = 10.0`, all wildlife in that region are despawned
+
+Each wildlife NPC has:
+- `WildlifeNpc { region }` to track its home macro-region
+- `WorldPosition` at the region's tile-space centre, z from `smooth_surface_at`
+- `Health { current: 15, max: 15 }`
+- `CombatParticipant` — Rogue, level 1, AC 10, STR 8, DEX 12, CON 10
+- `ExperienceReward(25)` — CR 1/8 per the SRD CR→XP table
+
 ## Story log (`world/story.rs`)
 
 Any server system can emit a `WriteStoryEvent` Bevy message. The story plugin collects these and appends them to the `StoryLog` resource — an in-memory ordered list of `StoryEvent` values indexed by lore tags.
