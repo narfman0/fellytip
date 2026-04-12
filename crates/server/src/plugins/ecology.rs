@@ -10,7 +10,7 @@ use fellytip_shared::{
     components::{Health, WorldPosition},
     world::{
         ecology::{EcologyEvent, Population, RegionEcology, RegionId, SpeciesId, tick_ecology},
-        map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH, STEP_HEIGHT},
+        map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH},
     },
 };
 use uuid::Uuid;
@@ -65,7 +65,10 @@ pub fn seed_ecology(map: Res<WorldMap>, mut state: ResMut<EcologyState>) {
             let cy = (ry * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32;
 
             let Some(col) = map.column_at(cx, cy) else { continue };
-            let Some(surface) = col.surface_layer(0.0, STEP_HEIGHT) else { continue };
+            // Find the topmost walkable layer at this sample point.
+            // surface_layer(z, step) restricts by height; we want the dominant biome
+            // regardless of elevation, so we iterate directly.
+            let Some(surface) = col.layers.iter().rev().find(|l| l.walkable) else { continue };
 
             // Assign prey/predator starting counts and Lotka-Volterra coefficients
             // based on the biome's resource richness.

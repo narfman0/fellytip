@@ -4,7 +4,9 @@
 //! 1. Generate the tile map from a fixed seed using fBm + biome + river passes.
 //! 2. Place surface and underground settlements.
 //! 3. Assign territories and stamp the road network onto the map.
-//! 4. Run `WorldSimSchedule` for [`HISTORY_WARP_TICKS`] ticks at warp speed so
+//! 4. Seed ecology from the world map biomes.
+//! 5. Spawn faction guard NPCs at their home settlements.
+//! 6. Run `WorldSimSchedule` for [`HISTORY_WARP_TICKS`] ticks at warp speed so
 //!    factions and ecology have meaningful state before the first player connects.
 
 use bevy::prelude::*;
@@ -16,7 +18,7 @@ use fellytip_shared::{
     },
 };
 
-use crate::plugins::{ai::seed_factions, ecology::seed_ecology, world_sim::WorldSimTick};
+use crate::plugins::{ai::{seed_factions, spawn_faction_npcs}, ecology::seed_ecology, world_sim::WorldSimTick};
 
 /// WorldSim ticks to run before the server accepts connections.
 ///
@@ -28,9 +30,12 @@ pub struct MapGenPlugin;
 
 impl Plugin for MapGenPlugin {
     fn build(&self, app: &mut App) {
+        // apply_deferred is inserted between systems that use Commands and systems
+        // that read the resources those commands insert, because Commands are
+        // deferred in Bevy and are not flushed until the next apply_deferred.
         app.add_systems(
             Startup,
-            (generate_world, seed_ecology, history_warp)
+            (generate_world, ApplyDeferred, seed_ecology, spawn_faction_npcs, history_warp)
                 .chain()
                 .after(seed_factions),
         );

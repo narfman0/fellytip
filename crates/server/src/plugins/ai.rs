@@ -48,7 +48,8 @@ impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FactionRegistry>();
         app.add_systems(WorldSimSchedule, (update_faction_goals, wander_npcs).chain());
-        app.add_systems(Startup, spawn_faction_npcs);
+        // spawn_faction_npcs is registered in MapGenPlugin's Startup chain so it
+        // runs after generate_world inserts the Settlements resource.
     }
 }
 

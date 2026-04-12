@@ -1,4 +1,9 @@
 //! Blocking BRP (Bevy Remote Protocol) HTTP client.
+//!
+//! Bevy 0.18 renamed all built-in BRP methods from `bevy/*` to `world.*`:
+//!   bevy/query → world.query
+//!   bevy/get   → world.get_components  (response wraps components in {"components":{…}})
+//!   bevy/list  → world.list_resources  (used for ping)
 
 use anyhow::{Context, Result, bail};
 use reqwest::blocking::Client;
@@ -51,32 +56,37 @@ impl BrpClient {
         Ok(resp["result"].clone())
     }
 
-    /// `bevy/query` — returns a list of matching entity objects.
+    /// `world.query` — returns a list of matching entity objects.
     pub fn query(&self, components: &[&str]) -> Result<Vec<Value>> {
         let result = self.call(
-            "bevy/query",
+            "world.query",
             json!({ "data": { "components": components } }),
         )?;
         match result {
             Value::Array(arr) => Ok(arr),
             Value::Null => Ok(vec![]),
-            other => bail!("unexpected bevy/query result: {other}"),
+            other => bail!("unexpected world.query result: {other}"),
         }
     }
 
-    /// `bevy/get` — fetch specific components from a single entity.
+    /// `world.get_components` — fetch specific components from a single entity.
+    #[allow(dead_code)]
+    /// Returns the component map directly (keyed by component path) so callers
+    /// can use `result["ComponentPath"]["field"]` without unwrapping the envelope.
     pub fn get(&self, entity: u64, components: &[&str]) -> Result<Value> {
-        self.call(
-            "bevy/get",
+        let result = self.call(
+            "world.get_components",
             json!({
                 "entity": entity,
                 "components": components,
             }),
-        )
+        )?;
+        // Bevy 0.18 wraps the components under a "components" key.
+        Ok(result["components"].clone())
     }
 
-    /// Check whether the server is reachable.
+    /// Check whether the server is reachable by listing resources.
     pub fn ping(&self) -> bool {
-        self.call("bevy/list", json!({})).is_ok()
+        self.call("world.list_resources", json!({})).is_ok()
     }
 }
