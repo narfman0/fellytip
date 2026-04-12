@@ -18,7 +18,7 @@ fn spawn_lights(mut commands: Commands) {
         DirectionalLight {
             color: Color::srgb(1.0, 0.97, 0.88), // slightly warm white
             illuminance: 50_000.0,
-            shadows_enabled: false, // enable when shadow maps are needed
+            shadows_enabled: true,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(

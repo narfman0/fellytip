@@ -45,7 +45,7 @@ fn main() {
         )
         .add_plugins(plugins::SceneLightingPlugin)
         .add_plugins(plugins::OrbitCameraPlugin)
-        .add_plugins(plugins::TileRendererPlugin)
+        .add_plugins(plugins::TerrainPlugin)
         .add_plugins(plugins::EntityRendererPlugin)
         .add_plugins(plugins::HudPlugin);
     }

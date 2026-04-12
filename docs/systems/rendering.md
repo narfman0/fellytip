@@ -8,7 +8,7 @@ Specific numeric values (angles, lux values, render radius, mesh dimensions) are
 
 The client runs in two modes:
 
-**Windowed** — default; uses `DefaultPlugins` with a 3D PBR render pipeline. An orbit camera, scene lighting, and a rolling tile mesh grid are active.
+**Windowed** — default; uses `DefaultPlugins` with a 3D PBR render pipeline. An orbit camera, scene lighting, and a smooth chunked terrain mesh are active.
 
 **Headless** — `cargo run -p fellytip-client -- --headless`. Uses `MinimalPlugins` with no window. Used for automated testing via BRP. The client still connects to the server, sends input, and receives replicated state — it just doesn't display anything.
 
@@ -27,36 +27,64 @@ Orbit state (yaw, pitch, distance, target) lives in `OrbitCamera`. The Bevy `Tra
 ## Lighting (`crates/client/src/plugins/scene_lighting.rs`)
 
 `SceneLightingPlugin` spawns two light sources:
-- **DirectionalLight** — bright warm-white sun, angled down from upper-left. Shadows disabled (can be toggled later).
-- **AmbientLight** — dim sky-blue fill to keep unlit faces readable. Spawned as a component entity (Bevy 0.18 ambient light API).
+- **DirectionalLight** — bright warm-white sun, angled down from upper-left. Shadow maps enabled.
+- **AmbientLight** — sky-blue fill to keep unlit faces readable. Spawned as a component entity (Bevy 0.18 ambient light API).
 
-## Tile rendering (`crates/client/src/plugins/tile_renderer.rs`)
+## Terrain rendering (`crates/client/src/plugins/terrain/`)
 
-`TileRendererPlugin` renders the world as flat PBR cuboids.
+`TerrainPlugin` renders the world as a smooth chunked terrain using PBR `Mesh` entities with vertex colors. It replaces the old flat-cuboid `TileRendererPlugin`.
 
 ### World map on client
 
-The client regenerates `WorldMap` locally at startup using `generate_map(WORLD_SEED)` — the same pure deterministic function the server uses. This avoids replicating the full terrain over the network. `WORLD_SEED` is defined in `crates/shared/src/lib.rs`.
+The client regenerates `WorldMap` locally at startup using the same `generate_map(WORLD_SEED, MAP_WIDTH, MAP_HEIGHT)` call as the server — pure and deterministic, so no network transfer needed. The map is stored as a Bevy `Resource`.
 
-### Mesh
+### Chunk architecture
 
-All tiles share one `Mesh` handle (a flat cuboid). The top face sits at Bevy Y = `z_top`; the mesh center is slightly below that. Exact dimensions are in `setup_tile_assets`.
+The world is divided into 32×32-tile **chunks** (`CHUNK_TILES = 32` in `lod.rs`). Each chunk is one `Mesh3d` entity. All chunk vertices are in world space; chunk entities use `Transform::IDENTITY`.
+
+A single `StandardMaterial` (vertex colors, `base_color = WHITE`) is shared across all chunks, so biome color variation comes entirely from `Mesh::ATTRIBUTE_COLOR` — Bevy's PBR pipeline applies vertex colors automatically.
+
+### Smooth heights
+
+Every `TileLayer` stores `corner_offsets: [TL, TR, BL, BR]`, where each value is the average `z_top` contribution of the four tile centers sharing that corner. Because the formula is symmetric, **all four tiles touching a corner compute the same offset** — guaranteeing seamless heights across chunk boundaries.
+
+The vertex at tile-grid position `(gx, gy)` uses `layer.z_top + layer.corner_offsets[0]` (TL corner of tile `(gx, gy)`). Per-vertex normals are computed via central differences over the height grid.
+
+### Vertex colors
+
+`corner_biome_color(map, gx, gy)` averages the biome colors of the four tiles sharing corner `(gx, gy)`. Colors for each `TileKind` are hardcoded linear-sRGB values in `material.rs` (matching the old `material_for()` table). No textures; all variation is vertex-color blending.
+
+### LOD levels (`lod.rs`)
+
+| `LodLevel` | Step | Vertices/side | Distance threshold |
+|---|---|---|---|
+| `Full`    | 1 | 33 | < 80 units   |
+| `Half`    | 2 | 17 | < 192 units  |
+| `Quarter` | 4 |  9 | ≥ 192 units  |
+
+Distance thresholds are tuned so that at the maximum camera zoom (~400 units) the entire visible area fits within `render_radius = 13` chunks.
+
+LOD transitions are **constrained to ±1 level** between neighbors (BFS clamping in `update_chunk_visibility`). Where a fine chunk borders a coarser one, T-junction stitching eliminates visible cracks: odd-indexed edge vertices are removed (whole triangles filtered) and replaced with T-collapse triangles.
 
 ### Coordinate mapping
 
 ```
-world (x, y, z_elevation) → Bevy (x, z_elevation, y)
+tile grid (gx, gy, height) → Bevy (gx − half_w, height, gy − half_h)
 ```
 
-Bevy is Y-up; the game's elevation axis maps to Bevy Y. World Y (north) becomes Bevy Z (depth).
+Bevy is Y-up; terrain height maps to Bevy Y. Tile column index maps to Bevy X (east); tile row index maps to Bevy Z (south). The origin is the center of the map.
 
-### Materials
+### Chunk lifecycle (`manager.rs`)
 
-One `StandardMaterial` per `TileKind` (see `material_for` in `tile_renderer.rs`). Same biome → same handle → Bevy automatic GPU instancing. Water and River tiles use `AlphaMode::Blend`. `LuminousGrotto` has a teal emissive glow.
+Three systems run in order every `Update` frame:
 
-### Rolling window
+1. **`update_chunk_visibility`** — reads `OrbitCamera.target`, computes which chunks are within `render_radius`, selects LOD per chunk by distance, runs BFS LOD clamping, marks changed chunks as dirty, records out-of-range chunks for despawn.
+2. **`rebuild_dirty_chunks`** — calls `build_chunk_mesh` for each dirty chunk coord + LOD, inserts the new `Mesh` into `Assets<Mesh>`, caches the handle.
+3. **`apply_chunk_meshes`** — spawns new chunk entities, despawns out-of-range ones, swaps `Mesh3d` handles on entities whose LOD changed.
 
-A rolling square of radius `RENDER_RADIUS` (defined in `tile_renderer.rs`) around the orbit camera target. The grid rebuilds only when the camera target crosses a tile boundary. Tiles leaving the window are despawned; tiles entering it are spawned. The topmost surface layer of each column is rendered; underground layers become visible only when the camera descends below the surface.
+## Entity rendering (`crates/client/src/plugins/entity_renderer.rs`)
+
+`EntityRendererPlugin` spawns a colored capsule for each replicated entity that has `WorldPosition`. A system (`sync_entity_transforms`) updates the Bevy `Transform` every frame from `WorldPosition`, using the same coordinate mapping as the terrain.
 
 ## HUD (`crates/client/src/plugins/hud.rs`)
 
@@ -69,15 +97,7 @@ A rolling square of radius `RENDER_RADIUS` (defined in `tile_renderer.rs`) aroun
 
 ### Textures
 
-Replace `material_for(kind)` definitions with `base_color_texture: Some(asset_server.load(...))`. The mesh and instancing setup are unchanged.
-
-### Player / entity rendering
-
-Spawn a mesh entity with a `WorldPosition` observer that writes to `Transform` using the same coordinate mapping as tile rendering.
-
-### Shadow maps
-
-Set `shadows_enabled: true` on the `DirectionalLight` spawn in `scene_lighting.rs`. No other changes needed.
+Replace the hardcoded `biome_color(kind)` values in `material.rs` with `base_color_texture` handles. The mesh and LOD setup are unchanged.
 
 ### Isometric vs top-down
 
