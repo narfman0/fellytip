@@ -83,6 +83,7 @@ fn main() {
             .add_plugins(plugins::map_gen::MapGenPlugin)
             .add_plugins(plugins::ecology::EcologyPlugin)
             .add_plugins(plugins::ai::AiPlugin)
+            .add_plugins(plugins::interest::InterestPlugin)
             .add_plugins(plugins::party::PartyPlugin)
             .add_plugins(plugins::dungeon::DungeonPlugin)
             .add_systems(Startup, plugins::ai::seed_factions)

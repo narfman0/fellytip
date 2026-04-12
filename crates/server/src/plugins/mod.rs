@@ -3,6 +3,7 @@ pub mod combat;
 pub mod combat_test;
 pub mod dungeon;
 pub mod ecology;
+pub mod interest;
 pub mod map_gen;
 pub mod party;
 pub mod persistence;

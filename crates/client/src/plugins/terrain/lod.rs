@@ -1,7 +1,8 @@
 //! LOD levels and edge-transition flags for the chunk terrain system.
 
-/// Side length of one chunk in tiles.
-pub const CHUNK_TILES: usize = 32;
+// Re-export the canonical constant from shared so server-side interest
+// management and client-side rendering always agree on chunk size.
+pub use fellytip_shared::world::map::CHUNK_TILES;
 
 /// Four levels of detail, selected by distance from the camera to chunk centre.
 ///

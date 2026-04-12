@@ -19,6 +19,10 @@ pub const MAP_HEIGHT: usize = 1024;
 pub const MAP_HALF_WIDTH:  i64 = (MAP_WIDTH  / 2) as i64;
 pub const MAP_HALF_HEIGHT: i64 = (MAP_HEIGHT / 2) as i64;
 
+/// Side length of one chunk in tiles.  Matches the client terrain renderer —
+/// shared here so server-side interest management uses the same partition.
+pub const CHUNK_TILES: usize = 32;
+
 /// How far above `current_z` an entity can step up in one tick.
 /// Set high enough to handle steep slopes at the new Z_SCALE=20 terrain.
 pub const STEP_HEIGHT: f32 = 2.0;

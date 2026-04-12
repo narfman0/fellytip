@@ -3,6 +3,7 @@
 
 use bevy::prelude::*;
 use crate::plugins::persistence::Db;
+use crate::plugins::interest::ChunkTemperature;
 use lightyear::prelude::{NetworkTarget, Replicate};
 use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
@@ -14,7 +15,7 @@ use fellytip_shared::{
             PlayerReputationMap, STANDING_NEUTRAL, STANDING_HOSTILE, pick_goal,
         },
         ecology::RegionId,
-        map::{MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
+        map::{CHUNK_TILES, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
     },
 };
 use smol_str::SmolStr;
@@ -80,10 +81,24 @@ fn update_faction_goals(mut registry: ResMut<FactionRegistry>) {
 }
 
 /// Faction NPCs are stationary for now; real pathfinding comes later.
-/// `HomePosition` is kept on each NPC for future bounded-wander use.
-fn wander_npcs(query: Query<(&FactionMember, &HomePosition)>) {
-    // Intentionally idle — removing the old off-map drift until pathfinding arrives.
-    let _ = query;
+///
+/// NPCs in Frozen chunks (no client has them in Hot or Warm zone) are skipped
+/// to avoid wasting simulation budget on unobserved entities.
+fn wander_npcs(
+    query: Query<(&WorldPosition,), With<FactionMember>>,
+    temp:  Res<ChunkTemperature>,
+) {
+    for (pos,) in &query {
+        let tile_x = (pos.x + MAP_HALF_WIDTH as f32) as i32;
+        let tile_y = (pos.y + MAP_HALF_HEIGHT as f32) as i32;
+        let chunk  = (tile_x.max(0) / CHUNK_TILES as i32, tile_y.max(0) / CHUNK_TILES as i32);
+
+        if !temp.is_active(chunk) {
+            continue; // Frozen — skip simulation
+        }
+
+        // Intentionally idle — real pathfinding will go here.
+    }
 }
 
 /// Spawn `NPCS_PER_FACTION` guard NPCs for each faction at their nearest settlement.
@@ -130,7 +145,9 @@ pub fn spawn_faction_npcs(
                 CurrentGoal(None),
                 HomePosition(pos),
                 EntityKind::FactionNpc,
-                Replicate::to_clients(NetworkTarget::All),
+                // Start with no replication target; update_npc_replication
+                // in InterestPlugin will set the correct target within 1 s.
+                Replicate::to_clients(NetworkTarget::None),
             ));
             tracing::debug!(
                 faction = %faction.name,
