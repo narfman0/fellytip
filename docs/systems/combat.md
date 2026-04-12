@@ -9,8 +9,8 @@ Exact dice sizes, damage modifiers, and XP thresholds are defined in `crates/sha
 Combat rules are ordinary Rust functions. They take game state and explicit dice rolls as inputs and return effects as outputs. They never generate randomness internally.
 
 **Key functions:**
-- `resolve_attack_roll(attacker, defender, roll)` — compares the roll against the defender's armor class; returns hit or miss
-- `resolve_damage(result, attacker, defender, dmg_roll)` — applies strength modifiers to the damage roll; returns a `TakeDamage` effect
+- `resolve_attack_roll(attacker, defender, roll)` — `d20 + ability_mod + proficiency_bonus(level) >= defender.armor_class`; natural 20 = crit, natural 1 = always miss. See `docs/dnd5e-srd-reference.md`.
+- `resolve_damage(result, attacker, defender, dmg_roll)` — applies ability modifier to the damage roll; returns a `TakeDamage` effect. No flat damage reduction — AC governs whether you're hit, not how much damage you take (5e SRD base rules).
 - `resolve_ability(ability_id, caster, target, rolls)` — resolves an activated ability; pre-rolled dice passed as a slice. Ability 1 (StrongAttack) deals 2×d8 damage and applies `"weakened"` status on hit. Unknown IDs return empty effects.
 - `apply_effects(state, effects)` — applies a list of effects to a `CombatState` snapshot; may generate follow-on effects (e.g. a killing blow also emits `Die`)
 
@@ -55,14 +55,16 @@ Runs in seven phases each tick:
 
 ## Levelling
 
-XP required to reach the next level is computed by `xp_to_next_level(level)` in `crates/shared/src/combat/`. Multiple level-ups from a single kill are applied in a loop.
+XP required to reach the next level is computed by `xp_to_next_level(level)` in `crates/shared/src/combat/rules.rs`, using the official 5e SRD table (see `docs/dnd5e-srd-reference.md`). Multiple level-ups from a single kill are applied in a loop.
+
+On each level-up, HP increases by rolling the class hit die + CON modifier (minimum 1), implemented in `hp_on_level_up()`. The player receives a full heal on level-up. Level is kept in sync between `Experience.level` and `CombatParticipant.level` so the proficiency bonus in attack rolls stays current.
 
 ## Server-only combat components
 
 | Component | Description |
 |---|---|
-| `CombatParticipant` | Holds `CombatantId`, `InterruptStack`, armor, and strength |
-| `ExperienceReward(u32)` | XP granted to the killer; only on NPCs and bosses |
+| `CombatParticipant` | Holds `CombatantId`, `InterruptStack`, `class`, `level`, `armor_class` (AC), `strength`, `dexterity`, `constitution` |
+| `ExperienceReward(u32)` | XP granted to the killer; only on NPCs and bosses. Set from CR table in `docs/dnd5e-srd-reference.md`. |
 | `PendingAttack { target }` | Transient marker; consumed by `initiate_attacks` |
 | `PendingAbility { target, ability_id }` | Transient marker; consumed by `initiate_abilities` |
 | `PlayerEntity(Entity)` | Links a `ClientOf` entity to its spawned player entity |

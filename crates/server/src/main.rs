@@ -5,7 +5,7 @@ use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
 use fellytip_shared::{
     NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
-    combat::{interrupt::InterruptStack, types::CombatantId},
+    combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Experience, Health, WorldPosition},
     protocol::FellytipProtocolPlugin,
 };
@@ -31,13 +31,16 @@ fn main() {
         .add_plugins(FellytipProtocolPlugin)
         .add_plugins(plugins::persistence::PersistencePlugin)
         .add_plugins(plugins::world_sim::WorldSimPlugin)
+        // MapGenPlugin must come before AiPlugin and EcologyPlugin so that the
+        // Settlements and WorldMap resources are available when their Startup
+        // systems run (Bevy executes Startup systems in plugin-registration order).
+        .add_plugins(plugins::map_gen::MapGenPlugin)
         .add_plugins(plugins::ecology::EcologyPlugin)
         .add_plugins(plugins::ai::AiPlugin)
         .add_plugins(plugins::story::StoryPlugin)
         .add_plugins(plugins::combat::CombatPlugin)
         .add_plugins(plugins::party::PartyPlugin)
         .add_plugins(plugins::dungeon::DungeonPlugin)
-        .add_plugins(plugins::map_gen::MapGenPlugin)
         .add_systems(Startup, plugins::ai::seed_factions)
         .add_systems(Startup, spawn_server)
         .add_observer(on_link_spawned)
@@ -148,12 +151,19 @@ fn on_client_connected(
     let player = commands
         .spawn((
             WorldPosition { x: 0.0, y: 0.0, z: 0.0 },
+            // Starting HP is generous (100) rather than strict SRD (d10+CON mod)
+            // to give players a comfortable introduction to combat.
             Health { current: 100, max: 100 },
             CombatParticipant {
                 id: CombatantId(Uuid::new_v4()),
                 interrupt_stack: InterruptStack::default(),
-                armor: 2,
+                class: CharacterClass::Warrior,
+                level: 1,
+                // Leather armour + DEX 14 (+2) = AC 13 (SRD leather: 11 + DEX mod)
+                armor_class: 13,
                 strength: 12,
+                dexterity: 14,
+                constitution: 12,
             },
             Experience::new(),
             Replicate::to_clients(NetworkTarget::All),

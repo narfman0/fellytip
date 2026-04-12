@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use fellytip_shared::{
-    combat::{interrupt::InterruptStack, types::CombatantId},
+    combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Health, WorldPosition},
     world::ecology::RegionId,
 };
@@ -46,10 +46,15 @@ fn spawn_dungeon_boss(mut commands: Commands) {
         CombatParticipant {
             id,
             interrupt_stack: InterruptStack::default(),
-            armor: 5,
+            class: CharacterClass::Warrior,
+            level: 5,
+            armor_class: 16, // chain mail (SRD: AC 16, no DEX)
             strength: 18,
+            dexterity: 10,
+            constitution: 18,
         },
-        ExperienceReward(250),
+        // CR 3 = 700 XP (SRD docs/dnd5e-srd-reference.md)
+        ExperienceReward(700),
     ));
     tracing::info!("Dungeon boss 'The Hollow King' spawned");
 }

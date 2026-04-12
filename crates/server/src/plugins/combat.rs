@@ -12,6 +12,7 @@ use bevy::{ecs::message::MessageWriter, prelude::*};
 use fellytip_shared::{
     TICK_HZ,
     combat::{
+        hit_die_for_class, hp_on_level_up, xp_to_next_level,
         interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
         types::{
             CharacterClass, CombatState, CombatantId, CombatantSnapshot, CombatantState,
@@ -21,7 +22,7 @@ use fellytip_shared::{
     components::{Experience, Health, WorldPosition},
     inputs::{ActionIntent, PlayerInput},
     world::{
-        map::{smooth_surface_at, WorldMap, FALL_SPEED, STEP_HEIGHT, Z_FOLLOW_RATE},
+        map::{is_walkable_at, smooth_surface_at, WorldMap, FALL_SPEED, STEP_HEIGHT, Z_FOLLOW_RATE},
         story::{GameEntityId, StoryEvent, StoryEventKind, WriteStoryEvent},
     },
 };
@@ -40,8 +41,14 @@ pub struct PlayerEntity(pub Entity);
 pub struct CombatParticipant {
     pub id: CombatantId,
     pub interrupt_stack: InterruptStack,
-    pub armor: i32,
+    pub class: CharacterClass,
+    pub level: u32,
+    /// Armour Class — threshold an attack roll must meet or beat to hit.
+    /// See `docs/dnd5e-srd-reference.md`.
+    pub armor_class: i32,
     pub strength: i32,
+    pub dexterity: i32,
+    pub constitution: i32,
 }
 
 /// XP granted to the killer when this entity dies. Server-only (NPCs/bosses).
@@ -91,24 +98,39 @@ fn process_player_input(
 
     for (mut receiver, player_entity) in clients.iter_mut() {
         for input in receiver.receive() {
-            // Apply movement
+            // Apply movement with walkability check and wall-slide.
             let [dx, dy] = input.move_dir;
             if dx != 0.0 || dy != 0.0 {
                 if let Ok(mut pos) = positions.get_mut(player_entity.0) {
-                    pos.x += dx * SPEED * dt;
-                    pos.y += dy * SPEED * dt;
+                    let old_x = pos.x;
+                    let old_y = pos.y;
+                    let new_x = pos.x + dx * SPEED * dt;
+                    let new_y = pos.y + dy * SPEED * dt;
 
-                    // Height following: lerp Z toward the terrain surface.
-                    // No-op when the map resource has not been inserted yet.
                     if let Some(ref m) = map {
-                        if let Some(target_z) = smooth_surface_at(m, pos.x, pos.y, pos.z) {
-                            let delta = (target_z - pos.z) * Z_FOLLOW_RATE * dt;
-                            // Ascent: limited to one step per tick (prevents tunnelling
-                            // through thin floors from below).
-                            // Descent: FALL_SPEED cap so entities traverse deep shafts
-                            // in ~1-2 seconds rather than crawling at 2 units/s.
-                            pos.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
+                        // Attempt full diagonal move first; fall back to axis-aligned slides
+                        // so the player slides along walls rather than stopping dead.
+                        let can_xy = is_walkable_at(m, new_x, new_y, pos.z);
+                        let can_x  = is_walkable_at(m, new_x, pos.y, pos.z);
+                        let can_y  = is_walkable_at(m, pos.x, new_y, pos.z);
+                        if can_xy      { pos.x = new_x; pos.y = new_y; }
+                        else if can_x  { pos.x = new_x; }
+                        else if can_y  { pos.y = new_y; }
+                        // else: fully blocked; position unchanged
+
+                        // Height follow only when the position actually changed.
+                        if pos.x != old_x || pos.y != old_y {
+                            if let Some(target_z) = smooth_surface_at(m, pos.x, pos.y, pos.z) {
+                                let delta = (target_z - pos.z) * Z_FOLLOW_RATE * dt;
+                                // Ascent: limited to one step per tick (prevents tunnelling).
+                                // Descent: FALL_SPEED cap so shafts take ~1-2 s to traverse.
+                                pos.z += delta.clamp(-FALL_SPEED * dt, STEP_HEIGHT);
+                            }
                         }
+                    } else {
+                        // Map not yet loaded — apply movement unrestricted.
+                        pos.x = new_x;
+                        pos.y = new_y;
                     }
                 }
             }
@@ -254,15 +276,17 @@ fn resolve_interrupts(
                 snapshot: CombatantSnapshot {
                     id: p.id.clone(),
                     faction: None,
-                    class: CharacterClass::Warrior,
+                    class: p.class.clone(),
                     stats: CoreStats {
                         strength: p.strength,
+                        dexterity: p.dexterity,
+                        constitution: p.constitution,
                         ..CoreStats::default()
                     },
                     health_current: h.current,
                     health_max: h.max,
-                    level: 1,
-                    armor: p.armor,
+                    level: p.level,
+                    armor_class: p.armor_class,
                 },
                 health: h.current,
                 statuses: vec![],
@@ -341,16 +365,26 @@ fn resolve_interrupts(
         }
     }
 
-    // ── Phase 5: award XP ────────────────────────────────────────────────────
+    // ── Phase 5: award XP and apply level-up ────────────────────────────────
     for (attacker_entity, xp) in xp_awards {
-        if let Ok((_, _, _, Some(mut exp), _)) = participants.get_mut(attacker_entity) {
+        if let Ok((_, mut participant, mut health, Some(mut exp), _)) =
+            participants.get_mut(attacker_entity)
+        {
             exp.xp += xp;
             tracing::info!(xp, total = exp.xp, level = exp.level, "XP awarded");
             while exp.xp >= exp.xp_to_next {
                 exp.xp -= exp.xp_to_next;
                 exp.level += 1;
                 exp.xp_to_next = xp_to_next_level(exp.level);
-                tracing::info!(level = exp.level, "Level up!");
+                participant.level = exp.level;
+                // HP gain on level-up: roll hit die + CON mod, min 1 (SRD §Level Advancement).
+                let hit_die = hit_die_for_class(&participant.class);
+                let roll = rand::random_range(1..=hit_die);
+                let con_mod = (participant.constitution - 10) / 2;
+                let gain = hp_on_level_up(&participant.class, con_mod, &mut std::iter::once(roll));
+                health.max += gain;
+                health.current = health.max; // full heal on level-up
+                tracing::info!(level = exp.level, hp_gain = gain, "Level up!");
             }
         }
     }
@@ -366,6 +400,3 @@ fn resolve_interrupts(
     }
 }
 
-fn xp_to_next_level(level: u32) -> u32 {
-    100 * level
-}
