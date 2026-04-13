@@ -25,6 +25,9 @@ pub const PRIVATE_KEY: [u8; 32] = [0u8; 32];
 /// UDP port the server listens on.
 pub const NET_PORT: u16 = 5000;
 
+/// WebSocket port — used by browser (WASM) clients.
+pub const WS_PORT: u16 = 5001;
+
 /// Fixed-update tick rate (Hz) for combat / movement.
 pub const TICK_HZ: f64 = 62.5;
 

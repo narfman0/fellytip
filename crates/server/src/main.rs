@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
 use fellytip_shared::{
-    WORLD_SEED, NET_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
+    WORLD_SEED, NET_PORT, WS_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Experience, Health, WorldMeta, WorldPosition},
     protocol::FellytipProtocolPlugin,
@@ -125,11 +125,12 @@ fn parse_arg<T: std::str::FromStr>(args: &[String], flag: &str, default: T) -> T
 }
 
 fn spawn_server(mut commands: Commands) {
-    let addr: SocketAddr = format!("0.0.0.0:{NET_PORT}").parse().unwrap();
-    let e = commands
+    // UDP socket for native clients.
+    let udp_addr: SocketAddr = format!("0.0.0.0:{NET_PORT}").parse().unwrap();
+    let udp_e = commands
         .spawn((
             ServerUdpIo::default(),
-            LocalAddr(addr),
+            LocalAddr(udp_addr),
             NetcodeServer::new(
                 NetcodeConfig::default()
                     .with_protocol_id(PROTOCOL_ID)
@@ -137,8 +138,28 @@ fn spawn_server(mut commands: Commands) {
             ),
         ))
         .id();
-    commands.entity(e).trigger(|entity| Start { entity });
-    tracing::info!("Server listening on {addr}");
+    commands.entity(udp_e).trigger(|entity| Start { entity });
+    tracing::info!("Server UDP listening on {udp_addr}");
+
+    // WebSocket socket for browser (WASM) clients.
+    let ws_addr: SocketAddr = format!("0.0.0.0:{WS_PORT}").parse().unwrap();
+    let ws_e = commands
+        .spawn((
+            WebSocketServerIo {
+                config: ServerConfig::builder()
+                    .with_bind_default(WS_PORT)
+                    .with_no_encryption(),
+            },
+            LocalAddr(ws_addr),
+            NetcodeServer::new(
+                NetcodeConfig::default()
+                    .with_protocol_id(PROTOCOL_ID)
+                    .with_key(PRIVATE_KEY),
+            ),
+        ))
+        .id();
+    commands.entity(ws_e).trigger(|entity| Start { entity });
+    tracing::info!("Server WebSocket listening on {ws_addr}");
 }
 
 /// Every new client link gets a `ReplicationSender` so the server can push

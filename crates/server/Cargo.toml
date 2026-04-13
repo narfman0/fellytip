@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 fellytip-shared    = { workspace = true }
 bevy               = { workspace = true, features = ["bevy_log", "multi_threaded", "bevy_remote"] }
-lightyear          = { workspace = true, features = ["std", "server", "client", "netcode", "udp", "replication"] }
+lightyear          = { workspace = true, features = ["std", "server", "client", "netcode", "udp", "websocket", "replication"] }
 rand               = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }

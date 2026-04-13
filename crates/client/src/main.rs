@@ -1,15 +1,18 @@
 mod plugins;
 
 use bevy::prelude::*;
+#[cfg(not(target_family = "wasm"))]
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use core::time::Duration;
 use fellytip_shared::{
-    NET_PORT, PLAYER_SPEED, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
+    PLAYER_SPEED, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     components::{Experience, WorldPosition},
     inputs::{ActionIntent, PlayerInput},
     protocol::{FellytipProtocolPlugin, PlayerInputChannel},
     world::map::{is_walkable_at, smooth_surface_at, WorldMap, GRAVITY, LAND_SNAP, MAX_FALL_SPEED},
 };
+#[cfg(not(target_family = "wasm"))]
+use fellytip_shared::NET_PORT;
 use lightyear::prelude::{client::*, *};
 use plugins::camera::OrbitCamera;
 use std::net::SocketAddr;
@@ -57,9 +60,11 @@ pub struct PredictedPosition {
 const CONNECT_RETRY_SECS: f32 = 2.0;
 
 /// BRP HTTP port for the headless client (used by ralph scenarios).
+#[cfg(not(target_family = "wasm"))]
 const BRP_PORT_HEADLESS: u16 = 15703;
 
 /// BRP HTTP port exposed by the server; used to probe for a running instance.
+#[cfg(not(target_family = "wasm"))]
 const SERVER_BRP_PORT: u16 = 15702;
 
 /// If no server is reachable on `SERVER_BRP_PORT`, locate `fellytip-server`
@@ -72,6 +77,7 @@ const SERVER_BRP_PORT: u16 = 15702;
 ///
 /// Dropping the returned `Child` does **not** kill the server process — the
 /// server manages its own lifetime via its idle-shutdown timer.
+#[cfg(not(target_family = "wasm"))]
 fn maybe_spawn_server() -> Option<std::process::Child> {
     let probe_addr: std::net::SocketAddr =
         format!("127.0.0.1:{SERVER_BRP_PORT}").parse().unwrap();
@@ -127,46 +133,55 @@ fn maybe_spawn_server() -> Option<std::process::Child> {
     Some(child)
 }
 
-fn main() {
-    let headless = std::env::args().any(|a| a == "--headless");
-
-    // In windowed debug builds, ensure a local server is running before the Bevy
-    // app starts.  Disabled in release builds (server must be started separately).
-    // Pass --auto-launch to force auto-launch in release builds.
-    let auto_launch = cfg!(debug_assertions)
-        || std::env::args().any(|a| a == "--auto-launch");
-    let _server_child = if !headless && auto_launch { maybe_spawn_server() } else { None };
-
-    let mut app = App::new();
-
-    if headless {
-        // Headless: minimal plugins + BRP for ralph test scenarios.
-        // Tracing is initialised manually since MinimalPlugins has no LogPlugin.
-        tracing_subscriber::fmt::init();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(RemotePlugin::default())
-            .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS))
-            .add_systems(Update, headless_auto_attack);
-    } else {
-        // Windowed: full render stack.  DefaultPlugins includes LogPlugin so we
-        // do NOT call tracing_subscriber::fmt::init() to avoid a double-init.
-        app.add_plugins(
-            DefaultPlugins.build().set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Fellytip".into(),
-                    ..default()
-                }),
+fn add_windowed_plugins(app: &mut App) {
+    // Windowed: full render stack.  DefaultPlugins includes LogPlugin so we
+    // do NOT call tracing_subscriber::fmt::init() to avoid a double-init.
+    app.add_plugins(
+        DefaultPlugins.build().set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Fellytip".into(),
                 ..default()
             }),
-        )
-        .add_plugins(plugins::SceneLightingPlugin)
-        .add_plugins(plugins::OrbitCameraPlugin)
-        .add_plugins(plugins::SkyboxPlugin)
-        .add_plugins(plugins::TerrainPlugin)
-        .add_plugins(plugins::EntityRendererPlugin)
-        .add_plugins(plugins::BattleVisualsPlugin)
-        .add_plugins(plugins::HudPlugin);
+            ..default()
+        }),
+    )
+    .add_plugins(plugins::SceneLightingPlugin)
+    .add_plugins(plugins::OrbitCameraPlugin)
+    .add_plugins(plugins::SkyboxPlugin)
+    .add_plugins(plugins::TerrainPlugin)
+    .add_plugins(plugins::EntityRendererPlugin)
+    .add_plugins(plugins::BattleVisualsPlugin)
+    .add_plugins(plugins::HudPlugin);
+}
+
+fn main() {
+    let mut app = App::new();
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let headless = std::env::args().any(|a| a == "--headless");
+
+        // In windowed debug builds, ensure a local server is running before the
+        // Bevy app starts.  Disabled in release builds (server must be started
+        // separately).  Pass --auto-launch to force auto-launch in release builds.
+        let auto_launch = cfg!(debug_assertions)
+            || std::env::args().any(|a| a == "--auto-launch");
+        let _server_child = if !headless && auto_launch { maybe_spawn_server() } else { None };
+
+        if headless {
+            // Headless: minimal plugins + BRP for ralph test scenarios.
+            // Tracing is initialised manually since MinimalPlugins has no LogPlugin.
+            tracing_subscriber::fmt::init();
+            app.add_plugins(MinimalPlugins)
+                .add_plugins(RemotePlugin::default())
+                .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS))
+                .add_systems(Update, headless_auto_attack);
+        } else {
+            add_windowed_plugins(&mut app);
+        }
     }
+    #[cfg(target_family = "wasm")]
+    add_windowed_plugins(&mut app);
 
     app.add_plugins(ClientPlugins {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),
@@ -236,26 +251,58 @@ fn try_connect(
     }
 
     // No live or in-flight client: attempt a fresh connection.
-    let server_addr: SocketAddr = format!("127.0.0.1:{NET_PORT}").parse().unwrap();
-    let local_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-    let e = commands
-        .spawn((
-            UdpIo::default(),
-            LocalAddr(local_addr),
-            NetcodeClient::new(
-                Authentication::Manual {
-                    server_addr,
-                    client_id: 1,
-                    private_key: PRIVATE_KEY,
-                    protocol_id: PROTOCOL_ID,
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let server_addr: SocketAddr = format!("127.0.0.1:{NET_PORT}").parse().unwrap();
+        let local_addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+        let e = commands
+            .spawn((
+                UdpIo::default(),
+                LocalAddr(local_addr),
+                NetcodeClient::new(
+                    Authentication::Manual {
+                        server_addr,
+                        client_id: 1,
+                        private_key: PRIVATE_KEY,
+                        protocol_id: PROTOCOL_ID,
+                    },
+                    NetcodeConfig::default(),
+                )
+                .expect("failed to build NetcodeClient"),
+            ))
+            .id();
+        commands.entity(e).trigger(|entity| Connect { entity });
+        tracing::info!("Connecting UDP to {server_addr}");
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        use fellytip_shared::WS_PORT;
+        use lightyear::websocket::client::{WebSocketClientIo, WebSocketTarget};
+        let server_addr: SocketAddr = format!("127.0.0.1:{WS_PORT}").parse().unwrap();
+        let e = commands
+            .spawn((
+                WebSocketClientIo {
+                    // ClientConfig on WASM is a private empty struct; use
+                    // Default::default() — the compiler infers the type from
+                    // the field definition.
+                    config: Default::default(),
+                    target: WebSocketTarget::Url(format!("ws://127.0.0.1:{WS_PORT}")),
                 },
-                NetcodeConfig::default(),
-            )
-            .expect("failed to build NetcodeClient"),
-        ))
-        .id();
-    commands.entity(e).trigger(|entity| Connect { entity });
-    tracing::info!("Connecting to {server_addr}");
+                NetcodeClient::new(
+                    Authentication::Manual {
+                        server_addr,
+                        client_id: 1,
+                        private_key: PRIVATE_KEY,
+                        protocol_id: PROTOCOL_ID,
+                    },
+                    NetcodeConfig::default(),
+                )
+                .expect("failed to build NetcodeClient"),
+            ))
+            .id();
+        commands.entity(e).trigger(|entity| Connect { entity });
+        tracing::info!("Connecting WebSocket to ws://127.0.0.1:{WS_PORT}");
+    }
 }
 
 /// When the connection is established, attach a `ReplicationReceiver` so that
@@ -285,6 +332,7 @@ fn log_replicated_positions(query: Query<(Entity, &WorldPosition), With<Replicat
 
 /// Headless-mode only: sends `BasicAttack` every 2 seconds for ralph integration tests.
 /// Allows `combat_resolves` to assert that damage lands without a real keyboard.
+#[cfg(not(target_family = "wasm"))]
 fn headless_auto_attack(
     mut sender: Option<Single<&mut MessageSender<PlayerInput>>>,
     time: Res<Time>,
