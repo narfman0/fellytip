@@ -1,0 +1,23 @@
+# Local developer overrides for the fellytip server.
+# Copy to server.local.toml (gitignored) to apply.
+# Priority: hardcoded defaults < this file < CLI flags.
+#
+# Usage:
+#   cp server.local.toml.example server.local.toml
+#   cargo run -p fellytip-server
+
+# Set to 0 for fastest startup (~300-500 ms saved). Default: 10.
+history_warp_ticks = 0
+
+# Fewer NPCs spawned at startup. Default: 3.
+npcs_per_faction = 1
+
+# Smaller map for faster generation (powers of 2 work best). Default: 1024.
+# map_width  = 256
+# map_height = 256
+
+# Shorter idle-shutdown window (seconds). Default: 300.
+# idle_secs = 30
+
+# Pin the seed for a repeatable world. Default: 42.
+# map_seed = 42

@@ -32,9 +32,14 @@ use fellytip_shared::{
 #[derive(Resource, Reflect, Clone)]
 #[reflect(Resource)]
 pub struct MapGenConfig {
-    pub seed: u64,
-    pub width: usize,
-    pub height: usize,
+    pub seed:               u64,
+    pub width:              usize,
+    pub height:             usize,
+    /// WorldSim ticks to run before the server accepts connections.
+    /// Set to 0 for fastest startup (saves ~300–500 ms). Default: 10.
+    pub history_warp_ticks: u64,
+    /// NPC soldiers spawned per faction at startup. Default: 3.
+    pub npcs_per_faction:   usize,
 }
 
 use crate::plugins::{
@@ -43,12 +48,6 @@ use crate::plugins::{
     persistence::Db,
     world_sim::WorldSimTick,
 };
-
-/// WorldSim ticks to run before the server accepts connections.
-///
-/// Kept small (10) so startup finishes quickly and clients can connect.
-/// Raise once map gen is moved off the main thread.
-const HISTORY_WARP_TICKS: u64 = 10;
 
 /// Key used in the `world_meta` table to store the world map file path.
 const META_KEY_MAP_FILE: &str = "world_map_file";
@@ -237,12 +236,19 @@ fn spawn_settlement_markers(settlements: Res<Settlements>, mut commands: Command
     tracing::info!(count = settlements.0.len(), "Settlement markers spawned");
 }
 
-/// Run WorldSimSchedule [`HISTORY_WARP_TICKS`] times synchronously before
+/// Run `WorldSimSchedule` `config.history_warp_ticks` times synchronously before
 /// players can connect.  This "ages" the world: factions expand, ecology
 /// reaches equilibrium, and story events accumulate.
+///
+/// Set `history_warp_ticks = 0` in `server.local.toml` for fastest dev startup.
 fn history_warp(world: &mut World) {
-    tracing::info!(ticks = HISTORY_WARP_TICKS, "Starting history warp…");
-    for _ in 0..HISTORY_WARP_TICKS {
+    let ticks = world.resource::<MapGenConfig>().history_warp_ticks;
+    if ticks == 0 {
+        tracing::info!("History warp skipped (history_warp_ticks = 0)");
+        return;
+    }
+    tracing::info!(ticks, "Starting history warp…");
+    for _ in 0..ticks {
         world.resource_mut::<WorldSimTick>().0 += 1;
         world.run_schedule(crate::plugins::world_sim::WorldSimSchedule);
     }

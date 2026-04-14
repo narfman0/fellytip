@@ -27,6 +27,7 @@ thiserror           = "2"
 smol_str            = { version = "0.3", features = ["serde"] }
 uuid                = { version = "1", features = ["v4", "serde"] }
 proptest            = "1"
+toml                = "0.8"
 proptest-derive     = "0.4"
 bevy_egui           = { version = "0.39", default-features = false }
 bevy-inspector-egui = { version = "0.36", default-features = false }

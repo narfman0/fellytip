@@ -100,12 +100,11 @@ pub struct FormWarPartyEvent {
     pub target_y: f32,
 }
 
-/// Number of NPC soldiers spawned per faction at startup.
-const NPCS_PER_FACTION: usize = 3;
-
-/// Fixed offsets (tile units) applied to each NPC spawn relative to the
-/// faction's home settlement, so NPCs aren't stacked on top of each other.
-const NPC_OFFSETS: [(f32, f32); NPCS_PER_FACTION] = [(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)];
+/// Generate `n` spawn offsets (tile units) spread on a 3-wide grid so NPCs
+/// aren't stacked on top of each other.
+fn npc_spawn_offsets(n: usize) -> Vec<(f32, f32)> {
+    (0..n).map(|i| ((i % 3) as f32 * 2.0, (i / 3) as f32 * 2.0)).collect()
+}
 
 pub struct AiPlugin;
 
@@ -168,11 +167,13 @@ fn wander_npcs(
     }
 }
 
-/// Spawn `NPCS_PER_FACTION` guard NPCs for each faction at their nearest settlement.
+/// Spawn guard NPCs for each faction at their nearest settlement.
+/// Count is controlled by `MapGenConfig::npcs_per_faction` (default 3).
 /// Runs at Startup after `seed_factions` and after `MapGenPlugin` inserts `Settlements`.
 pub fn spawn_faction_npcs(
     registry: Res<FactionRegistry>,
     settlements: Res<Settlements>,
+    config: Res<crate::plugins::map_gen::MapGenConfig>,
     mut commands: Commands,
 ) {
     if settlements.0.is_empty() {
@@ -180,11 +181,13 @@ pub fn spawn_faction_npcs(
         return;
     }
 
+    let offsets = npc_spawn_offsets(config.npcs_per_faction);
+
     for (faction_idx, faction) in registry.factions.iter().enumerate() {
         // Assign each faction a home settlement by cycling through the list.
         let settlement = &settlements.0[faction_idx % settlements.0.len()];
 
-        for (npc_idx, (ox, oy)) in NPC_OFFSETS.iter().enumerate() {
+        for (npc_idx, (ox, oy)) in offsets.iter().enumerate() {
             // settlement.x/y are tile-space (0..MAP_WIDTH); convert to world-space.
             let pos = WorldPosition {
                 x: settlement.x - MAP_HALF_WIDTH as f32 + ox,
@@ -227,7 +230,7 @@ pub fn spawn_faction_npcs(
         tracing::info!(
             faction = %faction.name,
             settlement = %settlement.name,
-            count = NPCS_PER_FACTION,
+            count = offsets.len(),
             "Faction NPCs spawned"
         );
     }
@@ -348,6 +351,7 @@ pub fn init_population_state(
     mut pop: ResMut<FactionPopulationState>,
     settlements: Res<Settlements>,
     registry: Res<FactionRegistry>,
+    config: Res<crate::plugins::map_gen::MapGenConfig>,
 ) {
     if settlements.0.is_empty() {
         tracing::warn!("No settlements for population init");
@@ -368,7 +372,7 @@ pub fn init_population_state(
                 settlement_id: settlement.id,
                 faction_id: faction.id.clone(),
                 birth_ticks: 0,
-                adult_count: NPCS_PER_FACTION as u32,
+                adult_count: config.npcs_per_faction as u32,
                 child_count: 0,
                 home_x,
                 home_y,

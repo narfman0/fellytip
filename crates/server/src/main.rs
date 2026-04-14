@@ -43,17 +43,42 @@ struct ConnectedCount {
 #[derive(Resource)]
 struct IdleTimer(Timer);
 
+/// Subset of startup constants that can be overridden per-developer via
+/// `server.local.toml` (gitignored).  CLI flags take precedence over this file;
+/// this file takes precedence over the hardcoded defaults.
+#[derive(serde::Deserialize, Default)]
+struct LocalConfig {
+    history_warp_ticks: Option<u64>,
+    npcs_per_faction:   Option<usize>,
+    map_seed:           Option<u64>,
+    map_width:          Option<usize>,
+    map_height:         Option<usize>,
+    idle_secs:          Option<f32>,
+}
+
 fn main() {
     tracing_subscriber::fmt::init();
     let args: Vec<String> = std::env::args().collect();
-    let combat_test     = args.iter().any(|a| a == "--combat-test");
+    let combat_test      = args.iter().any(|a| a == "--combat-test");
     let no_idle_shutdown = args.iter().any(|a| a == "--no-idle-shutdown");
 
+    // Load optional local dev overrides (gitignored; CLI flags still win).
+    let local: LocalConfig = std::fs::read_to_string("server.local.toml")
+        .ok()
+        .and_then(|s| match toml::from_str(&s) {
+            Ok(cfg) => { tracing::info!("Loaded server.local.toml"); Some(cfg) }
+            Err(e)  => { tracing::warn!("server.local.toml parse error: {e}"); None }
+        })
+        .unwrap_or_default();
+
     // Parse map gen CLI args (only meaningful outside combat-test mode).
-    let map_seed   = parse_arg(&args, "--seed",       WORLD_SEED);
-    let map_width  = parse_arg(&args, "--map-width",  MAP_WIDTH);
-    let map_height = parse_arg(&args, "--map-height", MAP_HEIGHT);
-    let idle_secs: f32 = parse_arg(&args, "--idle-secs", 300.0);
+    // Priority: hardcoded default < server.local.toml < CLI flag.
+    let map_seed           = parse_arg(&args, "--seed",                local.map_seed.unwrap_or(WORLD_SEED));
+    let map_width          = parse_arg(&args, "--map-width",           local.map_width.unwrap_or(MAP_WIDTH));
+    let map_height         = parse_arg(&args, "--map-height",          local.map_height.unwrap_or(MAP_HEIGHT));
+    let idle_secs: f32     = parse_arg(&args, "--idle-secs",           local.idle_secs.unwrap_or(300.0));
+    let history_warp_ticks = parse_arg(&args, "--history-warp-ticks",  local.history_warp_ticks.unwrap_or(10));
+    let npcs_per_faction   = parse_arg(&args, "--npcs-per-faction",    local.npcs_per_faction.unwrap_or(3));
 
     // Plugins shared by all run modes.
     let mut app = App::new();
@@ -85,7 +110,10 @@ fn main() {
     } else {
         // Full game world with map gen, ecology, factions, and live networking.
         // Insert MapGenConfig before MapGenPlugin so it can read it.
-        app.insert_resource(MapGenConfig { seed: map_seed, width: map_width, height: map_height })
+        app.insert_resource(MapGenConfig {
+                seed: map_seed, width: map_width, height: map_height,
+                history_warp_ticks, npcs_per_faction,
+            })
             .insert_resource(ConnectedCount::default())
             .insert_resource(IdleTimer(Timer::from_seconds(idle_secs, TimerMode::Once)))
             .add_plugins(plugins::map_gen::MapGenPlugin)
