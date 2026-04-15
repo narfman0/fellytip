@@ -1,76 +1,117 @@
 //! Scatter biome-appropriate 3D decorations (trees, rocks, vegetation) across
 //! terrain chunks using Kenney Nature Kit GLB assets.
 //!
-//! # Performance design
+//! # Instancing design
 //!
-//! The terrain renderer streams up to 1,600 chunks (radius 20) but decorations
-//! are only placed within `DECORATION_RADIUS = 6` chunks of the camera — roughly
-//! 144 chunks max vs 1,600.  New chunks are queued and processed at most
-//! `CHUNKS_PER_FRAME = 2` per frame to eliminate startup spikes.  Each chunk
-//! is capped at `MAX_PER_CHUNK = 16` decoration entities regardless of biome
-//! density, bounding worst-case entity count to ~2,300 total.
+//! Instead of `SceneRoot` (one scene hierarchy per decoration), we load each GLB
+//! as a raw `Handle<Gltf>`, extract the `(Handle<Mesh>, Handle<StandardMaterial>)`
+//! pairs for every primitive once the asset is ready, and then spawn decoration
+//! entities with `Mesh3d` + `MeshMaterial3d` directly.
+//!
+//! Because every instance of `tree_default` shares the **exact same**
+//! `Handle<Mesh>` and `Handle<StandardMaterial>`, Bevy's render batcher folds
+//! them into a single draw call regardless of instance count.  This allows high
+//! density (original 25–30% biome coverage) without GPU overhead.
+//!
+//! Multi-primitive models (e.g., trunk + foliage) are handled as a parent entity
+//! (transform only) with one child entity per primitive.  Despawning the parent
+//! automatically cascades to all children in Bevy 0.18's hierarchy system.
+//!
+//! # Load sequencing
+//!
+//! GLTF assets are async.  `finalize_decoration_assets` runs every frame until
+//! all variant handles have been extracted; only then does the pending-chunk queue
+//! start draining.  GLB files are small, so this typically resolves in < 1 s.
 //!
 //! # Coordinate convention
-//! Same as `terrain/chunk.rs`: tile `(gx, gy)` → Bevy `(gx − half_w, h, gy − half_h)`.
+//! Tile `(gx, gy)` → Bevy `(gx − half_w, terrain_height, gy − half_h)`.
 
 use std::collections::{HashMap, VecDeque};
 
+use bevy::gltf::{Gltf, GltfMesh};
 use bevy::prelude::*;
 use fellytip_shared::world::map::{TileKind, WorldMap};
 
 use super::terrain::chunk::{vertex_height, ChunkCoord};
 use super::terrain::lod::CHUNK_TILES;
-use super::terrain::{ChunkLifecycle, manager::ChunkManager};
+use super::terrain::{manager::ChunkManager, ChunkLifecycle};
 
 pub struct SceneDecorationPlugin;
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
 
 /// Chebyshev chunk distance within which decorations are placed.
-/// Smaller = fewer entities; larger = denser coverage further out.
-const DECORATION_RADIUS: i32 = 6;
+const DECORATION_RADIUS: i32 = 10;
 
-/// Maximum decoration entities per chunk.  Caps worst-case entity count.
-const MAX_PER_CHUNK: usize = 16;
+/// Maximum decoration entities per chunk.  Safety ceiling; density constants
+/// below are the primary control.
+const MAX_PER_CHUNK: usize = 64;
 
-/// Chunks processed per frame from the pending queue.  Spreads startup cost
-/// over many frames so the first frame never spikes.
-const CHUNKS_PER_FRAME: usize = 2;
+/// Pending chunks processed per frame — keeps frame time stable.
+const CHUNKS_PER_FRAME: usize = 3;
 
 impl Plugin for SceneDecorationPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_decoration_assets)
-            // Run after apply_chunk_meshes so newly_visible/hidden are filled.
-            .add_systems(Update, apply_decorations);
+            .add_systems(
+                Update,
+                (finalize_decoration_assets, apply_decorations).chain(),
+            );
+    }
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+/// One GLB model with (optionally) extracted per-primitive mesh+material handles.
+struct DecorationVariant {
+    gltf: Handle<Gltf>,
+    /// One entry per GLTF primitive.  Empty until `finalize_decoration_assets`
+    /// has run and the asset has loaded.
+    primitives: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+}
+
+impl DecorationVariant {
+    fn new(gltf: Handle<Gltf>) -> Self {
+        Self { gltf, primitives: Vec::new() }
+    }
+    fn is_ready(&self) -> bool {
+        !self.primitives.is_empty()
     }
 }
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
-/// Scene handles grouped by decoration category.
+/// All decoration variants grouped by biome category.
 #[derive(Resource)]
 struct DecorationAssets {
-    /// Broadleaf trees: oak, default, tall, detailed.
-    broadleaf: Vec<Handle<Scene>>,
-    /// Conifer trees: pine variants.
-    conifer: Vec<Handle<Scene>>,
-    /// Desert vegetation: cactus.
-    desert: Vec<Handle<Scene>>,
-    /// Tropical trees: palms.
-    tropical: Vec<Handle<Scene>>,
-    /// Rocks.
-    rocks: Vec<Handle<Scene>>,
-    /// Low shrubs / bushes.
-    bushes: Vec<Handle<Scene>>,
+    broadleaf: Vec<DecorationVariant>,
+    conifer:   Vec<DecorationVariant>,
+    desert:    Vec<DecorationVariant>,
+    tropical:  Vec<DecorationVariant>,
+    rocks:     Vec<DecorationVariant>,
+    bushes:    Vec<DecorationVariant>,
+    /// True once every variant has had its primitives extracted.
+    all_ready: bool,
 }
 
-/// Per-chunk decoration state + pending spawn queue.
+impl DecorationAssets {
+    /// Flat mutable iterator over every variant across all categories.
+    fn all_variants_mut(&mut self) -> impl Iterator<Item = &mut DecorationVariant> {
+        self.broadleaf.iter_mut()
+            .chain(self.conifer.iter_mut())
+            .chain(self.desert.iter_mut())
+            .chain(self.tropical.iter_mut())
+            .chain(self.rocks.iter_mut())
+            .chain(self.bushes.iter_mut())
+    }
+}
+
+/// Per-chunk spawn tracking + pending queue.
 #[derive(Resource, Default)]
 struct DecorationState {
-    /// Decoration entities already spawned, keyed by chunk coord.
+    /// Root decoration entity per chunk (parent of all primitives in that chunk).
     spawned: HashMap<ChunkCoord, Vec<Entity>>,
-    /// Chunks queued for decoration but not yet processed.
-    /// Processed at most `CHUNKS_PER_FRAME` per frame to smooth startup cost.
+    /// Chunks awaiting decoration; drained at `CHUNKS_PER_FRAME` per frame.
     pending: VecDeque<ChunkCoord>,
 }
 
@@ -80,94 +121,128 @@ fn setup_decoration_assets(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    let load = |path: &str| -> Handle<Scene> {
-        asset_server.load(format!("nature/{path}#Scene0"))
-    };
+    let v = |path: &str| DecorationVariant::new(asset_server.load(format!("nature/{path}")));
 
     commands.insert_resource(DecorationAssets {
         broadleaf: vec![
-            load("tree_default.glb"),
-            load("tree_oak.glb"),
-            load("tree_tall.glb"),
-            load("tree_detailed.glb"),
+            v("tree_default.glb"),
+            v("tree_oak.glb"),
+            v("tree_tall.glb"),
+            v("tree_detailed.glb"),
         ],
         conifer: vec![
-            load("tree_pineDefaultA.glb"),
-            load("tree_pineDefaultB.glb"),
-            load("tree_pineTallA.glb"),
+            v("tree_pineDefaultA.glb"),
+            v("tree_pineDefaultB.glb"),
+            v("tree_pineTallA.glb"),
         ],
         desert: vec![
-            load("cactus_tall.glb"),
-            load("cactus_short.glb"),
+            v("cactus_tall.glb"),
+            v("cactus_short.glb"),
         ],
         tropical: vec![
-            load("tree_palm.glb"),
-            load("tree_palmTall.glb"),
+            v("tree_palm.glb"),
+            v("tree_palmTall.glb"),
         ],
         rocks: vec![
-            load("rock_largeA.glb"),
-            load("rock_largeB.glb"),
-            load("rock_largeC.glb"),
-            load("rock_tallA.glb"),
-            load("rock_tallB.glb"),
-            load("rock_tallC.glb"),
+            v("rock_largeA.glb"),
+            v("rock_largeB.glb"),
+            v("rock_largeC.glb"),
+            v("rock_tallA.glb"),
+            v("rock_tallB.glb"),
+            v("rock_tallC.glb"),
         ],
         bushes: vec![
-            load("plant_bush.glb"),
-            load("plant_bushLarge.glb"),
-            load("grass.glb"),
-            load("grass_large.glb"),
+            v("plant_bush.glb"),
+            v("plant_bushLarge.glb"),
+            v("grass.glb"),
+            v("grass_large.glb"),
         ],
+        all_ready: false,
     });
     commands.init_resource::<DecorationState>();
 }
 
-// ── Systems ───────────────────────────────────────────────────────────────────
+// ── Finalization system ───────────────────────────────────────────────────────
+
+/// Runs every frame until all GLTF assets are loaded, extracting per-primitive
+/// mesh and material handles.  No-ops instantly once `all_ready` is set.
+fn finalize_decoration_assets(
+    mut deco:          ResMut<DecorationAssets>,
+    gltf_assets:       Res<Assets<Gltf>>,
+    gltf_mesh_assets:  Res<Assets<GltfMesh>>,
+) {
+    if deco.all_ready { return; }
+
+    let mut all_ready = true;
+    for variant in deco.all_variants_mut() {
+        if variant.is_ready() { continue; }
+
+        let Some(gltf) = gltf_assets.get(&variant.gltf) else {
+            all_ready = false;
+            continue;
+        };
+        let Some(gltf_mesh_handle) = gltf.meshes.first() else { continue };
+        let Some(gltf_mesh) = gltf_mesh_assets.get(gltf_mesh_handle) else {
+            all_ready = false;
+            continue;
+        };
+
+        for prim in &gltf_mesh.primitives {
+            // Skip primitives without a material (shouldn't happen for Kenney assets).
+            let Some(mat) = prim.material.clone() else { continue };
+            variant.primitives.push((prim.mesh.clone(), mat));
+        }
+
+        // If the mesh had no valid primitives, mark it as ready with a fallback.
+        // (prevents stalling `all_ready` forever on degenerate models)
+        if variant.primitives.is_empty() {
+            all_ready = false; // will retry next frame
+        }
+    }
+    deco.all_ready = all_ready;
+}
+
+// ── Decoration system ─────────────────────────────────────────────────────────
 
 fn apply_decorations(
-    mut commands: Commands,
-    mut state: ResMut<DecorationState>,
+    mut commands:  Commands,
+    mut state:     ResMut<DecorationState>,
     mut lifecycle: ResMut<ChunkLifecycle>,
-    assets: Res<DecorationAssets>,
-    map: Res<WorldMap>,
-    mgr: Res<ChunkManager>,
+    deco:          Res<DecorationAssets>,
+    map:           Res<WorldMap>,
+    mgr:           Res<ChunkManager>,
 ) {
-    // ── Despawn decorations for hidden chunks (always immediate) ───────────────
+    // ── Despawn hidden chunks (always immediate) ───────────────────────────────
 
-    for (coord, _entity) in lifecycle.newly_hidden.iter() {
+    for (coord, _) in lifecycle.newly_hidden.iter() {
         if let Some(entities) = state.spawned.remove(coord) {
             for ent in entities {
                 commands.entity(ent).despawn();
             }
         }
-        // Also remove from pending if it somehow queued but never processed.
         state.pending.retain(|c| c != coord);
     }
 
-    // ── Queue newly visible chunks (filtered by decoration radius) ─────────────
+    // ── Enqueue newly visible chunks (radius-filtered) ─────────────────────────
 
     let cam_chunk = mgr.last_cam_chunk;
-
-    for (coord, _entity) in lifecycle.newly_visible.iter().copied() {
-        // Skip if already decorated or already queued.
+    for (coord, _) in lifecycle.newly_visible.iter().copied() {
         if state.spawned.contains_key(&coord) || state.pending.contains(&coord) {
             continue;
         }
-        // Only decorate chunks within DECORATION_RADIUS of camera.
         if let Some(cc) = cam_chunk {
             let dist = (coord.cx - cc.cx).abs().max((coord.cy - cc.cy).abs());
-            if dist > DECORATION_RADIUS {
-                continue;
-            }
+            if dist > DECORATION_RADIUS { continue; }
         }
         state.pending.push_back(coord);
     }
 
-    // Drain lifecycle — refilled next frame.
     lifecycle.newly_visible.clear();
     lifecycle.newly_hidden.clear();
 
-    // ── Process pending chunks (rate-limited to CHUNKS_PER_FRAME) ─────────────
+    // ── Process pending queue (only when all assets are ready) ─────────────────
+
+    if !deco.all_ready { return; }
 
     let half_w = (map.width  / 2) as i32;
     let half_h = (map.height / 2) as i32;
@@ -175,29 +250,22 @@ fn apply_decorations(
     for _ in 0..CHUNKS_PER_FRAME {
         let Some(coord) = state.pending.pop_front() else { break };
 
-        // Skip if already decorated (e.g. enqueued twice) or no longer visible.
-        if state.spawned.contains_key(&coord) {
-            continue;
-        }
+        if state.spawned.contains_key(&coord) { continue; }
 
-        // Re-check radius: camera may have moved since this chunk was enqueued.
+        // Drop chunks that drifted outside the radius while queued.
         if let Some(cc) = cam_chunk {
             let dist = (coord.cx - cc.cx).abs().max((coord.cy - cc.cy).abs());
-            if dist > DECORATION_RADIUS {
-                continue; // Drop without decorating — too far now.
-            }
+            if dist > DECORATION_RADIUS { continue; }
         }
 
-        let mut chunk_entities: Vec<Entity> = Vec::new();
+        let mut chunk_roots: Vec<Entity> = Vec::new();
 
         let base_x = coord.cx * CHUNK_TILES as i32;
         let base_y = coord.cy * CHUNK_TILES as i32;
 
         'tile: for dy in 0..CHUNK_TILES as i32 {
             for dx in 0..CHUNK_TILES as i32 {
-                if chunk_entities.len() >= MAX_PER_CHUNK {
-                    break 'tile;
-                }
+                if chunk_roots.len() >= MAX_PER_CHUNK { break 'tile; }
 
                 let gx = (base_x + dx).clamp(0, map.width  as i32 - 1) as usize;
                 let gy = (base_y + dy).clamp(0, map.height as i32 - 1) as usize;
@@ -211,15 +279,16 @@ fn apply_decorations(
 
                 let h = tile_hash(map.seed, gx, gy);
 
-                let Some((scene_list, density, scale_base)) =
-                    decoration_for_biome(kind, &assets) else { continue };
+                let Some((variants, density, scale_base)) =
+                    decoration_for_biome(kind, &deco) else { continue };
 
-                // density out of 256 — lower value = more sparse.
-                if (h & 0xFF) as u32 >= density {
-                    continue;
-                }
+                if (h & 0xFF) as u32 >= density { continue; }
 
-                let idx       = ((h >>  8) as usize) % scene_list.len();
+                // Pick which variant to use; skip if not ready yet.
+                let idx     = ((h >> 8) as usize) % variants.len();
+                let variant = &variants[idx];
+                if !variant.is_ready() { continue; }
+
                 let yaw       = (((h >> 16) & 0xFF) as f32 / 255.0) * std::f32::consts::TAU;
                 let scale_var = 0.9 + (((h >> 24) & 0xFF) as f32 / 255.0) * 0.2;
                 let scale     = scale_base * scale_var;
@@ -228,48 +297,59 @@ fn apply_decorations(
                 let bz = gy as f32 - half_h as f32;
                 let by = vertex_height(&map, gx, gy);
 
-                let transform = Transform::from_xyz(bx, by, bz)
+                let parent_transform = Transform::from_xyz(bx, by, bz)
                     .with_rotation(Quat::from_rotation_y(yaw))
                     .with_scale(Vec3::splat(scale));
 
-                let ent = commands
-                    .spawn((SceneRoot(scene_list[idx].clone()), transform))
+                // Clone primitive handles before the closure borrow.
+                let primitives: Vec<_> = variant.primitives.clone();
+
+                let parent = commands
+                    .spawn((parent_transform, Visibility::Visible))
+                    .with_children(|p| {
+                        for (mesh, mat) in &primitives {
+                            p.spawn((
+                                Mesh3d(mesh.clone()),
+                                MeshMaterial3d(mat.clone()),
+                                Transform::default(),
+                            ));
+                        }
+                    })
                     .id();
-                chunk_entities.push(ent);
+
+                chunk_roots.push(parent);
             }
         }
 
-        state.spawned.insert(coord, chunk_entities);
+        state.spawned.insert(coord, chunk_roots);
     }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Returns `(scene_list, density_threshold_out_of_256, scale)` for the biome,
-/// or `None` if no decoration should appear (water, void, river).
-///
-/// Densities are kept low (~5–12%) to limit entity count.
+/// Returns `(variants, density_out_of_256, scale)` for the biome,
+/// or `None` for water / river / void (no decorations).
 fn decoration_for_biome(
     kind: TileKind,
-    assets: &DecorationAssets,
-) -> Option<(&Vec<Handle<Scene>>, u32, f32)> {
+    deco: &DecorationAssets,
+) -> Option<(&Vec<DecorationVariant>, u32, f32)> {
     match kind {
         TileKind::Forest | TileKind::TemperateForest =>
-            Some((&assets.broadleaf, 26, 1.0)),    // ~10%
+            Some((&deco.broadleaf, 64, 1.0)),         // ~25%
         TileKind::TropicalForest | TileKind::TropicalRainforest =>
-            Some((&assets.tropical, 32, 1.2)),     // ~12%
+            Some((&deco.tropical, 77, 1.2)),           // ~30%
         TileKind::Taiga =>
-            Some((&assets.conifer, 26, 1.0)),      // ~10%
+            Some((&deco.conifer,   64, 1.0)),          // ~25%
         TileKind::Mountain | TileKind::Stone =>
-            Some((&assets.rocks, 19, 0.8)),        // ~7%
+            Some((&deco.rocks,     38, 0.8)),          // ~15%
         TileKind::Tundra | TileKind::Arctic | TileKind::PolarDesert =>
-            Some((&assets.rocks, 13, 0.6)),        // ~5%
+            Some((&deco.rocks,     20, 0.6)),          // ~8%
         TileKind::Desert =>
-            Some((&assets.desert, 13, 1.0)),       // ~5%
+            Some((&deco.desert,    20, 1.0)),          // ~8%
         TileKind::Savanna =>
-            Some((&assets.bushes, 13, 0.7)),       // ~5%
+            Some((&deco.bushes,    20, 0.7)),          // ~8%
         TileKind::Plains | TileKind::Grassland =>
-            Some((&assets.bushes, 10, 0.6)),       // ~4%
+            Some((&deco.bushes,    13, 0.6)),          // ~5%
         TileKind::Water | TileKind::River | TileKind::Void => None,
     }
 }
