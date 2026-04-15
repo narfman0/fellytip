@@ -670,7 +670,6 @@ type BattleNpcQuery<'w, 's> = Query<
     (
         Entity,
         &'static CombatParticipant,
-        &'static Health,
         &'static FactionMember,
         Option<&'static WarPartyMember>,
         &'static WorldPosition,
@@ -713,11 +712,12 @@ fn run_battle_rounds(
         let mut attacker_snaps: Vec<(Entity, CombatantSnapshot, i32, Option<WorldPosition>)> = Vec::new();
         let mut defender_snaps: Vec<(Entity, CombatantSnapshot, i32, Option<WorldPosition>)> = Vec::new();
 
-        for (entity, cp, health, member, war_member, pos, home_pos) in &all_npcs {
+        for (entity, cp, member, war_member, pos, home_pos) in &all_npcs {
             let dist = ((pos.x - bx).powi(2) + (pos.y - by).powi(2)).sqrt();
             if dist > BATTLE_RADIUS * 4.0 {
                 continue;
             }
+            let Ok(health) = health_query.get(entity) else { continue };
             let snap = CombatantSnapshot {
                 id: cp.id.clone(),
                 faction: None,

@@ -224,13 +224,15 @@ fn main() {
         )
         .add_systems(
             Update,
-            (
-                try_connect,
-                log_replicated_positions,
-                tag_local_player,
-                reconcile_prediction,
-                send_player_input.in_set(ClientSet::Input),
-            ),
+            (try_connect, log_replicated_positions, reconcile_prediction),
+        )
+        .add_systems(
+            Update,
+            // Chain ensures tag_local_player's deferred inserts (LocalPlayer,
+            // PredictedPosition) are flushed by apply_deferred before
+            // send_player_input runs, so the correct spawn position is sent on
+            // the very first replication frame instead of pos=[0,0,0].
+            (tag_local_player, ApplyDeferred, send_player_input.in_set(ClientSet::Input)).chain(),
         )
         .add_observer(on_connected)
         .add_observer(on_disconnected);
@@ -396,13 +398,14 @@ fn headless_auto_attack(
 /// gracefully.
 fn send_player_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
-    mut sender: Single<&mut MessageSender<PlayerInput>>,
+    mut sender: Option<Single<&mut MessageSender<PlayerInput>>>,
     camera_q: Query<&OrbitCamera>,
     mut pred_q: Query<&mut PredictedPosition, With<LocalPlayer>>,
     map: Option<Res<WorldMap>>,
     time: Res<Time>,
 ) {
     let Some(keyboard) = keyboard else { return };
+    let Some(ref mut sender) = sender else { return };
 
     // Raw WASD input on screen axes (before camera rotation).
     let mut raw_x = 0.0_f32; // A/D strafe
@@ -497,9 +500,11 @@ fn send_player_input(
         None
     };
 
-    // Always send the current position so the server stays in sync.
-    // pos defaults to [0,0,0] until the local player entity is tagged.
-    let pos = pred_q.single().map(|p| [p.x, p.y, p.z]).unwrap_or([0.0; 3]);
+    // Only send once the local player is tagged; avoids sending pos=[0,0,0]
+    // on the first replication frame (which would teleport the server player
+    // to the map centre before PredictedPosition is initialised).
+    let Ok(pred) = pred_q.single() else { return };
+    let pos = [pred.x, pred.y, pred.z];
     sender.send::<PlayerInputChannel>(PlayerInput {
         move_dir: [world_dx, world_dy],
         pos,
