@@ -23,6 +23,22 @@
 //! all variant handles have been extracted; only then does the pending-chunk queue
 //! start draining.  GLB files are small, so this typically resolves in < 1 s.
 //!
+//! # Density distribution
+//!
+//! Placement uses two-octave value noise so forest patches have dense cores
+//! (both coarse and fine noise are low) that thin out toward edges (coarse is
+//! low but fine flips high for many tiles).  A secondary isolated-tree pass
+//! scatters a handful of lone trees into adjacent open biome tiles.
+//!
+//! # Tree growth
+//!
+//! Newly-spawned tree entities (not rocks/bushes) receive a `TreeGrowth`
+//! component.  Each tree is born at a deterministic age fraction derived from
+//! its tile hash so the world looks populated on first load.  `grow_trees`
+//! advances age each frame and removes the component once the tree is mature,
+//! stopping all per-frame work.  Future civilisation harvesting can despawn
+//! the parent entity; a tile→entity reverse map is the planned extension point.
+//!
 //! # Coordinate convention
 //! Tile `(gx, gy)` → Bevy `(gx − half_w, terrain_height, gy − half_h)`.
 
@@ -50,12 +66,17 @@ const MAX_PER_CHUNK: usize = 64;
 /// Pending chunks processed per frame — keeps frame time stable.
 const CHUNKS_PER_FRAME: usize = 3;
 
+/// Real-time seconds for a tree to grow from seedling to full size.
+/// Varies ±1 min per individual tree (hash-derived).
+const TREE_MATURE_SECS_BASE: f32 = 60.0;
+const TREE_MATURE_SECS_RANGE: f32 = 120.0;
+
 impl Plugin for SceneDecorationPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_decoration_assets)
             .add_systems(
                 Update,
-                (finalize_decoration_assets, apply_decorations).chain(),
+                (finalize_decoration_assets, apply_decorations, grow_trees).chain(),
             );
     }
 }
@@ -77,6 +98,14 @@ impl DecorationVariant {
     fn is_ready(&self) -> bool {
         !self.primitives.is_empty()
     }
+}
+
+/// Drives visual growth for a tree decoration.  Removed once the tree is mature.
+#[derive(Component)]
+struct TreeGrowth {
+    target_scale: f32,
+    mature_secs:  f32,
+    age_secs:     f32,
 }
 
 // ── Resources ─────────────────────────────────────────────────────────────────
@@ -193,10 +222,9 @@ fn finalize_decoration_assets(
             variant.primitives.push((prim.mesh.clone(), mat));
         }
 
-        // If the mesh had no valid primitives, mark it as ready with a fallback.
-        // (prevents stalling `all_ready` forever on degenerate models)
+        // If the mesh had no valid primitives, retry next frame.
         if variant.primitives.is_empty() {
-            all_ready = false; // will retry next frame
+            all_ready = false;
         }
     }
     deco.all_ready = all_ready;
@@ -277,39 +305,85 @@ fn apply_decorations(
                     .map(|l| l.kind)
                     .unwrap_or(TileKind::Void);
 
-                let Some((variants, density, scale_base)) =
+                let Some((variants, density, scale_base, grows)) =
                     decoration_for_biome(kind, &deco) else { continue };
 
-                // Patch noise creates natural organic clusters instead of
-                // salt-and-pepper.  The threshold equals the old density/256
-                // so overall coverage percentages are unchanged.
+                // ── Density gate: two-octave patch noise ──────────────────────
+                //
+                // The coarse octave (11 tiles) defines where clusters exist.
+                // The fine octave (4 tiles) adds internal variation so cluster
+                // cores are denser and edges thin out naturally.
                 let noise = patch_noise(map.seed, gx, gy);
-                if noise >= density as f32 / 256.0 { continue; }
+                let passed_main = noise < density as f32 / 256.0;
+
+                // ── Isolated-tree secondary pass ──────────────────────────────
+                //
+                // A small per-biome probability lets lone trees appear even
+                // outside the main cluster zone, giving an ecotone feel.
+                let passed_isolated = if !passed_main {
+                    let iso_threshold: u32 = match kind {
+                        TileKind::Forest | TileKind::TemperateForest        =>  8, // ~3%
+                        TileKind::Taiga                                      =>  8,
+                        TileKind::TropicalForest | TileKind::TropicalRainforest => 10, // ~4%
+                        TileKind::Plains | TileKind::Grassland               =>  4, // ~1.5%
+                        _ => 0,
+                    };
+                    if iso_threshold == 0 {
+                        false
+                    } else {
+                        let iso_h = tile_hash(map.seed ^ 0xFACE_CAFE_DEAD_BEEF, gx, gy);
+                        ((iso_h & 0xFF) as u32) < iso_threshold
+                    }
+                } else {
+                    false
+                };
+
+                if !passed_main && !passed_isolated { continue; }
 
                 let h = tile_hash(map.seed, gx, gy);
 
-                // Pick which variant to use; skip if not ready yet.
-                let idx     = ((h      ) as usize) % variants.len();
+                // Pick variant; skip if primitives not yet extracted.
+                let idx     = (h as usize) % variants.len();
                 let variant = &variants[idx];
                 if !variant.is_ready() { continue; }
 
                 let yaw       = (((h >>  8) & 0xFF) as f32 / 255.0) * std::f32::consts::TAU;
                 let scale_var = 0.9 + (((h >> 16) & 0xFF) as f32 / 255.0) * 0.2;
-                let scale     = scale_base * scale_var;
+                let target_scale = scale_base * scale_var;
 
                 let bx = gx as f32 - half_w as f32;
                 let bz = gy as f32 - half_h as f32;
                 let by = vertex_height(&map, gx, gy);
 
+                // ── Initial scale for growing trees ───────────────────────────
+                //
+                // Bits 32–39: age fraction 0%–90% so trees start at varied stages.
+                // Bits 40–47: mature time jitter.
+                let (spawn_scale, growth) = if grows {
+                    let age_frac   = (((h >> 32) & 0xFF) as f32 / 255.0) * 0.9;
+                    let mature_secs = TREE_MATURE_SECS_BASE
+                        + ((h >> 40) & 0xFF) as f32 / 255.0 * TREE_MATURE_SECS_RANGE;
+                    let age_secs   = age_frac * mature_secs;
+                    // Smoothstep so sapling sizes are visually distinct.
+                    let t0 = age_frac * age_frac * (3.0 - 2.0 * age_frac);
+                    let initial_scale = (target_scale * t0).max(target_scale * 0.05);
+                    let g = TreeGrowth { target_scale, mature_secs, age_secs };
+                    (initial_scale, Some(g))
+                } else {
+                    (target_scale, None)
+                };
+
                 let parent_transform = Transform::from_xyz(bx, by, bz)
                     .with_rotation(Quat::from_rotation_y(yaw))
-                    .with_scale(Vec3::splat(scale));
+                    .with_scale(Vec3::splat(spawn_scale));
 
-                // Clone primitive handles before the closure borrow.
                 let primitives: Vec<_> = variant.primitives.clone();
 
-                let parent = commands
-                    .spawn((parent_transform, Visibility::Visible))
+                let mut entity_cmds = commands.spawn((parent_transform, Visibility::Visible));
+                if let Some(g) = growth {
+                    entity_cmds.insert(g);
+                }
+                let parent = entity_cmds
                     .with_children(|p| {
                         for (mesh, mat) in &primitives {
                             p.spawn((
@@ -329,60 +403,76 @@ fn apply_decorations(
     }
 }
 
+// ── Growth system ─────────────────────────────────────────────────────────────
+
+/// Advances tree ages each frame and updates their Transform scale.
+/// The component is removed once the tree reaches full size, ending all updates.
+fn grow_trees(
+    time:     Res<Time>,
+    mut cmds: Commands,
+    mut q:    Query<(Entity, &mut Transform, &mut TreeGrowth)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut tf, mut g) in &mut q {
+        g.age_secs += dt;
+        let t = (g.age_secs / g.mature_secs).min(1.0);
+        // Smoothstep easing — fast early growth, decelerates near maturity.
+        let eased = t * t * (3.0 - 2.0 * t);
+        tf.scale = Vec3::splat((g.target_scale * eased).max(g.target_scale * 0.05));
+        if t >= 1.0 {
+            cmds.entity(entity).remove::<TreeGrowth>();
+        }
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Returns `(variants, density_out_of_256, scale)` for the biome,
+/// Returns `(variants, density_out_of_256, scale, grows)` for the biome,
 /// or `None` for water / river / void (no decorations).
+/// `grows` is true for trees/cacti/palms that participate in the growth system.
 fn decoration_for_biome(
     kind: TileKind,
     deco: &DecorationAssets,
-) -> Option<(&Vec<DecorationVariant>, u32, f32)> {
+) -> Option<(&Vec<DecorationVariant>, u32, f32, bool)> {
     match kind {
         TileKind::Forest | TileKind::TemperateForest =>
-            Some((&deco.broadleaf, 64, 1.0)),         // ~25%
+            Some((&deco.broadleaf, 64, 1.0, true)),       // ~25%
         TileKind::TropicalForest | TileKind::TropicalRainforest =>
-            Some((&deco.tropical, 77, 1.2)),           // ~30%
+            Some((&deco.tropical, 77, 1.2, true)),         // ~30%
         TileKind::Taiga =>
-            Some((&deco.conifer,   64, 1.0)),          // ~25%
+            Some((&deco.conifer,  64, 1.0, true)),         // ~25%
         TileKind::Mountain | TileKind::Stone =>
-            Some((&deco.rocks,     38, 0.8)),          // ~15%
+            Some((&deco.rocks,    38, 0.8, false)),        // ~15%
         TileKind::Tundra | TileKind::Arctic | TileKind::PolarDesert =>
-            Some((&deco.rocks,     20, 0.6)),          // ~8%
+            Some((&deco.rocks,    20, 0.6, false)),        // ~8%
         TileKind::Desert =>
-            Some((&deco.desert,    20, 1.0)),          // ~8%
+            Some((&deco.desert,   20, 1.0, true)),         // ~8%
         TileKind::Savanna =>
-            Some((&deco.bushes,    20, 0.7)),          // ~8%
+            Some((&deco.bushes,   20, 0.7, false)),        // ~8%
         TileKind::Plains | TileKind::Grassland =>
-            Some((&deco.bushes,    13, 0.6)),          // ~5%
+            Some((&deco.bushes,   13, 0.6, false)),        // ~5%
         TileKind::Water | TileKind::River | TileKind::Void => None,
     }
 }
 
-/// Bilinearly-interpolated value noise that creates spatially-coherent clusters.
+/// Single-octave bilinearly-interpolated value noise.
 ///
-/// Returns a value in `[0, 1)`. Tiles within ~`PATCH_TILES` of each other are
-/// correlated, producing natural-looking forest patches and rock outcroppings
-/// instead of salt-and-pepper distribution.
-fn patch_noise(seed: u64, gx: usize, gy: usize) -> f32 {
-    /// Size of one noise "patch" in tiles.  Larger = bigger clusters.
-    const PATCH_TILES: f32 = 11.0;
-
-    let fx = gx as f32 / PATCH_TILES;
-    let fy = gy as f32 / PATCH_TILES;
+/// Returns `[0, 1]`.  Adjacent tiles within `patch_tiles` are correlated.
+/// The corner lattice is hashed with the given `seed`.
+fn value_noise(seed: u64, gx: usize, gy: usize, patch_tiles: f32) -> f32 {
+    let fx = gx as f32 / patch_tiles;
+    let fy = gy as f32 / patch_tiles;
     let ix = fx.floor() as u32;
     let iy = fy.floor() as u32;
     let tx = fx - ix as f32;
     let ty = fy - iy as f32;
 
-    // Smoothstep — softens patch edges for gradual transitions.
+    // Smoothstep — softens patch edges for gradual density transitions.
     let sx = tx * tx * (3.0 - 2.0 * tx);
     let sy = ty * ty * (3.0 - 2.0 * ty);
 
-    // Hash the four surrounding lattice corners with a different seed offset
-    // so the patch grid is independent from per-tile variant/rotation hashes.
     let corner = |px: u32, py: u32| -> f32 {
-        let h = tile_hash(seed ^ 0xA5A5_A5A5_A5A5_A5A5, px as usize, py as usize);
-        // Use the high 32 bits (better distribution than the low bits).
+        let h = tile_hash(seed, px as usize, py as usize);
         (h >> 32) as f32 / u32::MAX as f32
     };
 
@@ -394,6 +484,18 @@ fn patch_noise(seed: u64, gx: usize, gy: usize) -> f32 {
     let v0 = v00 + sx * (v10 - v00);
     let v1 = v01 + sx * (v11 - v01);
     v0 + sy * (v1 - v0)
+}
+
+/// Two-octave noise producing cluster cores with dense centres and sparse edges.
+///
+/// Coarse octave (11 tiles) — determines whether this area is a cluster at all.
+/// Fine octave (4 tiles) — adds internal variation within the cluster.
+/// Tiles near a cluster core score low on both → always decorated.
+/// Tiles near a cluster edge score low on coarse but variable on fine → thinned out.
+fn patch_noise(seed: u64, gx: usize, gy: usize) -> f32 {
+    let coarse = value_noise(seed ^ 0xA5A5_A5A5_A5A5_A5A5, gx, gy, 11.0);
+    let fine   = value_noise(seed ^ 0x1234_5678_ABCD_EF01, gx, gy,  4.0);
+    coarse * 0.65 + fine * 0.35
 }
 
 /// Deterministic tile hash seeded by world seed + tile position.
