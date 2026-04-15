@@ -1,5 +1,6 @@
 pub mod battle;
 pub mod camera;
+pub mod character_animation;
 pub mod entity_renderer;
 pub mod hud;
 pub mod scene_decoration;
@@ -9,6 +10,7 @@ pub mod terrain;
 
 pub use battle::BattleVisualsPlugin;
 pub use camera::OrbitCameraPlugin;
+pub use character_animation::CharacterAnimationPlugin;
 pub use entity_renderer::EntityRendererPlugin;
 pub use hud::HudPlugin;
 pub use scene_decoration::SceneDecorationPlugin;
