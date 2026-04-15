@@ -15,6 +15,8 @@ use fellytip_shared::world::map::WorldMap;
 
 use super::chunk::{build_chunk_mesh, ChunkCoord};
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
+use super::water::build_water_mesh;
+use super::water_material::{WaterAssets, WaterMaterial};
 use crate::plugins::camera::OrbitCamera;
 
 // ── Chunk lifecycle notifications ─────────────────────────────────────────────
@@ -43,24 +45,36 @@ pub struct ChunkManager {
     pub lod_cache: HashMap<ChunkCoord, LodLevel>,
     /// Cached mesh handles keyed by (coord, lod) to avoid rebuilding unchanged meshes.
     pub mesh_cache: HashMap<(ChunkCoord, LodLevel), Handle<Mesh>>,
-    /// Chunks whose mesh must be (re)built this frame.
+    /// Chunks whose terrain mesh must be (re)built this frame.
     pub dirty: HashSet<ChunkCoord>,
     /// Camera chunk from the previous frame — skip work when camera hasn't moved.
     pub last_cam_chunk: Option<ChunkCoord>,
     /// View radius in chunks.  20 chunks × 32 tiles = 640 tiles, which exceeds
     /// the camera's max zoom distance of 400 world units with room for Eighth LOD.
     pub render_radius: i32,
+
+    // ── Water overlay (parallel to terrain) ──────────────────────────────────
+
+    /// Water entities currently spawned (one per chunk that has water tiles).
+    pub water_spawned: HashMap<ChunkCoord, Entity>,
+    /// Cached water mesh handles keyed by (coord, lod).
+    pub water_mesh_cache: HashMap<(ChunkCoord, LodLevel), Handle<Mesh>>,
+    /// Chunks whose water mesh must be (re)built this frame.
+    pub water_dirty: HashSet<ChunkCoord>,
 }
 
 impl Default for ChunkManager {
     fn default() -> Self {
         Self {
-            spawned:        HashMap::new(),
-            lod_cache:      HashMap::new(),
-            mesh_cache:     HashMap::new(),
-            dirty:          HashSet::new(),
-            last_cam_chunk: None,
-            render_radius:  20,
+            spawned:          HashMap::new(),
+            lod_cache:        HashMap::new(),
+            mesh_cache:       HashMap::new(),
+            dirty:            HashSet::new(),
+            last_cam_chunk:   None,
+            render_radius:    20,
+            water_spawned:    HashMap::new(),
+            water_mesh_cache: HashMap::new(),
+            water_dirty:      HashSet::new(),
         }
     }
 }
@@ -147,12 +161,14 @@ pub fn update_chunk_visibility(
         let changed = mgr.lod_cache.get(&coord) != Some(&lod);
         if changed {
             mgr.dirty.insert(coord);
+            mgr.water_dirty.insert(coord);
         }
     }
     // Newly visible chunks not yet in lod_cache.
     for &coord in &visible {
         if !mgr.lod_cache.contains_key(&coord) {
             mgr.dirty.insert(coord);
+            mgr.water_dirty.insert(coord);
         }
     }
 
@@ -250,5 +266,102 @@ pub fn apply_chunk_meshes(
             mgr.spawned.insert(coord, entity);
             lifecycle.newly_visible.push((coord, entity));
         }
+    }
+}
+
+// ── System 4: water mesh rebuild ─────────────────────────────────────────────
+
+/// Build or rebuild flat water meshes for chunks in `water_dirty`.
+///
+/// Chunks with no water tiles produce `None` from `build_water_mesh`; those are
+/// skipped and no handle is cached, so `apply_water_meshes` will not spawn an
+/// entity for them.
+pub fn rebuild_dirty_water(
+    map:        Res<WorldMap>,
+    mut mgr:    ResMut<ChunkManager>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    if mgr.water_dirty.is_empty() {
+        return;
+    }
+
+    let dirty: Vec<ChunkCoord> = mgr.water_dirty.drain().collect();
+
+    for coord in dirty {
+        let Some(&lod) = mgr.lod_cache.get(&coord) else { continue };
+
+        if let Some(mesh) = build_water_mesh(&map, coord, lod) {
+            let handle = meshes.add(mesh);
+            mgr.water_mesh_cache.insert((coord, lod), handle);
+        }
+        // When build_water_mesh returns None the chunk has no water tiles.
+        // No handle is inserted; apply_water_meshes will not spawn an entity.
+    }
+}
+
+// ── System 5: water ECS sync ──────────────────────────────────────────────────
+
+/// Spawn, update, or despawn water overlay entities to match `lod_cache`.
+///
+/// Mirrors `apply_chunk_meshes` but for water.  No `ChunkLifecycle`
+/// notifications are emitted — decorations only track terrain, not water.
+pub fn apply_water_meshes(
+    mut commands: Commands,
+    mut mgr:      ResMut<ChunkManager>,
+    assets:       Res<WaterAssets>,
+) {
+    // ── Despawn water entities for chunks no longer visible ───────────────────
+
+    let visible: HashSet<ChunkCoord> = mgr.lod_cache.keys().copied().collect();
+    let to_despawn: Vec<ChunkCoord> = mgr.water_spawned.keys()
+        .filter(|k| !visible.contains(k))
+        .copied()
+        .collect();
+
+    for coord in to_despawn {
+        if let Some(entity) = mgr.water_spawned.remove(&coord) {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    // ── Spawn or update visible water chunks ──────────────────────────────────
+
+    let to_update: Vec<(ChunkCoord, LodLevel)> = mgr.lod_cache
+        .iter()
+        .map(|(&c, &l)| (c, l))
+        .collect();
+
+    for (coord, lod) in to_update {
+        let Some(handle) = mgr.water_mesh_cache.get(&(coord, lod)).cloned() else {
+            // Chunk is land-only (no water mesh cached) — skip.
+            continue;
+        };
+
+        if let Some(&entity) = mgr.water_spawned.get(&coord) {
+            commands.entity(entity).insert(Mesh3d(handle));
+        } else {
+            let entity = commands.spawn((
+                Mesh3d(handle),
+                MeshMaterial3d(assets.material.clone()),
+                Transform::IDENTITY,
+            )).id();
+            mgr.water_spawned.insert(coord, entity);
+        }
+    }
+}
+
+// ── System 6: animate water ───────────────────────────────────────────────────
+
+/// Write elapsed time into the shared `WaterMaterial` uniform each frame.
+///
+/// All water entities share one material handle, so a single mutation here
+/// drives animation across every visible water chunk simultaneously.
+pub fn update_water_time(
+    time:      Res<Time>,
+    assets:    Res<WaterAssets>,
+    mut mats:  ResMut<Assets<WaterMaterial>>,
+) {
+    if let Some(mat) = mats.get_mut(&assets.material) {
+        mat.extension.time = time.elapsed_secs();
     }
 }

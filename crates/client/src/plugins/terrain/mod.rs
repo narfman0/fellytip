@@ -9,6 +9,8 @@ pub mod chunk;
 pub mod lod;
 pub mod manager;
 pub mod material;
+pub mod water;
+pub mod water_material;
 
 pub use manager::ChunkLifecycle;
 
@@ -21,25 +23,30 @@ use fellytip_shared::{
 use lightyear::prelude::Replicated;
 
 use manager::{
-    apply_chunk_meshes, rebuild_dirty_chunks, update_chunk_visibility,
-    ChunkManager, TerrainAssets,
+    apply_chunk_meshes, apply_water_meshes, rebuild_dirty_chunks, rebuild_dirty_water,
+    update_chunk_visibility, update_water_time, ChunkManager, TerrainAssets,
 };
 use material::create_terrain_material;
+use water_material::{setup_water_assets, WaterMaterialPlugin};
 use fellytip_shared::world::map::WorldMap;
 
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ChunkLifecycle>()
-            .add_systems(Startup, setup_terrain_assets)
+        app.add_plugins(WaterMaterialPlugin)
+            .init_resource::<ChunkLifecycle>()
+            .add_systems(Startup, (setup_terrain_assets, setup_water_assets))
             .add_systems(
                 Update,
                 (
                     apply_world_meta,
                     update_chunk_visibility,
                     rebuild_dirty_chunks,
+                    rebuild_dirty_water,
                     apply_chunk_meshes,
+                    apply_water_meshes,
+                    update_water_time,
                 )
                     .chain(),
             );
@@ -95,7 +102,8 @@ fn apply_world_meta(
     // Reset chunk manager so all chunks are rebuilt from the new map data.
     mgr.lod_cache.clear();
     mgr.mesh_cache.clear();
+    mgr.water_mesh_cache.clear();
     mgr.last_cam_chunk = None;
-    // Spawned chunk entities will be despawned by apply_chunk_meshes on the
-    // next frame (lod_cache is now empty, so all spawned are out-of-range).
+    // Spawned chunk entities will be despawned by apply_chunk_meshes /
+    // apply_water_meshes on the next frame (lod_cache is now empty).
 }
