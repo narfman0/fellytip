@@ -75,7 +75,7 @@ fn setup_entity_assets(
     let settlement_scenes = vec![
         asset_server.load("town/stall-green.glb#Scene0"),
         asset_server.load("town/stall-red.glb#Scene0"),
-        asset_server.load("town/tent_detailedClosed.glb#Scene0"),
+        asset_server.load("nature/tent_detailedClosed.glb#Scene0"),
         asset_server.load("town/fountain-round.glb#Scene0"),
         asset_server.load("town/windmill.glb#Scene0"),
     ];
