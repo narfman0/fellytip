@@ -17,7 +17,7 @@ fn spawn_lights(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
             color: Color::srgb(1.0, 0.97, 0.88), // slightly warm white
-            illuminance: 50_000.0,
+            illuminance: 32_000.0, // ~bright overcast/hazy noon; clear peak is ~100k
             shadows_enabled: true,
             ..default()
         },
@@ -33,7 +33,7 @@ fn spawn_lights(mut commands: Commands) {
     // In Bevy 0.18, AmbientLight is a component spawned on a dedicated entity.
     commands.spawn(AmbientLight {
         color: Color::srgb(0.55, 0.65, 0.80),
-        brightness: 300.0,
+        brightness: 80.0, // soft sky fill; Bevy default — keeps shadows readable
         ..default()
     });
 }
