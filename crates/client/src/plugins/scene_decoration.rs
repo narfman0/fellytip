@@ -277,20 +277,24 @@ fn apply_decorations(
                     .map(|l| l.kind)
                     .unwrap_or(TileKind::Void);
 
-                let h = tile_hash(map.seed, gx, gy);
-
                 let Some((variants, density, scale_base)) =
                     decoration_for_biome(kind, &deco) else { continue };
 
-                if (h & 0xFF) as u32 >= density { continue; }
+                // Patch noise creates natural organic clusters instead of
+                // salt-and-pepper.  The threshold equals the old density/256
+                // so overall coverage percentages are unchanged.
+                let noise = patch_noise(map.seed, gx, gy);
+                if noise >= density as f32 / 256.0 { continue; }
+
+                let h = tile_hash(map.seed, gx, gy);
 
                 // Pick which variant to use; skip if not ready yet.
-                let idx     = ((h >> 8) as usize) % variants.len();
+                let idx     = ((h      ) as usize) % variants.len();
                 let variant = &variants[idx];
                 if !variant.is_ready() { continue; }
 
-                let yaw       = (((h >> 16) & 0xFF) as f32 / 255.0) * std::f32::consts::TAU;
-                let scale_var = 0.9 + (((h >> 24) & 0xFF) as f32 / 255.0) * 0.2;
+                let yaw       = (((h >>  8) & 0xFF) as f32 / 255.0) * std::f32::consts::TAU;
+                let scale_var = 0.9 + (((h >> 16) & 0xFF) as f32 / 255.0) * 0.2;
                 let scale     = scale_base * scale_var;
 
                 let bx = gx as f32 - half_w as f32;
@@ -352,6 +356,44 @@ fn decoration_for_biome(
             Some((&deco.bushes,    13, 0.6)),          // ~5%
         TileKind::Water | TileKind::River | TileKind::Void => None,
     }
+}
+
+/// Bilinearly-interpolated value noise that creates spatially-coherent clusters.
+///
+/// Returns a value in `[0, 1)`. Tiles within ~`PATCH_TILES` of each other are
+/// correlated, producing natural-looking forest patches and rock outcroppings
+/// instead of salt-and-pepper distribution.
+fn patch_noise(seed: u64, gx: usize, gy: usize) -> f32 {
+    /// Size of one noise "patch" in tiles.  Larger = bigger clusters.
+    const PATCH_TILES: f32 = 11.0;
+
+    let fx = gx as f32 / PATCH_TILES;
+    let fy = gy as f32 / PATCH_TILES;
+    let ix = fx.floor() as u32;
+    let iy = fy.floor() as u32;
+    let tx = fx - ix as f32;
+    let ty = fy - iy as f32;
+
+    // Smoothstep — softens patch edges for gradual transitions.
+    let sx = tx * tx * (3.0 - 2.0 * tx);
+    let sy = ty * ty * (3.0 - 2.0 * ty);
+
+    // Hash the four surrounding lattice corners with a different seed offset
+    // so the patch grid is independent from per-tile variant/rotation hashes.
+    let corner = |px: u32, py: u32| -> f32 {
+        let h = tile_hash(seed ^ 0xA5A5_A5A5_A5A5_A5A5, px as usize, py as usize);
+        // Use the high 32 bits (better distribution than the low bits).
+        (h >> 32) as f32 / u32::MAX as f32
+    };
+
+    let v00 = corner(ix,     iy);
+    let v10 = corner(ix + 1, iy);
+    let v01 = corner(ix,     iy + 1);
+    let v11 = corner(ix + 1, iy + 1);
+
+    let v0 = v00 + sx * (v10 - v00);
+    let v1 = v01 + sx * (v11 - v01);
+    v0 + sy * (v1 - v0)
 }
 
 /// Deterministic tile hash seeded by world seed + tile position.
