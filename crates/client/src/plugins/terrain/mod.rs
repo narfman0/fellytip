@@ -10,6 +10,8 @@ pub mod lod;
 pub mod manager;
 pub mod material;
 
+pub use manager::ChunkLifecycle;
+
 use bevy::prelude::*;
 use fellytip_shared::{
     WORLD_SEED,
@@ -29,7 +31,8 @@ pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_terrain_assets)
+        app.init_resource::<ChunkLifecycle>()
+            .add_systems(Startup, setup_terrain_assets)
             .add_systems(
                 Update,
                 (

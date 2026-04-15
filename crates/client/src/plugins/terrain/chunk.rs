@@ -178,7 +178,7 @@ pub fn build_chunk_mesh(
 ///
 /// A vertex at `(gx, gy)` is the TL corner of tile `(gx, gy)`,
 /// stored as `corner_offsets[0]`.
-fn vertex_height(map: &WorldMap, gx: usize, gy: usize) -> f32 {
+pub fn vertex_height(map: &WorldMap, gx: usize, gy: usize) -> f32 {
     let col = map.column(gx, gy);
     if let Some(layer) = col.layers.iter().rev().find(|l| l.is_surface_kind()) {
         layer.z_top + layer.corner_offsets[0]

@@ -3,12 +3,12 @@
 //! Every entity that arrives from the server with a `WorldPosition` + `Replicated`
 //! gets a mesh inserted directly.  Visual appearance is determined by `EntityKind`:
 //!
-//! | `EntityKind`  | Mesh     | Colour       |
-//! |---------------|----------|--------------|
-//! | absent        | capsule  | warm gold    | ← player
-//! | `FactionNpc`  | capsule  | steel blue   |
-//! | `Wildlife`    | capsule  | forest green |
-//! | `Settlement`  | pillar   | bright white |
+//! | `EntityKind`  | Mesh              | Appearance          |
+//! |---------------|-------------------|---------------------|
+//! | absent        | capsule           | warm gold           | ← player
+//! | `FactionNpc`  | capsule           | steel blue          |
+//! | `Wildlife`    | capsule           | forest green        |
+//! | `Settlement`  | GLB scene (Kenney Fantasy Town Kit) | 3D building |
 //!
 //! A separate system keeps the Bevy `Transform` in sync as the server pushes
 //! position updates.
@@ -48,29 +48,28 @@ impl Plugin for EntityRendererPlugin {
 // ── Assets ────────────────────────────────────────────────────────────────────
 
 /// Pre-built mesh + material handles for all entity visual variants.
+///
+/// Settlement entities use GLB scene handles instead of procedural meshes.
 #[derive(Resource)]
 struct EntityVisualAssets {
     capsule_mesh: Handle<Mesh>,
-    /// Tall cylinder used for settlement markers.
-    pillar_mesh: Handle<Mesh>,
     /// Warm gold — local and remote players.
     player_mat: Handle<StandardMaterial>,
     /// Steel blue — faction guard NPCs.
     faction_npc_mat: Handle<StandardMaterial>,
     /// Forest green — ecology wildlife.
     wildlife_mat: Handle<StandardMaterial>,
-    /// Bright white — settlement markers.
-    settlement_mat: Handle<StandardMaterial>,
+    /// Fantasy Town Kit GLB scenes — one is picked per settlement based on entity id.
+    settlement_scenes: Vec<Handle<Scene>>,
 }
 
 fn setup_entity_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let capsule_mesh = meshes.add(Capsule3d::new(0.3, 0.4));
-    // Radius 0.2, height 3.0 — thin pillar standing 3 units tall.
-    let pillar_mesh = meshes.add(Cylinder::new(0.2, 3.0));
 
     let player_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.95, 0.75, 0.20), // warm gold
@@ -87,20 +86,21 @@ fn setup_entity_assets(
         perceptual_roughness: 0.70,
         ..default()
     });
-    let settlement_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.95, 0.95, 0.95), // bright white
-        perceptual_roughness: 0.30,
-        emissive: LinearRgba::new(0.15, 0.15, 0.15, 1.0),
-        ..default()
-    });
+
+    let settlement_scenes = vec![
+        asset_server.load("town/stall-green.glb#Scene0"),
+        asset_server.load("town/stall-red.glb#Scene0"),
+        asset_server.load("town/tent_detailedClosed.glb#Scene0"),
+        asset_server.load("town/fountain-round.glb#Scene0"),
+        asset_server.load("town/windmill.glb#Scene0"),
+    ];
 
     commands.insert_resource(EntityVisualAssets {
         capsule_mesh,
-        pillar_mesh,
         player_mat,
         faction_npc_mat,
         wildlife_mat,
-        settlement_mat,
+        settlement_scenes,
     });
 }
 
@@ -109,15 +109,13 @@ fn setup_entity_assets(
 /// Half-height offset for capsule entities so the visual base sits on terrain.
 const CAPSULE_HALF_HEIGHT: f32 = 0.7; // half of total capsule height (~1.4 / 2)
 
-/// Half-height offset for pillar entities (cylinder height 3.0 / 2).
-const PILLAR_HALF_HEIGHT: f32 = 1.5;
-
 fn capsule_translation(pos: &WorldPosition) -> Vec3 {
     Vec3::new(pos.x, pos.z + CAPSULE_HALF_HEIGHT, pos.y)
 }
 
-fn pillar_translation(pos: &WorldPosition) -> Vec3 {
-    Vec3::new(pos.x, pos.z + PILLAR_HALF_HEIGHT, pos.y)
+fn settlement_translation(pos: &WorldPosition) -> Vec3 {
+    // GLB models have their origin at the base; place directly on terrain surface.
+    Vec3::new(pos.x, pos.z, pos.y)
 }
 
 // ── Systems ───────────────────────────────────────────────────────────────────
@@ -136,39 +134,46 @@ fn spawn_entity_visuals(
     query: SpawnVisualQuery,
 ) {
     for (entity, pos, kind, growth) in &query {
-        let (mesh, material, translation) = match kind {
-            Some(EntityKind::FactionNpc) => (
-                assets.capsule_mesh.clone(),
-                assets.faction_npc_mat.clone(),
-                capsule_translation(pos),
-            ),
-            Some(EntityKind::Wildlife) => (
-                assets.capsule_mesh.clone(),
-                assets.wildlife_mat.clone(),
-                capsule_translation(pos),
-            ),
-            Some(EntityKind::Settlement) => (
-                assets.pillar_mesh.clone(),
-                assets.settlement_mat.clone(),
-                pillar_translation(pos),
-            ),
-            None => (
-                assets.capsule_mesh.clone(),
-                assets.player_mat.clone(),
-                capsule_translation(pos),
-            ),
-        };
+        match kind {
+            Some(EntityKind::Settlement) => {
+                // Hash the entity's generation+index bits to pick a stable variant.
+                let idx = (entity.to_bits() as usize) % assets.settlement_scenes.len();
+                let scene = assets.settlement_scenes[idx].clone();
+                let translation = settlement_translation(pos);
+                commands.entity(entity).insert((
+                    SceneRoot(scene),
+                    Transform::from_translation(translation).with_scale(Vec3::splat(2.0)),
+                ));
+            }
+            _ => {
+                let (mesh, material) = match kind {
+                    Some(EntityKind::FactionNpc) => (
+                        assets.capsule_mesh.clone(),
+                        assets.faction_npc_mat.clone(),
+                    ),
+                    Some(EntityKind::Wildlife) => (
+                        assets.capsule_mesh.clone(),
+                        assets.wildlife_mat.clone(),
+                    ),
+                    _ => (
+                        assets.capsule_mesh.clone(),
+                        assets.player_mat.clone(),
+                    ),
+                };
+                let translation = capsule_translation(pos);
 
-        // Apply initial scale from GrowthStage (0.0 = newborn, 1.0 = adult).
-        let scale = growth
-            .map(|g| 0.3 + 0.7 * g.0.clamp(0.0, 1.0))
-            .unwrap_or(1.0);
+                // Apply initial scale from GrowthStage (0.0 = newborn, 1.0 = adult).
+                let scale = growth
+                    .map(|g| 0.3 + 0.7 * g.0.clamp(0.0, 1.0))
+                    .unwrap_or(1.0);
 
-        commands.entity(entity).insert((
-            Transform::from_translation(translation).with_scale(Vec3::splat(scale)),
-            Mesh3d(mesh),
-            MeshMaterial3d(material),
-        ));
+                commands.entity(entity).insert((
+                    Transform::from_translation(translation).with_scale(Vec3::splat(scale)),
+                    Mesh3d(mesh),
+                    MeshMaterial3d(material),
+                ));
+            }
+        }
     }
 }
 
@@ -191,7 +196,7 @@ fn sync_remote_transforms(
 ) {
     for (pos, mut transform, kind) in &mut query {
         transform.translation = match kind {
-            Some(EntityKind::Settlement) => pillar_translation(pos),
+            Some(EntityKind::Settlement) => settlement_translation(pos),
             _ => capsule_translation(pos),
         };
     }

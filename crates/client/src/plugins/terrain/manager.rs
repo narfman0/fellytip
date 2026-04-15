@@ -17,6 +17,21 @@ use super::chunk::{build_chunk_mesh, ChunkCoord};
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
 use crate::plugins::camera::OrbitCamera;
 
+// ── Chunk lifecycle notifications ─────────────────────────────────────────────
+
+/// Per-frame lists of chunks that just became visible or hidden.
+///
+/// Decoration and other systems drain these each frame to react to chunk
+/// lifecycle without needing Bevy events.  `apply_chunk_meshes` fills them;
+/// consumer systems should drain them (via `clear()`) after processing.
+#[derive(Resource, Default)]
+pub struct ChunkLifecycle {
+    /// Chunks that first became visible this frame (coord + mesh entity).
+    pub newly_visible: Vec<(ChunkCoord, Entity)>,
+    /// Chunks that were hidden this frame (coord + mesh entity).
+    pub newly_hidden: Vec<(ChunkCoord, Entity)>,
+}
+
 // ── Resource ──────────────────────────────────────────────────────────────────
 
 /// State for the chunk terrain system.
@@ -191,9 +206,10 @@ fn is_coarser_neighbor(
 // ── System 3: ECS sync ────────────────────────────────────────────────────────
 
 pub fn apply_chunk_meshes(
-    mut commands: Commands,
-    mut mgr:      ResMut<ChunkManager>,
-    assets:       Res<TerrainAssets>,
+    mut commands:  Commands,
+    mut mgr:       ResMut<ChunkManager>,
+    assets:        Res<TerrainAssets>,
+    mut lifecycle: ResMut<ChunkLifecycle>,
 ) {
     // ── Despawn chunks no longer in lod_cache ─────────────────────────────────
 
@@ -205,6 +221,7 @@ pub fn apply_chunk_meshes(
 
     for coord in to_despawn {
         if let Some(entity) = mgr.spawned.remove(&coord) {
+            lifecycle.newly_hidden.push((coord, entity));
             commands.entity(entity).despawn();
         }
     }
@@ -231,6 +248,7 @@ pub fn apply_chunk_meshes(
                 Transform::IDENTITY,
             )).id();
             mgr.spawned.insert(coord, entity);
+            lifecycle.newly_visible.push((coord, entity));
         }
     }
 }

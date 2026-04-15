@@ -149,6 +149,7 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::OrbitCameraPlugin)
     .add_plugins(plugins::SkyboxPlugin)
     .add_plugins(plugins::TerrainPlugin)
+    .add_plugins(plugins::SceneDecorationPlugin)
     .add_plugins(plugins::EntityRendererPlugin)
     .add_plugins(plugins::BattleVisualsPlugin)
     .add_plugins(plugins::HudPlugin);
