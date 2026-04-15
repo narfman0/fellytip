@@ -108,7 +108,6 @@ fn setup_character_assets(
 fn link_anim_players(
     added_players:  Query<Entity, Added<AnimationPlayer>>,
     parents:        Query<&ChildOf>,
-    char_entities:  Query<Entity, With<CharacterAnimState>>,
     mut states:     Query<&mut CharacterAnimState>,
     mut commands:   Commands,
     char_assets:    Res<CharacterAssets>,
@@ -118,7 +117,7 @@ fn link_anim_players(
         // Walk up the hierarchy to find the character entity.
         let mut cur = player_entity;
         let char_entity = loop {
-            if char_entities.contains(cur) { break cur; }
+            if states.contains(cur) { break cur; }
             match parents.get(cur) {
                 Ok(p)  => cur = p.parent(),
                 Err(_) => continue 'outer,
