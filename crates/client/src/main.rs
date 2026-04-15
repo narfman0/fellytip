@@ -3,7 +3,6 @@ mod plugins;
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
-use bevy::render::{RenderPlugin, settings::{Backends, RenderCreation, WgpuSettings}};
 use core::time::Duration;
 use fellytip_shared::{
     PLAYER_SPEED, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
@@ -137,32 +136,8 @@ fn maybe_spawn_server() -> Option<std::process::Child> {
 fn add_windowed_plugins(app: &mut App) {
     // Windowed: full render stack.  DefaultPlugins includes LogPlugin so we
     // do NOT call tracing_subscriber::fmt::init() to avoid a double-init.
-    // Two bugs in Bevy 0.18 on Intel Iris Xe / Windows require workarounds:
-    //
-    // 1. Vulkan backend: `pbr_alpha_blend_mesh_pipeline` shader always includes
-    //    `@group(2) @binding(100)` but the pipeline layout omits it
-    //    → wgpu Validation Error on startup.  Fixed by using DX12.
-    //
-    // 2. DX12 debug builds: wgpu-core GPU preprocessing fires a `debug_assert_eq!`
-    //    because the indirect-draw entries are 32-byte-strided while the
-    //    DrawIndexedIndirectArgs validator expects 20-byte stride.
-    //    Fixed by disabling debug-assertions for wgpu-core in Cargo.toml:
-    //    [profile.dev.package.wgpu-core] debug-assertions = false
-    #[cfg(target_os = "windows")]
-    let render_plugin = RenderPlugin {
-        render_creation: RenderCreation::Automatic(WgpuSettings {
-            backends: Some(Backends::DX12),
-            ..default()
-        }),
-        ..default()
-    };
-    #[cfg(not(target_os = "windows"))]
-    let render_plugin = RenderPlugin::default();
-
     app.add_plugins(
-        DefaultPlugins.build()
-            .set(render_plugin)
-            .set(WindowPlugin {
+        DefaultPlugins.build().set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Fellytip".into(),
                 ..default()

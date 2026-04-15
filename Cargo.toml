@@ -36,6 +36,3 @@ fellytip-shared     = { path = "crates/shared" }
 
 [profile.dev.package."*"]
 opt-level = 3
-
-[profile.dev.package.wgpu-core]
-debug-assertions = false
