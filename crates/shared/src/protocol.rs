@@ -2,7 +2,7 @@
 //! Must be added AFTER `ServerPlugins`/`ClientPlugins` but BEFORE any
 //! `Server`/`Client` entity is spawned.
 
-use crate::components::{EntityKind, Experience, GrowthStage, Health, WorldMeta, WorldPosition};
+use crate::components::{EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WorldMeta, WorldPosition};
 use crate::inputs::PlayerInput;
 use bevy::prelude::*;
 use core::time::Duration;
@@ -42,6 +42,13 @@ pub struct BattleStartMsg {
     pub y: f32,
     /// Elevation of the battle site.
     pub z: f32,
+}
+
+/// Sent by the server when a significant world story event occurs.
+/// Displayed in the client's story panel (bottom-right HUD).
+#[derive(Serialize, Deserialize, Debug, Clone, Event)]
+pub struct StoryMsg {
+    pub text: String,
 }
 
 /// Sent by the server when a battle concludes (one side eliminated).
@@ -98,6 +105,8 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<EntityKind>();
         app.register_type::<WorldMeta>();
         app.register_type::<GrowthStage>();
+        app.register_type::<FactionBadge>();
+        app.register_type::<PlayerStandings>();
 
         // Register components with lightyear for network replication.
         app.register_component::<WorldPosition>();
@@ -106,12 +115,16 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_component::<EntityKind>();
         app.register_component::<WorldMeta>();
         app.register_component::<GrowthStage>();
+        app.register_component::<FactionBadge>();
+        app.register_component::<PlayerStandings>();
 
         // Messages
         app.register_message::<GreetMsg>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<PlayerInput>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<StoryMsg>()
+            .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<BattleStartMsg>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<BattleEndMsg>()

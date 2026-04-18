@@ -1,28 +1,36 @@
 //! In-game HUD rendered via egui.
 //!
-//! Draws a compact stats panel anchored to the bottom-left corner of the screen
-//! showing the local player's health bar and XP progress.  Only added in
-//! windowed mode; headless builds skip this plugin entirely.
+//! Panels:
+//!   - Bottom-left: player health bar + XP progress.
+//!   - Top-left: faction reputation standings.
+//!   - Top-right: battle log.
+//!   - Bottom-right: world story event feed.
+//!
+//! Only added in windowed mode; headless builds skip this plugin entirely.
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
-use fellytip_shared::components::{Experience, Health};
+use fellytip_shared::{
+    components::{Experience, Health, PlayerStandings},
+    world::faction::standing_tier,
+};
 use lightyear::prelude::Replicated;
-use crate::plugins::battle::BattleLog;
+use crate::plugins::battle::{BattleLog, ClientStoryLog};
+use crate::LocalPlayer;
 
 type LocalPlayerQuery<'w, 's> =
-    Query<'w, 's, (&'static Health, &'static Experience), (With<Replicated>, With<Experience>)>;
+    Query<'w, 's, (&'static Health, &'static Experience, Option<&'static PlayerStandings>), (With<Replicated>, With<Experience>)>;
 
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
-            .add_systems(EguiPrimaryContextPass, (draw_hud, draw_battle_log));
+            .add_systems(EguiPrimaryContextPass, (draw_hud, draw_standings, draw_battle_log, draw_story_log));
     }
 }
 
-/// Draw the player stats overlay every frame.
+/// Draw the player stats overlay every frame (bottom-left).
 fn draw_hud(
     mut ctx: EguiContexts,
     player_q: LocalPlayerQuery,
@@ -33,7 +41,7 @@ fn draw_hud(
         .title_bar(false)
         .show(ctx.ctx_mut()?, |ui| {
             match player_q.single() {
-                Ok((health, exp)) => {
+                Ok((health, exp, _)) => {
                     let hp_frac =
                         (health.current as f32 / health.max.max(1) as f32).clamp(0.0, 1.0);
                     ui.label(format!("HP  {}/{}", health.current, health.max));
@@ -57,7 +65,39 @@ fn draw_hud(
     Ok(())
 }
 
-/// Draw the battle log panel anchored to the top-right corner.
+/// Draw per-faction reputation standings (top-left).
+fn draw_standings(
+    mut ctx: EguiContexts,
+    player_q: Query<&PlayerStandings, With<LocalPlayer>>,
+) -> Result {
+    let Ok(standings) = player_q.single() else { return Ok(()) };
+    if standings.standings.is_empty() {
+        return Ok(());
+    }
+    egui::Window::new("Faction Standing")
+        .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
+        .resizable(false)
+        .show(ctx.ctx_mut()?, |ui| {
+            for (faction, score) in &standings.standings {
+                let tier = standing_tier(*score);
+                let color = tier_color(tier);
+                ui.colored_label(color, format!("{faction}: {score:+} ({tier:?})"));
+            }
+        });
+    Ok(())
+}
+
+fn tier_color(tier: fellytip_shared::world::faction::StandingTier) -> egui::Color32 {
+    use fellytip_shared::world::faction::StandingTier;
+    match tier {
+        StandingTier::Exalted | StandingTier::Honored => egui::Color32::from_rgb(100, 220, 100),
+        StandingTier::Friendly | StandingTier::Neutral => egui::Color32::from_rgb(200, 200, 200),
+        StandingTier::Unfriendly => egui::Color32::from_rgb(230, 180, 80),
+        StandingTier::Hostile | StandingTier::Hated   => egui::Color32::from_rgb(220, 60, 60),
+    }
+}
+
+/// Draw the battle log panel (top-right).
 fn draw_battle_log(
     mut ctx: EguiContexts,
     log: Res<BattleLog>,
@@ -68,6 +108,25 @@ fn draw_battle_log(
         .show(ctx.ctx_mut()?, |ui| {
             let entries = log.entries.iter().rev().take(20);
             for entry in entries {
+                ui.label(entry.as_str());
+            }
+        });
+    Ok(())
+}
+
+/// Draw the world story event feed (bottom-right).
+fn draw_story_log(
+    mut ctx: EguiContexts,
+    log: Res<ClientStoryLog>,
+) -> Result {
+    if log.entries.is_empty() {
+        return Ok(());
+    }
+    egui::Window::new("World Events")
+        .anchor(egui::Align2::RIGHT_BOTTOM, [-10.0, -10.0])
+        .resizable(false)
+        .show(ctx.ctx_mut()?, |ui| {
+            for entry in log.entries.iter().rev().take(10) {
                 ui.label(entry.as_str());
             }
         });

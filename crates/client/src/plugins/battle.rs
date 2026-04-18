@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use lightyear::prelude::{client::Client, MessageReceiver};
 use fellytip_shared::{
-    protocol::{BattleAttackMsg, BattleEndMsg, BattleStartMsg},
+    protocol::{BattleAttackMsg, BattleEndMsg, BattleStartMsg, StoryMsg},
     world::population::BATTLE_RADIUS,
 };
 use uuid::Uuid;
@@ -23,6 +23,23 @@ pub struct BattleLog {
 
 impl BattleLog {
     const MAX_ENTRIES: usize = 50;
+
+    pub fn push(&mut self, entry: String) {
+        if self.entries.len() >= Self::MAX_ENTRIES {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+    }
+}
+
+/// Rolling world-story event log shown in the HUD story panel.
+#[derive(Resource, Default)]
+pub struct ClientStoryLog {
+    pub entries: Vec<String>,
+}
+
+impl ClientStoryLog {
+    const MAX_ENTRIES: usize = 20;
 
     pub fn push(&mut self, entry: String) {
         if self.entries.len() >= Self::MAX_ENTRIES {
@@ -56,6 +73,7 @@ pub struct BattleVisualsPlugin;
 impl Plugin for BattleVisualsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BattleLog>()
+            .init_resource::<ClientStoryLog>()
             .add_systems(Startup, setup_battle_assets)
             .add_systems(
                 Update,
@@ -63,6 +81,7 @@ impl Plugin for BattleVisualsPlugin {
                     on_battle_start,
                     on_battle_end,
                     on_battle_attack,
+                    on_story_msg,
                     animate_battle_rings,
                 ),
             );
@@ -151,6 +170,18 @@ fn on_battle_attack(
     let Ok(mut recv) = receiver.single_mut() else { return };
     for _msg in recv.receive() {
         // Consumed to prevent buffer buildup; detailed flash deferred to future milestone.
+    }
+}
+
+/// Receive `StoryMsg` broadcasts from the server and append to `ClientStoryLog`.
+fn on_story_msg(
+    mut receiver: Query<&mut MessageReceiver<StoryMsg>, With<Client>>,
+    mut log: ResMut<ClientStoryLog>,
+) {
+    let Ok(mut recv) = receiver.single_mut() else { return };
+    for msg in recv.receive() {
+        tracing::debug!(text = %msg.text, "Story event received");
+        log.push(msg.text.clone());
     }
 }
 

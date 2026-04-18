@@ -3,21 +3,21 @@
 
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
-use crate::plugins::persistence::Db;
 use crate::plugins::interest::ChunkTemperature;
+use crate::plugins::persistence::Db;
 use lightyear::prelude::{server::Server, NetworkTarget, Replicate, ServerMultiMessageSender};
 use fellytip_shared::{
     combat::{
         interrupt::InterruptStack,
         types::{CharacterClass, CombatantId, CombatantSnapshot, CombatantState, CombatState, CoreStats, Effect},
     },
-    components::{EntityKind, GrowthStage, Health, WorldPosition},
+    components::{EntityKind, FactionBadge, GrowthStage, Health, PlayerStandings, WorldPosition},
     protocol::{BattleAttackMsg, BattleEndMsg, BattleStartMsg, CombatEventChannel},
     world::{
         civilization::Settlements,
         faction::{
             Disposition, Faction, FactionId, FactionResources, FactionGoal, NpcRank,
-            PlayerReputationMap, STANDING_NEUTRAL, STANDING_HOSTILE, pick_goal,
+            PlayerReputationMap, standing_tier, STANDING_NEUTRAL, STANDING_HOSTILE, pick_goal,
         },
         ecology::RegionId,
         map::{CHUNK_TILES, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
@@ -25,6 +25,7 @@ use fellytip_shared::{
             tick_population, PopulationEffect, SettlementPopulation,
             BATTLE_RADIUS, MARCH_SPEED, WAR_PARTY_SIZE,
         },
+        story::{StoryEvent, StoryEventKind, WriteStoryEvent},
         war::{seeded_dice, tick_battle_round},
     },
 };
@@ -58,13 +59,17 @@ pub struct FactionRegistry {
     pub factions: Vec<Faction>,
 }
 
-/// Tags an NPC as part of an active war party marching toward a target settlement.
+/// Tags an NPC as part of an active war party marching toward a target.
 /// Server-only — never replicated.
 #[derive(Component)]
 pub struct WarPartyMember {
     pub target_settlement_id: Uuid,
     pub target_x: f32,
     pub target_y: f32,
+    /// When set, this war party is hunting the given player entity rather than
+    /// marching to the settlement.  `target_x`/`target_y` are updated each tick
+    /// by `update_war_party_player_targets` to follow the player's position.
+    pub player_target: Option<Entity>,
 }
 
 /// Lives on a bookkeeping entity while a battle is ongoing at a settlement.
@@ -122,9 +127,11 @@ impl Plugin for AiPlugin {
                 tick_population_system,
                 age_npcs_system,
                 check_war_party_formation,
+                update_war_party_player_targets,
                 march_war_parties,
                 run_battle_rounds,
                 wander_npcs,
+                sync_player_standings,
             ).chain(),
         );
         // spawn_faction_npcs, init_population_state, and flush_factions_to_db are
@@ -212,6 +219,7 @@ pub fn spawn_faction_npcs(
                 ExperienceReward(50),
                 FactionMember(faction.id.clone()),
                 FactionNpcRank(NpcRank::Grunt),
+                FactionBadge { faction_id: faction.id.0.to_string(), rank: NpcRank::Grunt },
                 CurrentGoal(None),
                 HomePosition(pos),
                 EntityKind::FactionNpc,
@@ -499,6 +507,7 @@ fn tick_population_system(
                         ExperienceReward(5),
                         FactionMember(next.faction_id.clone()),
                         FactionNpcRank(NpcRank::Grunt),
+                        FactionBadge { faction_id: next.faction_id.0.to_string(), rank: NpcRank::Grunt },
                         CurrentGoal(None),
                         HomePosition(pos),
                         EntityKind::FactionNpc,
@@ -544,12 +553,76 @@ fn age_npcs_system(
 }
 
 /// Tag `WAR_PARTY_SIZE` adult NPCs from the attacker faction as war-party members.
+///
+/// For aggressive factions, applies a 40 % chance to redirect the war party toward
+/// a nearby hostile player instead of the target settlement.
+#[allow(clippy::too_many_arguments)]
 fn check_war_party_formation(
     mut events: MessageReader<FormWarPartyEvent>,
     npc_query: Query<(Entity, &FactionMember, Option<&GrowthStage>), Without<WarPartyMember>>,
+    player_q: Query<(Entity, &WorldPosition, &CombatParticipant), With<PlayerStandings>>,
+    rep: Res<PlayerReputationMap>,
+    registry: Res<FactionRegistry>,
+    pop: Res<FactionPopulationState>,
+    tick: Res<WorldSimTick>,
+    mut story_events: MessageWriter<WriteStoryEvent>,
     mut commands: Commands,
 ) {
     for event in events.read() {
+        // Resolve defender faction name for the story event.
+        let defender_faction = pop.settlements
+            .get(&event.target_settlement_id)
+            .map(|s| s.faction_id.clone())
+            .unwrap_or(FactionId("unknown".into()));
+
+        story_events.write(WriteStoryEvent(StoryEvent {
+            id: Uuid::new_v4(),
+            tick: tick.0,
+            world_day: (tick.0 / 300) as u32,
+            kind: StoryEventKind::FactionWarDeclared {
+                attacker: event.attacker_faction.clone(),
+                defender: defender_faction,
+            },
+            participants: vec![],
+            location: None,
+            lore_tags: vec!["war".into()],
+        }));
+
+        // 40 % chance for aggressive factions to hunt a hostile player.
+        let is_aggressive = registry.factions.iter()
+            .find(|f| f.id == event.attacker_faction)
+            .map(|f| f.is_aggressive)
+            .unwrap_or(false);
+
+        let player_target = if is_aggressive {
+            // Deterministic roll: multiply tick by a prime, check low nibble.
+            let roll = tick.0.wrapping_mul(2_654_435_761) % 10;
+            if roll < 4 {
+                // Nearest hostile player wins the raid target lottery.
+                player_q.iter()
+                    .filter(|(_, _, cp)| {
+                        standing_tier(rep.score(cp.id.0, &event.attacker_faction)).is_aggressive()
+                    })
+                    .min_by(|(_, pa, _), (_, pb, _)| {
+                        let da = (pa.x - event.target_x).powi(2) + (pa.y - event.target_y).powi(2);
+                        let db = (pb.x - event.target_x).powi(2) + (pb.y - event.target_y).powi(2);
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(e, _, _)| e)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if player_target.is_some() {
+            tracing::info!(
+                faction = %event.attacker_faction.0,
+                "War party redirected to hunt hostile player"
+            );
+        }
+
         let mut tagged = 0u32;
         for (entity, member, growth) in &npc_query {
             if tagged >= WAR_PARTY_SIZE {
@@ -561,6 +634,7 @@ fn check_war_party_formation(
                     target_settlement_id: event.target_settlement_id,
                     target_x: event.target_x,
                     target_y: event.target_y,
+                    player_target,
                 });
                 tagged += 1;
             }
@@ -573,6 +647,36 @@ fn check_war_party_formation(
                 "War party formed"
             );
         }
+    }
+}
+
+/// Before marching, refresh the target coordinates for any war party hunting a player.
+fn update_war_party_player_targets(
+    player_q: Query<(Entity, &WorldPosition), With<PlayerStandings>>,
+    mut warriors: Query<&mut WarPartyMember>,
+) {
+    for mut warrior in &mut warriors {
+        let Some(target_entity) = warrior.player_target else { continue };
+        if let Ok((_, pos)) = player_q.get(target_entity) {
+            warrior.target_x = pos.x;
+            warrior.target_y = pos.y;
+        } else {
+            // Player disconnected — fall back to settlement target.
+            warrior.player_target = None;
+        }
+    }
+}
+
+/// Keep `PlayerStandings` components in sync with `PlayerReputationMap` every tick.
+fn sync_player_standings(
+    mut player_q: Query<(&CombatParticipant, &mut PlayerStandings), Without<FactionMember>>,
+    rep: Res<PlayerReputationMap>,
+    registry: Res<FactionRegistry>,
+) {
+    for (cp, mut standings) in &mut player_q {
+        standings.standings = registry.factions.iter()
+            .map(|f| (f.name.to_string(), rep.score(cp.id.0, &f.id)))
+            .collect();
     }
 }
 
@@ -693,6 +797,7 @@ fn run_battle_rounds(
     mut msg_sender: ServerMultiMessageSender,
     server: Single<&Server>,
     temp: Res<ChunkTemperature>,
+    mut story_events: MessageWriter<WriteStoryEvent>,
 ) {
     for (battle_entity, mut battle) in &mut battles {
         // Advance the fractional accumulator by this tick's zone speed.
@@ -761,6 +866,19 @@ fn run_battle_rounds(
                 defender_casualties: battle.defender_casualties,
             };
             let _ = msg_sender.send::<BattleEndMsg, CombatEventChannel>(&end_msg, &server, &NetworkTarget::All);
+
+            // Emit a story event for settlement destruction when attackers win.
+            if !attacker_snaps.is_empty() {
+                story_events.write(WriteStoryEvent(StoryEvent {
+                    id: Uuid::new_v4(),
+                    tick: tick.0,
+                    world_day: (tick.0 / 300) as u32,
+                    kind: StoryEventKind::SettlementRazed { by: battle.attacker_faction.clone() },
+                    participants: vec![],
+                    location: Some(IVec2::new(battle.battle_x as i32, battle.battle_y as i32)),
+                    lore_tags: vec!["settlement".into(), "war".into()],
+                }));
+            }
 
             // Update losing faction's military strength.
             if attacker_snaps.is_empty() {

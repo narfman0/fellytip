@@ -30,10 +30,12 @@ These components in `crates/shared/src/components.rs` are registered in `Fellyti
 | `EntityKind` | Simple | Enum: FactionNpc / Wildlife / Settlement — drives visual differentiation on client |
 | `WorldMeta { seed, width, height }` | Server → client (once on connect) | Client regenerates local `WorldMap` so terrain walkability matches the server exactly |
 | `GrowthStage(f32)` | Simple | 0.0 = newborn, 1.0 = adult; drives NPC capsule scale (0.3 → 1.0) on client |
+| `FactionBadge { faction_id, rank }` | Simple | Only on `FactionNpc` entities; drives per-faction capsule colour on client |
+| `PlayerStandings { standings }` | Simple | Only on player entities; list of `(faction_name, score)` — drives HUD reputation display |
 
-All six are serializable (`serde`) and reflectable (`bevy::reflect`).
+All are serializable (`serde`) and reflectable (`bevy::reflect`).
 
-Players carry `WorldMeta` but not `EntityKind`. Absence of `EntityKind` on a replicated entity indicates a player.
+Players carry `WorldMeta`, `PlayerStandings`, but not `EntityKind`. Absence of `EntityKind` on a replicated entity indicates a player.
 
 ## Messages
 
@@ -41,6 +43,7 @@ Players carry `WorldMeta` but not `EntityKind`. Absence of `EntityKind` on a rep
 |---|---|---|---|
 | `PlayerInput` | Client → Server | Unordered unreliable UDP | Movement + action intent every frame |
 | `GreetMsg` | Server → Client | Ordered reliable | Sent on connect to verify channel |
+| `StoryMsg { text }` | Server → Client | Ordered reliable | Significant world-story events; displayed in client story panel |
 | `BattleStartMsg` | Server → Client | Sequenced reliable | Broadcast when war party arrives at target settlement |
 | `BattleEndMsg` | Server → Client | Sequenced reliable | Broadcast when one side is eliminated |
 | `BattleAttackMsg` | Server → Client | Sequenced reliable | Broadcast per hit during a battle |

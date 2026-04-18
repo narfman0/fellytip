@@ -85,14 +85,20 @@ Three systems run in order every `Update` frame:
 
 ## Entity rendering (`crates/client/src/plugins/entity_renderer.rs`)
 
-`EntityRendererPlugin` spawns a PBR mesh for each replicated entity that carries `WorldPosition`. Visual appearance is determined by the optional `EntityKind` component:
+`EntityRendererPlugin` spawns a PBR mesh for each replicated entity that carries `WorldPosition`. Visual appearance is determined by `EntityKind` and the new `FactionBadge` component:
 
-| `EntityKind`  | Mesh     | Colour       |
-|---------------|----------|--------------|
-| absent        | capsule  | warm gold    | ← player
-| `FactionNpc`  | capsule  | steel blue   |
-| `Wildlife`    | capsule  | forest green |
-| `Settlement`  | pillar (Cylinder3d, 3 units tall) | bright white |
+| Entity type | Mesh | Colour |
+|---|---|---|
+| Player (no `EntityKind`) | capsule | warm gold |
+| `FactionNpc` with `FactionBadge` (iron_wolves) | capsule | steel blue |
+| `FactionNpc` with `FactionBadge` (merchant_guild) | capsule | amber |
+| `FactionNpc` with `FactionBadge` (ash_covenant) | capsule | crimson |
+| `FactionNpc` with `FactionBadge` (deep_tide) | capsule | deep teal |
+| `FactionNpc` without badge (fallback) | capsule | steel blue |
+| `Wildlife` | capsule | forest green |
+| `Settlement` | pillar (Cylinder3d, 3 units tall) | bright white |
+
+`FactionBadge { faction_id: String, rank: NpcRank }` is replicated from the server so the client can select the faction-specific material at spawn time.
 
 A system (`sync_remote_transforms`) updates the Bevy `Transform` every frame from `WorldPosition`, using the same coordinate mapping as the terrain. The local player's transform is driven by `PredictedPosition` instead for zero-latency movement.
 
@@ -104,16 +110,26 @@ A system (`sync_remote_transforms`) updates the Bevy `Transform` every frame fro
 
 - **Battle ring** — a `Torus` mesh at the battle site using translucent red `AlphaMode::Blend` material. Its alpha pulses via `0.25 + 0.25 × sin(phase)` at 2 rad/s. One ring per active battle; despawned when `BattleEndMsg` arrives.
 - **Battle Log** — a rolling 50-entry `BattleLog` resource of human-readable event strings, written by `on_battle_start` and `on_battle_end`.
+- **Client Story Log** — a rolling 20-entry `ClientStoryLog` resource populated by `on_story_msg` when `StoryMsg` broadcasts arrive from the server.
 
 Messages are received via the lightyear client `MessageReceiver<T>` pattern on the `Client` entity.
 
 ## HUD (`crates/client/src/plugins/hud.rs`)
 
-`HudPlugin` draws two egui windows via `bevy_egui`. Only added in windowed mode.
+`HudPlugin` draws four egui windows via `bevy_egui`. Only added in windowed mode.
 
-- **Bottom-left panel** (`##stats`): HP bar (`Health.current / Health.max`) + XP progress bar (`Experience.xp / xp_to_next`) + level label. Populated from the first replicated entity that has both `Replicated` and `Experience` (the local player). Shows "Connecting…" before the player entity arrives.
-- **Top-right panel** (`Battle Log`): last 20 entries from `BattleLog`, newest first. Shows active faction battles.
-- Controls: Space → BasicAttack; Q → StrongAttack (ability 1).
+| Panel | Anchor | Contents |
+|---|---|---|
+| `##stats` | Bottom-left | HP bar + XP progress bar + level |
+| `Faction Standing` | Top-left | Per-faction reputation score + tier, colour-coded |
+| `Battle Log` | Top-right | Last 20 battle events from `BattleLog` |
+| `World Events` | Bottom-right | Last 10 story events from `ClientStoryLog` |
+
+**Faction Standing**: reads `PlayerStandings` from the local player entity (the component is replicated from the server and refreshed every world-sim tick). Tier colours: green (Friendly+), grey (Neutral), orange (Unfriendly), red (Hostile/Hated). Hidden until at least one standing is available.
+
+**World Events**: hidden until at least one story event has been received.
+
+Controls: Space → BasicAttack; Q → StrongAttack (ability 1).
 
 ## Upgrade path
 

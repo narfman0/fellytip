@@ -1,10 +1,15 @@
 //! Story plugin: collects WriteStoryEvent messages and appends them to
 //! the StoryLog resource.  Events are flushed to SQLite every
 //! `FLUSH_INTERVAL_TICKS` world-sim ticks (≈5 minutes at 1 Hz).
+//! Significant events are also broadcast to all connected clients as `StoryMsg`.
 
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
-use fellytip_shared::world::story::{StoryEvent, StoryLog, WriteStoryEvent};
+use fellytip_shared::{
+    protocol::{StoryMsg, WorldStateChannel},
+    world::story::{StoryEvent, StoryEventKind, StoryLog, WriteStoryEvent},
+};
+use lightyear::prelude::{server::Server, NetworkTarget, ServerMultiMessageSender};
 
 use crate::plugins::persistence::Db;
 use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
@@ -23,13 +28,50 @@ impl Plugin for StoryPlugin {
     }
 }
 
-/// Each frame: drain WriteStoryEvent queue → append to StoryLog.
+/// Format a `StoryEventKind` into a human-readable string for client display.
+fn format_story_event(ev: &StoryEvent) -> String {
+    let day = ev.world_day;
+    match &ev.kind {
+        StoryEventKind::FactionWarDeclared { attacker, defender } =>
+            format!("Day {day}: {} declares war on {}!", attacker.0, defender.0),
+        StoryEventKind::SettlementRazed { by } =>
+            format!("Day {day}: {} razes a settlement!", by.0),
+        StoryEventKind::SettlementFounded { faction, name } =>
+            format!("Day {day}: {} founds {}!", faction.0, name),
+        StoryEventKind::EcologyCollapse { species, region } =>
+            format!("Day {day}: {} collapse in {}!", species.0, region.0),
+        StoryEventKind::AllianceFormed { a, b } =>
+            format!("Day {day}: {} and {} form an alliance!", a.0, b.0),
+        StoryEventKind::PlayerKilledNamed { .. } =>
+            format!("Day {day}: A named foe has fallen!"),
+        StoryEventKind::PartyDefeatedBoss { .. } =>
+            format!("Day {day}: A boss has been slain!"),
+        StoryEventKind::QuestCompleted { quest_id } =>
+            format!("Day {day}: Quest '{quest_id}' completed!"),
+        StoryEventKind::PlayerJoinedFaction { faction, .. } =>
+            format!("Day {day}: A hero joins the {}!", faction.0),
+        StoryEventKind::NpcDefected { from, to, .. } =>
+            format!("Day {day}: A soldier defects from {} to {}!", from.0, to.0),
+        StoryEventKind::MonsterMigrated { species, from, to } =>
+            format!("Day {day}: {} migrate from {} to {}!", species.0, from.0, to.0),
+    }
+}
+
+/// Each frame: drain WriteStoryEvent queue → append to StoryLog and broadcast to clients.
 fn collect_story_events(
     mut reader: MessageReader<WriteStoryEvent>,
     mut log: ResMut<StoryLog>,
+    mut msg_sender: ServerMultiMessageSender,
+    server: Option<Single<&Server>>,
 ) {
     for WriteStoryEvent(ev) in reader.read() {
         tracing::info!(kind = ?ev.kind, tick = ev.tick, "Story event recorded");
+        // Broadcast to all connected clients.
+        if let Some(ref s) = server {
+            let text = format_story_event(ev);
+            let msg = StoryMsg { text };
+            let _ = msg_sender.send::<StoryMsg, WorldStateChannel>(&msg, s, &NetworkTarget::All);
+        }
         log.push(ev.clone());
     }
 }

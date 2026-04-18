@@ -6,9 +6,10 @@ use core::time::Duration;
 use fellytip_shared::{
     WORLD_SEED, NET_PORT, WS_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
-    components::{Experience, Health, WorldMeta, WorldPosition},
+    components::{Experience, Health, PlayerStandings, WorldMeta, WorldPosition},
     protocol::FellytipProtocolPlugin,
     world::{
+        faction::PlayerReputationMap,
         map::{find_surface_spawn, WorldMap, MAP_WIDTH, MAP_HEIGHT},
         story::{GameEntityId, StoryLog},
     },
@@ -203,11 +204,13 @@ fn on_link_spawned(trigger: On<Add, LinkOf>, mut commands: Commands) {
     tracing::debug!("Link spawned, added ReplicationSender: {:?}", trigger.entity);
 }
 
-/// When a client disconnects, save its player's current state to SQLite.
+/// When a client disconnects, save its player's current state to SQLite,
+/// including per-faction reputation standings.
 fn on_client_disconnected(
     trigger:  On<Add, Disconnected>,
     client_q: Query<&PlayerEntity>,
     player_q: Query<(&CombatParticipant, &WorldPosition, &Health, &Experience)>,
+    rep: Res<PlayerReputationMap>,
     mut count: ResMut<ConnectedCount>,
     db: Res<Db>,
 ) {
@@ -220,7 +223,8 @@ fn on_client_disconnected(
         return;
     };
 
-    let player_id  = participant.id.0.to_string();
+    let player_uuid = participant.id.0;
+    let player_id  = player_uuid.to_string();
     let level      = exp.level as i64;
     let hp_current = health.current as i64;
     let hp_max     = health.max as i64;
@@ -233,6 +237,12 @@ fn on_client_disconnected(
     // Use the UUID as a placeholder name until the name system is implemented.
     let name  = player_id.clone();
     let class = "Warrior";
+
+    // Collect faction standings for persistence.
+    let faction_standings: Vec<(String, i32)> = rep.0
+        .get(&player_uuid)
+        .map(|m| m.iter().map(|(k, &v)| (k.0.to_string(), v)).collect())
+        .unwrap_or_default();
 
     let pool = db.pool().clone();
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -261,6 +271,25 @@ fn on_client_disconnected(
         match res {
             Ok(_) => tracing::info!(player = %player_id, "Player state saved on disconnect"),
             Err(e) => tracing::warn!(player = %player_id, "Player save failed: {e}"),
+        }
+
+        // Persist per-faction reputation standings.
+        for (faction_id, score) in &faction_standings {
+            let res = sqlx::query(
+                "INSERT OR REPLACE INTO player_faction_standing \
+                 (player_id, faction_id, score) VALUES (?, ?, ?)",
+            )
+            .bind(&player_id)
+            .bind(faction_id)
+            .bind(*score)
+            .execute(&pool)
+            .await;
+            if let Err(e) = res {
+                tracing::warn!(player = %player_id, faction = %faction_id, "Standing save failed: {e}");
+            }
+        }
+        if !faction_standings.is_empty() {
+            tracing::info!(player = %player_id, count = faction_standings.len(), "Faction standings saved");
         }
     });
 }
@@ -318,6 +347,7 @@ fn on_client_connected(
             },
             GameEntityId(player_uuid),
             Experience::new(),
+            PlayerStandings::default(),
             LastPlayerInput::default(),
             PositionSanityTimer {
                 last_valid_x: spawn_x,

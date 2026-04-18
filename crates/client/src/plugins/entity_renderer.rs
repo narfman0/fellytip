@@ -25,7 +25,7 @@
 
 use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
-use fellytip_shared::components::{EntityKind, GrowthStage, WorldPosition};
+use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WorldPosition};
 use lightyear::prelude::Replicated;
 
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
@@ -39,6 +39,7 @@ impl Plugin for EntityRendererPlugin {
                 Update,
                 (
                     spawn_entity_visuals,
+                    apply_faction_tint,
                     sync_remote_transforms,
                     sync_growth_stage_scale,
                     sync_local_player_transform.in_set(ClientSet::SyncVisuals),
@@ -53,9 +54,27 @@ impl Plugin for EntityRendererPlugin {
 /// use a GLB character model (wildlife, fallback).
 #[derive(Resource)]
 struct EntityVisualAssets {
-    capsule_mesh:    Handle<Mesh>,
-    wildlife_mat:    Handle<StandardMaterial>,
+    capsule_mesh:      Handle<Mesh>,
+    wildlife_mat:      Handle<StandardMaterial>,
     settlement_scenes: Vec<Handle<Scene>>,
+    // Per-faction tint materials applied to faction NPC child meshes.
+    iron_wolves_mat:    Handle<StandardMaterial>,
+    merchant_guild_mat: Handle<StandardMaterial>,
+    ash_covenant_mat:   Handle<StandardMaterial>,
+    deep_tide_mat:      Handle<StandardMaterial>,
+}
+
+impl EntityVisualAssets {
+    /// Return the tint material for a faction NPC, or `None` for unknown factions.
+    fn faction_tint(&self, badge: &FactionBadge) -> Option<Handle<StandardMaterial>> {
+        match badge.faction_id.as_str() {
+            "iron_wolves"    => Some(self.iron_wolves_mat.clone()),
+            "merchant_guild" => Some(self.merchant_guild_mat.clone()),
+            "ash_covenant"   => Some(self.ash_covenant_mat.clone()),
+            "deep_tide"      => Some(self.deep_tide_mat.clone()),
+            _                => None,
+        }
+    }
 }
 
 fn setup_entity_assets(
@@ -80,10 +99,38 @@ fn setup_entity_assets(
         asset_server.load("town/windmill.glb#Scene0"),
     ];
 
+    // Per-faction tint materials — applied to child `Mesh3d` entities spawned
+    // under the faction NPC's GLB SceneRoot so each faction reads as a distinct
+    // colour without replacing the full character model.
+    let iron_wolves_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.25, 0.50, 0.85), // steel blue
+        perceptual_roughness: 0.55,
+        ..default()
+    });
+    let merchant_guild_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.85, 0.65, 0.10), // amber
+        perceptual_roughness: 0.45,
+        ..default()
+    });
+    let ash_covenant_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.80, 0.10, 0.10), // crimson
+        perceptual_roughness: 0.60,
+        ..default()
+    });
+    let deep_tide_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.05, 0.55, 0.60), // deep teal
+        perceptual_roughness: 0.65,
+        ..default()
+    });
+
     commands.insert_resource(EntityVisualAssets {
         capsule_mesh,
         wildlife_mat,
         settlement_scenes,
+        iron_wolves_mat,
+        merchant_guild_mat,
+        ash_covenant_mat,
+        deep_tide_mat,
     });
 }
 
@@ -124,6 +171,7 @@ type SpawnVisualQuery<'w, 's> = Query<
         &'static WorldPosition,
         Option<&'static EntityKind>,
         Option<&'static GrowthStage>,
+        Option<&'static FactionBadge>,
     ),
     NewReplicatedPos,
 >;
@@ -135,7 +183,7 @@ fn spawn_entity_visuals(
     char_assets:    Res<CharacterAssets>,
     query:          SpawnVisualQuery,
 ) {
-    for (entity, pos, kind, growth) in &query {
+    for (entity, pos, kind, growth, badge) in &query {
         match kind {
             // ── Settlement ────────────────────────────────────────────────────
             Some(EntityKind::Settlement) => {
@@ -180,13 +228,54 @@ fn spawn_entity_visuals(
                     _ => char_assets.medium_scene.clone(),
                 };
 
-                commands.entity(entity).insert((
+                // Store the faction tint handle as a component so the child-mesh
+                // tinting system can apply it once the GLB scene finishes loading.
+                let mut cmd = commands.entity(entity);
+                cmd.insert((
                     SceneRoot(scene),
                     Transform::from_translation(ground_translation(pos))
                         .with_scale(Vec3::splat(scale)),
                     CharacterAnimState::default(),
                 ));
+                if let Some(tint) = badge.and_then(|b| assets.faction_tint(b)) {
+                    cmd.insert(FactionTintHandle(tint));
+                }
             }
+        }
+    }
+}
+
+/// Deferred material handle stored on faction NPCs while their GLB scene loads.
+/// Consumed by `apply_faction_tint` once child mesh entities exist.
+#[derive(Component)]
+struct FactionTintHandle(Handle<StandardMaterial>);
+
+/// Apply faction tint colours to child `Mesh3d` entities after the GLB scene loads.
+///
+/// Runs every frame until the `FactionTintHandle` is removed.  Child entities are
+/// only present after `SceneRoot` finishes spawning, so we retry each frame.
+fn apply_faction_tint(
+    mut commands:  Commands,
+    tinted:        Query<(Entity, &FactionTintHandle), With<CharacterAnimState>>,
+    children_q:    Query<&Children>,
+    mesh_entities: Query<Entity, With<Mesh3d>>,
+) {
+    for (root, tint_handle) in &tinted {
+        // Collect all descendant mesh entities.
+        let mut found_any = false;
+        let mut stack = vec![root];
+        while let Some(e) = stack.pop() {
+            if mesh_entities.contains(e) {
+                commands.entity(e).insert(MeshMaterial3d(tint_handle.0.clone()));
+                found_any = true;
+            }
+            if let Ok(children) = children_q.get(e) {
+                stack.extend(children.iter());
+            }
+        }
+        // Once at least one mesh was found the scene is loaded; remove the handle.
+        if found_any {
+            commands.entity(root).remove::<FactionTintHandle>();
         }
     }
 }

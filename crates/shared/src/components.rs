@@ -1,5 +1,6 @@
 // Shared ECS components — replicated between server and client.
 
+use crate::world::faction::NpcRank;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +86,36 @@ pub enum EntityKind {
 )]
 #[reflect(Component)]
 pub struct GrowthStage(pub f32);
+
+/// Replicated faction badge — identifies which faction an NPC belongs to and its
+/// rank so the client can tint capsule meshes per-faction.
+///
+/// Absent on player entities; only present on `EntityKind::FactionNpc` entities.
+#[derive(
+    Component, Clone, PartialEq, Debug,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub struct FactionBadge {
+    /// String form of `FactionId` — avoids pulling `SmolStr` into lightyear's registry.
+    pub faction_id: String,
+    pub rank: NpcRank,
+}
+
+/// Per-faction reputation scores for a player — replicated to the owning client
+/// so the HUD can display standings without a server round-trip.
+///
+/// Updated every world-sim tick (1 Hz) from `PlayerReputationMap`.
+/// Only present on player entities.
+#[derive(
+    Component, Clone, PartialEq, Debug, Default,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub struct PlayerStandings {
+    /// `(faction_name, score)` pairs for all known factions, sorted by name.
+    pub standings: Vec<(String, i32)>,
+}
 
 /// World generation parameters — attached to the local player entity and
 /// replicated to the client so the client can regenerate an identical

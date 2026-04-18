@@ -216,6 +216,7 @@ pub fn dm_trigger_war_party(In(params): In<Option<Value>>, world: &mut World) ->
             target_settlement_id: target_uuid,
             target_x: tx,
             target_y: ty,
+            player_target: None,
         });
     }
 
