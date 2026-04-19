@@ -76,10 +76,25 @@ pub enum EntityKind {
     Settlement,
 }
 
-/// Growth stage for faction NPCs — 0.0 = newborn, 1.0 = full adult.
+/// Species variant for wildlife entities — replicated so the client renders the correct model.
 ///
-/// Replicated so the client can scale capsule meshes proportionally.
-/// Absent on NPCs spawned as adults (treated as 1.0 by the renderer).
+/// Absent on non-wildlife entities.
+#[derive(
+    Component, Clone, PartialEq, Debug, Default,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub enum WildlifeKind {
+    #[default]
+    Bison,
+    Dog,
+    Horse,
+}
+
+/// Growth stage for entities — 0.0 = newborn, 1.0 = full adult.
+///
+/// Replicated so the client can scale entity visuals proportionally.
+/// Absent on entities spawned as adults (treated as 1.0 by the renderer).
 #[derive(
     Component, Clone, PartialEq, Debug, Default,
     Serialize, Deserialize, Reflect,
@@ -131,4 +146,23 @@ pub struct WorldMeta {
     pub seed:   u64,
     pub width:  u32,
     pub height: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wildlife_kind_default_is_bison() {
+        assert_eq!(WildlifeKind::default(), WildlifeKind::Bison);
+    }
+
+    #[test]
+    fn wildlife_kind_serde_round_trip() {
+        for variant in [WildlifeKind::Bison, WildlifeKind::Dog, WildlifeKind::Horse] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: WildlifeKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
 }

@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use crate::plugins::persistence::Db;
 use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
-    components::{EntityKind, Health, WorldPosition},
+    components::{EntityKind, Health, WildlifeKind, WorldPosition},
     world::{
         ecology::{EcologyEvent, Population, RegionEcology, RegionId, SpeciesId, tick_ecology},
         map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH, MAP_HALF_WIDTH},
@@ -222,6 +222,11 @@ fn sync_wildlife_entities(
                 .and_then(|m| smooth_surface_at(m, spawn_x, spawn_y, 0.0))
                 .unwrap_or(0.0);
 
+            let wildlife_kind = match ecology.region.0.len() % 3 {
+                0 => WildlifeKind::Bison,
+                1 => WildlifeKind::Dog,
+                _ => WildlifeKind::Horse,
+            };
             commands.spawn((
                 WorldPosition { x: spawn_x, y: spawn_y, z: spawn_z },
                 Health { current: 15, max: 15 },
@@ -230,7 +235,7 @@ fn sync_wildlife_entities(
                     interrupt_stack: InterruptStack::default(),
                     class: CharacterClass::Rogue,
                     level: 1,
-                    armor_class: 10, // unarmored (SRD: 10 + DEX mod; DEX 12 → +1 = 11, kept at 10 for simplicity)
+                    armor_class: 10,
                     strength: 8,
                     dexterity: 12,
                     constitution: 10,
@@ -239,6 +244,7 @@ fn sync_wildlife_entities(
                 ExperienceReward(25),
                 WildlifeNpc { region: ecology.region.clone() },
                 EntityKind::Wildlife,
+                wildlife_kind,
                 Replicate::to_clients(NetworkTarget::All),
             ));
             spawns_this_tick += 1;

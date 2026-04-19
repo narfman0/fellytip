@@ -2,7 +2,7 @@
 //! Must be added AFTER `ServerPlugins`/`ClientPlugins` but BEFORE any
 //! `Server`/`Client` entity is spawned.
 
-use crate::components::{EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WorldMeta, WorldPosition};
+use crate::components::{EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
 use crate::inputs::PlayerInput;
 use crate::world::story::GameEntityId;
 use bevy::prelude::*;
@@ -108,6 +108,7 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<Health>();
         app.register_type::<Experience>();
         app.register_type::<EntityKind>();
+        app.register_type::<WildlifeKind>();
         app.register_type::<WorldMeta>();
         app.register_type::<GrowthStage>();
         app.register_type::<FactionBadge>();
@@ -119,6 +120,7 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_component::<Health>();
         app.register_component::<Experience>();
         app.register_component::<EntityKind>();
+        app.register_component::<WildlifeKind>();
         app.register_component::<WorldMeta>();
         app.register_component::<GrowthStage>();
         app.register_component::<FactionBadge>();

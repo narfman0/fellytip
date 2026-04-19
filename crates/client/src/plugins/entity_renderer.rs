@@ -3,12 +3,12 @@
 //! Every entity that arrives from the server with a `WorldPosition` + `Replicated`
 //! gets a visual component inserted directly:
 //!
-//! | `EntityKind`  | Visual                              |
-//! |---------------|-------------------------------------|
-//! | absent        | Kenney `characterMedium` GLB        | ← player
-//! | `FactionNpc`  | Kenney `characterLarge{Male/Female}`|
-//! | `Wildlife`    | procedural capsule (forest green)   |
-//! | `Settlement`  | Kenney Fantasy Town Kit GLB scene   |
+//! | `EntityKind`  | Visual                                      |
+//! |---------------|---------------------------------------------|
+//! | absent        | Kenney `characterMedium` GLB                | ← player
+//! | `FactionNpc`  | Kenney `characterLarge{Male/Female}`        |
+//! | `Wildlife`    | Kenney Prototype Kit animal GLB (3 species) |
+//! | `Settlement`  | Kenney Fantasy Town Kit GLB scene          |
 //!
 //! A separate system keeps the Bevy `Transform` in sync as the server pushes
 //! position updates.
@@ -16,7 +16,7 @@
 //! # Coordinate mapping
 //! World `(x, y, z_elevation)` → Bevy `(x, z_elevation, y)`.
 //! Character models have origin at feet — no offset needed.
-//! Wildlife capsule centre is `CAPSULE_HALF_HEIGHT` above the tile surface.
+//! All entity origins are at feet — no offset needed for any entity type.
 //!
 //! # Local-player vs remote entities
 //! The local player's transform tracks `PredictedPosition` (updated every frame
@@ -25,7 +25,7 @@
 
 use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
-use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WorldPosition};
+use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
 use lightyear::prelude::Replicated;
 
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
@@ -50,12 +50,10 @@ impl Plugin for EntityRendererPlugin {
 
 // ── Assets ────────────────────────────────────────────────────────────────────
 
-/// Procedural mesh + material handles used only for entities that don't
-/// use a GLB character model (wildlife, fallback).
 #[derive(Resource)]
 struct EntityVisualAssets {
-    capsule_mesh:      Handle<Mesh>,
-    wildlife_mat:      Handle<StandardMaterial>,
+    /// `[bison, dog, horse]` — index matches `WildlifeKind` variant order.
+    wildlife_scenes:   [Handle<Scene>; 3],
     settlement_scenes: Vec<Handle<Scene>>,
     // Per-faction tint materials applied to faction NPC child meshes.
     iron_wolves_mat:    Handle<StandardMaterial>,
@@ -79,17 +77,14 @@ impl EntityVisualAssets {
 
 fn setup_entity_assets(
     mut commands:  Commands,
-    mut meshes:    ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server:  Res<AssetServer>,
 ) {
-    let capsule_mesh = meshes.add(Capsule3d::new(0.3, 0.4));
-
-    let wildlife_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.20, 0.65, 0.25), // forest green
-        perceptual_roughness: 0.70,
-        ..default()
-    });
+    let wildlife_scenes = [
+        asset_server.load("nature/animal-bison.glb#Scene0"),
+        asset_server.load("nature/animal-dog.glb#Scene0"),
+        asset_server.load("nature/animal-horse.glb#Scene0"),
+    ];
 
     let settlement_scenes = vec![
         asset_server.load("town/stall-green.glb#Scene0"),
@@ -124,8 +119,7 @@ fn setup_entity_assets(
     });
 
     commands.insert_resource(EntityVisualAssets {
-        capsule_mesh,
-        wildlife_mat,
+        wildlife_scenes,
         settlement_scenes,
         iron_wolves_mat,
         merchant_guild_mat,
@@ -136,16 +130,10 @@ fn setup_entity_assets(
 
 // ── Coordinate helpers ────────────────────────────────────────────────────────
 
-/// Half-height offset for capsule entities so the visual base sits on terrain.
-const CAPSULE_HALF_HEIGHT: f32 = 0.7;
-
-/// Ground-level translation for models whose origin is at their feet.
+/// World → Bevy coordinate mapping: `(x, z_elevation, y)`.
+/// All entity GLB origins are at the model's feet, so no vertical offset is needed.
 fn ground_translation(pos: &WorldPosition) -> Vec3 {
     Vec3::new(pos.x, pos.z, pos.y)
-}
-
-fn capsule_translation(pos: &WorldPosition) -> Vec3 {
-    Vec3::new(pos.x, pos.z + CAPSULE_HALF_HEIGHT, pos.y)
 }
 
 // ── Systems ───────────────────────────────────────────────────────────────────
@@ -172,6 +160,7 @@ type SpawnVisualQuery<'w, 's> = Query<
         Option<&'static EntityKind>,
         Option<&'static GrowthStage>,
         Option<&'static FactionBadge>,
+        Option<&'static WildlifeKind>,
     ),
     NewReplicatedPos,
 >;
@@ -183,7 +172,7 @@ fn spawn_entity_visuals(
     char_assets:    Res<CharacterAssets>,
     query:          SpawnVisualQuery,
 ) {
-    for (entity, pos, kind, growth, badge) in &query {
+    for (entity, pos, kind, growth, badge, wildlife_kind) in &query {
         match kind {
             // ── Settlement ────────────────────────────────────────────────────
             Some(EntityKind::Settlement) => {
@@ -196,16 +185,20 @@ fn spawn_entity_visuals(
                 ));
             }
 
-            // ── Wildlife — procedural capsule (animals, not humanoids) ────────
+            // ── Wildlife — Kenney Prototype Kit animal GLB ────────────────────
             Some(EntityKind::Wildlife) => {
+                let scene_idx = match wildlife_kind {
+                    Some(WildlifeKind::Bison) | None => 0,
+                    Some(WildlifeKind::Dog)           => 1,
+                    Some(WildlifeKind::Horse)          => 2,
+                };
                 let scale = growth
                     .map(|g| 0.3 + 0.7 * g.0.clamp(0.0, 1.0))
                     .unwrap_or(1.0);
                 commands.entity(entity).insert((
-                    Transform::from_translation(capsule_translation(pos))
+                    SceneRoot(assets.wildlife_scenes[scene_idx].clone()),
+                    Transform::from_translation(ground_translation(pos))
                         .with_scale(Vec3::splat(scale)),
-                    Mesh3d(assets.capsule_mesh.clone()),
-                    MeshMaterial3d(assets.wildlife_mat.clone()),
                 ));
             }
 
@@ -289,7 +282,6 @@ fn sync_growth_stage_scale(
 ) {
     for (gs, mut transform, char_anim) in &mut query {
         let growth = 0.3 + 0.7 * gs.0.clamp(0.0, 1.0);
-        // Character models use CHARACTER_SCALE as their base; capsules use 1.0.
         let base = if char_anim.is_some() { CHARACTER_SCALE } else { 1.0 };
         transform.scale = Vec3::splat(base * growth);
     }
@@ -299,15 +291,8 @@ fn sync_growth_stage_scale(
 fn sync_remote_transforms(
     mut query: Query<RemotePosItems, ChangedRemotePos>,
 ) {
-    for (pos, mut transform, kind, char_anim) in &mut query {
-        transform.translation = if char_anim.is_some() {
-            ground_translation(pos)
-        } else {
-            match kind {
-                Some(EntityKind::Settlement) => ground_translation(pos),
-                _                            => capsule_translation(pos),
-            }
-        };
+    for (pos, mut transform, _kind, _char_anim) in &mut query {
+        transform.translation = ground_translation(pos);
     }
 }
 
@@ -315,11 +300,7 @@ fn sync_remote_transforms(
 fn sync_local_player_transform(
     mut query: Query<LocalPosItems, ChangedPredictedPos>,
 ) {
-    for (pred, mut transform, char_anim) in &mut query {
-        transform.translation = if char_anim.is_some() {
-            Vec3::new(pred.x, pred.z, pred.y)
-        } else {
-            Vec3::new(pred.x, pred.z + CAPSULE_HALF_HEIGHT, pred.y)
-        };
+    for (pred, mut transform, _char_anim) in &mut query {
+        transform.translation = Vec3::new(pred.x, pred.z, pred.y);
     }
 }
