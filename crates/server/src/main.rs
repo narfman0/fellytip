@@ -7,7 +7,7 @@ use fellytip_shared::{
     WORLD_SEED, NET_PORT, WS_PORT, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{Experience, Health, PlayerStandings, WorldMeta, WorldPosition},
-    protocol::FellytipProtocolPlugin,
+    protocol::{FellytipProtocolPlugin, GreetMsg, WorldStateChannel},
     world::{
         faction::PlayerReputationMap,
         map::{find_surface_spawn, WorldMap, MAP_WIDTH, MAP_HEIGHT},
@@ -130,6 +130,7 @@ fn main() {
             // use), it no longer corrupts generate_world's Commands flush and the
             // WorldMap resource is always present for seed_ecology.
             .add_systems(PostStartup, spawn_server)
+            .add_systems(Update, send_greet_msg)
             .add_observer(on_link_spawned)
             .add_observer(on_client_connected)
             .add_observer(on_client_disconnected);
@@ -361,6 +362,30 @@ fn on_client_connected(
         .id();
     commands.entity(trigger.entity).insert(PlayerEntity(player));
     tracing::info!("Client {:?} connected → player entity {:?}", trigger.entity, player);
+}
+
+// ── Greet message ─────────────────────────────────────────────────────────────
+
+type NewClientQuery<'w, 's> = Query<'w, 's, (&'static PlayerEntity, &'static RemoteId), (Added<PlayerEntity>, With<ClientOf>)>;
+
+/// Sends a `GreetMsg` to each client the frame their `PlayerEntity` is first
+/// added.  The message carries the spawned player's UUID so the client knows
+/// which replicated entity is theirs and can tag it as `LocalPlayer`.
+fn send_greet_msg(
+    new_clients: NewClientQuery,
+    player_q: Query<&GameEntityId>,
+    server: Single<&Server>,
+    mut msg_sender: ServerMultiMessageSender,
+) {
+    for (player_entity, remote_id) in &new_clients {
+        let Ok(geid) = player_q.get(player_entity.0) else { continue };
+        let _ = msg_sender.send::<GreetMsg, WorldStateChannel>(
+            &GreetMsg { message: "Welcome!".into(), player_id: geid.0 },
+            &server,
+            &NetworkTarget::Single(remote_id.0),
+        );
+        tracing::info!("Sent GreetMsg to client {:?} with player UUID {}", remote_id.0, geid.0);
+    }
 }
 
 // ── Idle shutdown ─────────────────────────────────────────────────────────────

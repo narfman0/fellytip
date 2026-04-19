@@ -77,7 +77,7 @@ fn apply_world_meta(
     mut map:  ResMut<WorldMap>,
     mut mgr:  ResMut<ChunkManager>,
 ) {
-    let Ok(meta) = query.single() else { return };
+    let Some(meta) = query.iter().next() else { return };
 
     if meta.seed        == map.seed
         && meta.width  as usize == map.width

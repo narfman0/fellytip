@@ -4,6 +4,7 @@
 
 use crate::components::{EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WorldMeta, WorldPosition};
 use crate::inputs::PlayerInput;
+use crate::world::story::GameEntityId;
 use bevy::prelude::*;
 use core::time::Duration;
 use lightyear::prelude::*;
@@ -23,10 +24,14 @@ pub struct CombatEventChannel;
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 
-/// Sent by the server when a client first connects; verifies the channel.
+/// Sent by the server when a client first connects; carries the UUID of the
+/// player entity that was spawned for this client.  The client uses it to
+/// identify which replicated entity is "theirs" via `tag_local_player`.
 #[derive(Serialize, Deserialize, Debug, Clone, Event)]
 pub struct GreetMsg {
     pub message: String,
+    /// UUID matching the `GameEntityId` on the spawned player entity.
+    pub player_id: Uuid,
 }
 
 /// Sent by the server when a faction war party arrives at a rival settlement
@@ -107,6 +112,7 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<GrowthStage>();
         app.register_type::<FactionBadge>();
         app.register_type::<PlayerStandings>();
+        app.register_type::<GameEntityId>();
 
         // Register components with lightyear for network replication.
         app.register_component::<WorldPosition>();
@@ -117,6 +123,7 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_component::<GrowthStage>();
         app.register_component::<FactionBadge>();
         app.register_component::<PlayerStandings>();
+        app.register_component::<GameEntityId>();
 
         // Messages
         app.register_message::<GreetMsg>()

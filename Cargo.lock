@@ -3413,6 +3413,7 @@ dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.2",
  "lightyear",
+ "rand 0.10.0",
  "tracing",
  "tracing-subscriber",
  "uuid",

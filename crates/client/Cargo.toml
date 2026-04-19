@@ -15,6 +15,7 @@ bevy               = { workspace = true, default-features = true, features = ["k
 lightyear          = { workspace = true, features = ["client", "netcode", "replication", "prediction", "interpolation", "input_native"] }
 bevy_egui          = { workspace = true, features = ["render"] }
 anyhow             = { workspace = true }
+rand               = { workspace = true }
 tracing            = { workspace = true }
 uuid               = { workspace = true }
 

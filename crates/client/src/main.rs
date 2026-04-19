@@ -8,9 +8,11 @@ use fellytip_shared::{
     PLAYER_SPEED, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
     components::{Experience, WorldPosition},
     inputs::{ActionIntent, PlayerInput},
-    protocol::{FellytipProtocolPlugin, PlayerInputChannel},
+    protocol::{FellytipProtocolPlugin, GreetMsg, PlayerInputChannel},
     world::map::{is_walkable_at, smooth_surface_at, WorldMap, GRAVITY, LAND_SNAP, MAX_FALL_SPEED},
+    world::story::GameEntityId,
 };
+use uuid::Uuid;
 #[cfg(not(target_family = "wasm"))]
 use fellytip_shared::NET_PORT;
 use lightyear::prelude::{client::*, *};
@@ -54,6 +56,12 @@ pub struct PredictedPosition {
     /// Accumulated each frame under gravity when the entity is airborne.
     pub z_vel: f32,
 }
+
+/// Stores the UUID of the local player entity, received from the server via
+/// `GreetMsg`.  Used by `tag_local_player` to identify which replicated entity
+/// belongs to this client (avoids tagging remote player entities as LocalPlayer).
+#[derive(Resource, Default)]
+struct LocalPlayerId(Option<Uuid>);
 
 /// Seconds between client connection attempts.  Gives the server time to finish
 /// startup before the first attempt and allows automatic reconnect on failure.
@@ -189,6 +197,7 @@ fn main() {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),
         })
         .add_plugins(FellytipProtocolPlugin)
+        .init_resource::<LocalPlayerId>()
         .insert_resource(ConnectTimer(Timer::from_seconds(
             CONNECT_RETRY_SECS,
             TimerMode::Repeating,
@@ -199,7 +208,7 @@ fn main() {
         )
         .add_systems(
             Update,
-            (try_connect, log_replicated_positions, reconcile_prediction),
+            (try_connect, log_replicated_positions, reconcile_prediction, receive_greet),
         )
         .add_systems(
             Update,
@@ -255,6 +264,10 @@ fn try_connect(
     }
 
     // No live or in-flight client: attempt a fresh connection.
+    // Each session gets a random client_id so multiple instances do not conflict
+    // on the server (netcode rejects duplicate IDs).
+    let client_id: u64 = rand::random();
+
     #[cfg(not(target_family = "wasm"))]
     {
         let server_addr: SocketAddr = format!("127.0.0.1:{NET_PORT}").parse().unwrap();
@@ -266,7 +279,7 @@ fn try_connect(
                 NetcodeClient::new(
                     Authentication::Manual {
                         server_addr,
-                        client_id: 1,
+                        client_id,
                         private_key: PRIVATE_KEY,
                         protocol_id: PROTOCOL_ID,
                     },
@@ -276,7 +289,7 @@ fn try_connect(
             ))
             .id();
         commands.entity(e).trigger(|entity| Connect { entity });
-        tracing::info!("Connecting UDP to {server_addr}");
+        tracing::info!("Connecting UDP to {server_addr} (client_id={client_id})");
     }
     #[cfg(target_family = "wasm")]
     {
@@ -295,7 +308,7 @@ fn try_connect(
                 NetcodeClient::new(
                     Authentication::Manual {
                         server_addr,
-                        client_id: 1,
+                        client_id,
                         private_key: PRIVATE_KEY,
                         protocol_id: PROTOCOL_ID,
                     },
@@ -305,7 +318,7 @@ fn try_connect(
             ))
             .id();
         commands.entity(e).trigger(|entity| Connect { entity });
-        tracing::info!("Connecting WebSocket to ws://127.0.0.1:{WS_PORT}");
+        tracing::info!("Connecting WebSocket to ws://127.0.0.1:{WS_PORT} (client_id={client_id})");
     }
 }
 
@@ -488,19 +501,38 @@ fn send_player_input(
     });
 }
 
+// ── Local-player identification ───────────────────────────────────────────────
+
+/// Drains incoming `GreetMsg`s and stores the player UUID so `tag_local_player`
+/// knows which replicated entity is ours.
+fn receive_greet(
+    mut receiver: Query<&mut MessageReceiver<GreetMsg>, With<Client>>,
+    mut local_id: ResMut<LocalPlayerId>,
+) {
+    let Ok(mut recv) = receiver.single_mut() else { return };
+    for msg in recv.receive() {
+        tracing::info!("Received GreetMsg — local player UUID: {}", msg.player_id);
+        local_id.0 = Some(msg.player_id);
+    }
+}
+
 // ── Local-player tagging ──────────────────────────────────────────────────────
 
 type UntaggedLocalPlayer = (With<Replicated>, With<Experience>, Without<LocalPlayer>);
 
-/// Inserts `LocalPlayer` and `PredictedPosition` onto the first replicated
-/// entity that has an `Experience` component (i.e. our own player).
+/// Inserts `LocalPlayer` and `PredictedPosition` onto the replicated entity
+/// whose `GameEntityId` matches the UUID received in `GreetMsg`.
 ///
-/// Runs once: the `Without<LocalPlayer>` filter prevents re-insertion.
+/// Waits until `LocalPlayerId` is populated (i.e. the server greeting has
+/// arrived) so that remote player entities are never mistakenly tagged.
 fn tag_local_player(
-    query: Query<(Entity, &WorldPosition), UntaggedLocalPlayer>,
+    query: Query<(Entity, &WorldPosition, &GameEntityId), UntaggedLocalPlayer>,
+    local_id: Res<LocalPlayerId>,
     mut commands: Commands,
 ) {
-    for (entity, pos) in &query {
+    let Some(my_id) = local_id.0 else { return };
+    for (entity, pos, geid) in &query {
+        if geid.0 != my_id { continue; }
         commands.entity(entity).insert((
             LocalPlayer,
             PredictedPosition { x: pos.x, y: pos.y, z: pos.z, z_vel: 0.0 },

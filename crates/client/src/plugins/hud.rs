@@ -14,12 +14,11 @@ use fellytip_shared::{
     components::{Experience, Health, PlayerStandings},
     world::faction::standing_tier,
 };
-use lightyear::prelude::Replicated;
-use crate::plugins::battle::{BattleLog, ClientStoryLog};
 use crate::LocalPlayer;
+use crate::plugins::battle::{BattleLog, ClientStoryLog};
 
 type LocalPlayerQuery<'w, 's> =
-    Query<'w, 's, (&'static Health, &'static Experience, Option<&'static PlayerStandings>), (With<Replicated>, With<Experience>)>;
+    Query<'w, 's, (&'static Health, &'static Experience, Option<&'static PlayerStandings>), With<LocalPlayer>>;
 
 pub struct HudPlugin;
 

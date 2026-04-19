@@ -8,12 +8,13 @@ use crate::world::ecology::{RegionId, SpeciesId};
 use crate::world::faction::FactionId;
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
 // ── Identifiers ───────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Component)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Component, Serialize, Deserialize, Reflect)]
 pub struct GameEntityId(pub Uuid);
 
 // ── Event kinds ───────────────────────────────────────────────────────────────
