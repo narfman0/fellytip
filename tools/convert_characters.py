@@ -32,6 +32,16 @@ OUTPUT_DIR  = os.path.join(
     "crates", "client", "assets", "characters",
 )
 
+SKINS_DIR = os.path.join(KENNEY_BASE, "Skins")
+
+# Skin PNG applied to each model before export (embedded in the GLB).
+SKIN_MAP = {
+    "characterMedium":      "fantasyMaleA.png",
+    "characterLargeMale":   "fantasyMaleB.png",
+    "characterLargeFemale": "fantasyFemaleA.png",
+    "characterSmall":       "casualMaleA.png",
+}
+
 CHARACTER_MODELS = [
     "characterMedium.fbx",
     "characterLargeMale.fbx",
@@ -81,6 +91,29 @@ for model_file in CHARACTER_MODELS:
     # Import the base character mesh + rig.
     print(f"  Importing base mesh: {model_path}")
     bpy.ops.import_scene.fbx(filepath=model_path)
+
+    # Apply skin texture to all mesh materials so it's embedded in the GLB.
+    skin_path = os.path.join(SKINS_DIR, SKIN_MAP.get(stem, "fantasyMaleA.png"))
+    if os.path.exists(skin_path):
+        print(f"  Applying skin: {skin_path}")
+        img = bpy.data.images.load(skin_path)
+        for obj in bpy.context.scene.objects:
+            if obj.type != "MESH":
+                continue
+            for mat in obj.data.materials:
+                if not mat or not mat.use_nodes:
+                    continue
+                bsdf = mat.node_tree.nodes.get("Principled BSDF")
+                if bsdf:
+                    tex = mat.node_tree.nodes.new("ShaderNodeTexImage")
+                    tex.image = img
+                    mat.node_tree.links.new(
+                        bsdf.inputs["Base Color"], tex.outputs["Color"]
+                    )
+                    bsdf.inputs["Alpha"].default_value = 1.0
+                mat.blend_method = "OPAQUE"
+    else:
+        print(f"  [WARN] Skin not found: {skin_path}")
 
     # Find the armature object — animations will be imported onto it.
     armature = next(
@@ -138,7 +171,7 @@ for model_file in CHARACTER_MODELS:
         export_format="GLB",
         export_animations=True,
         export_nla_strips=True,
-        export_nla_strips_merged_animation_name="merged",
+        export_image_format="AUTO",
         export_skins=True,
         export_morph=True,
         use_selection=False,

@@ -37,15 +37,17 @@ impl Plugin for CharacterAnimationPlugin {
 
 pub const ANIM_IDLE:   usize = 0;
 pub const ANIM_WALK:   usize = 1;
-#[allow(dead_code)] pub const ANIM_RUN:    usize = 2;
+pub const ANIM_RUN:    usize = 2;
 #[allow(dead_code)] pub const ANIM_ATTACK: usize = 3;
 #[allow(dead_code)] pub const ANIM_DEATH:  usize = 7;
 
 /// Base world-space scale applied to all character models.
-pub const CHARACTER_SCALE: f32 = 0.5;
+pub const CHARACTER_SCALE: f32 = 0.125;
 
 /// Movement speed (world units / second) above which walk replaces idle.
 const WALK_THRESHOLD: f32 = 0.3;
+/// Movement speed above which run replaces walk.
+const RUN_THRESHOLD: f32 = 4.0;
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
@@ -170,7 +172,13 @@ fn drive_character_anims(
         };
         state.last_translation = transform.translation;
 
-        let target = if speed > WALK_THRESHOLD { ANIM_WALK } else { ANIM_IDLE };
+        let target = if speed > RUN_THRESHOLD {
+            ANIM_RUN
+        } else if speed > WALK_THRESHOLD {
+            ANIM_WALK
+        } else {
+            ANIM_IDLE
+        };
 
         if state.initialized && target == state.current_anim { continue; }
 
