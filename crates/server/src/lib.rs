@@ -225,7 +225,13 @@ fn on_client_connected(
 
     let (spawn_x, spawn_y, spawn_z) = map
         .as_deref()
-        .map(find_surface_spawn)
+        .and_then(|m| {
+            if m.spawn_points.is_empty() { return None; }
+            // Round-robin across precomputed points; count.current already incremented.
+            let idx = (count.current as usize - 1) % m.spawn_points.len();
+            Some(m.spawn_points[idx])
+        })
+        .or_else(|| map.as_deref().map(find_surface_spawn))
         .unwrap_or((0.0, 0.0, 0.0));
 
     let world_meta = map_config.as_deref().map(|cfg| WorldMeta {

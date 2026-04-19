@@ -188,6 +188,10 @@ pub struct WorldMap {
     /// Populated after `generate_map` by [`crate::world::civilization::generate_roads`].
     #[serde(default)]
     pub road_tiles: Vec<bool>,
+    /// Precomputed world-space (x, y, z) spawn positions with verified open neighbors.
+    /// Populated by `generate_spawn_points` during world gen, after roads are stamped.
+    #[serde(default)]
+    pub spawn_points: Vec<(f32, f32, f32)>,
 }
 
 impl WorldMap {
@@ -282,6 +286,42 @@ pub fn find_surface_spawn(map: &WorldMap) -> (f32, f32, f32) {
         }
     }
     (0.0, 0.0, 0.0)
+}
+
+/// Precompute up to 3 well-spaced spawn points that each have ≥ 2 open cardinal
+/// neighbours, so players never land in a walled valley they cannot escape.
+pub fn generate_spawn_points(map: &WorldMap) -> Vec<(f32, f32, f32)> {
+    const COUNT: usize = 3;
+    const Z_CEIL: f32 = Z_SCALE * 2.0;
+    const MIN_SPACING_SQ: f32 = 50.0 * 50.0;
+
+    let mut points: Vec<(f32, f32, f32)> = Vec::new();
+
+    'outer: for radius in 0..(map.width.min(map.height) / 2) {
+        let r = radius as i64;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx.abs() != r && dy.abs() != r { continue; }
+                let x = dx as f32 + 0.5;
+                let y = dy as f32 + 0.5;
+                let Some(z) = smooth_surface_at(map, x, y, Z_CEIL) else { continue };
+
+                let open = [(x + 1., y), (x - 1., y), (x, y + 1.), (x, y - 1.)]
+                    .iter()
+                    .filter(|&&(nx, ny)| is_walkable_at(map, nx, ny, z))
+                    .count();
+                if open < 2 { continue; }
+
+                if points.iter().any(|&(px, py, _)| {
+                    (x - px).powi(2) + (y - py).powi(2) < MIN_SPACING_SQ
+                }) { continue; }
+
+                points.push((x, y, z));
+                if points.len() >= COUNT { break 'outer; }
+            }
+        }
+    }
+    points
 }
 
 // ── Biome classification ──────────────────────────────────────────────────────
@@ -451,7 +491,7 @@ pub fn generate_map(seed: u64, width: usize, height: usize) -> WorldMap {
 
     river_pass(&mut columns, &heights, width, height);
 
-    WorldMap { columns, width, height, seed, road_tiles: vec![false; width * height] }
+    WorldMap { columns, width, height, seed, road_tiles: vec![false; width * height], spawn_points: Vec::new() }
 }
 
 /// Steepest-descent river generation.
@@ -721,7 +761,7 @@ mod tests {
             walkable: true,
             corner_offsets: [0.0; 4],
         };
-        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], width: MAP_WIDTH, height: MAP_HEIGHT, seed: 0, road_tiles: vec![] };
+        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], width: MAP_WIDTH, height: MAP_HEIGHT, seed: 0, road_tiles: vec![], spawn_points: vec![] };
         map.columns[0] = TileColumn { layers: vec![make_layer(1.0)] };
         map.columns[1] = TileColumn { layers: vec![make_layer(3.0)] };
 
@@ -871,5 +911,20 @@ mod tests {
             frames < 200,
             "expected landing in < 200 ticks from height {Z_SCALE}, took {frames}"
         );
+    }
+
+    #[test]
+    fn spawn_points_are_walkable_and_open() {
+        let mut map = generate_map(42, 64, 64);
+        map.spawn_points = generate_spawn_points(&map);
+        assert!(!map.spawn_points.is_empty(), "must have at least one spawn point");
+        for &(x, y, z) in &map.spawn_points {
+            assert!(is_walkable_at(&map, x, y, z), "spawn ({x},{y}) must be walkable");
+            let open = [(x + 1., y), (x - 1., y), (x, y + 1.), (x, y - 1.)]
+                .iter()
+                .filter(|&&(nx, ny)| is_walkable_at(&map, nx, ny, z))
+                .count();
+            assert!(open >= 2, "spawn at ({x},{y}) must have >= 2 open neighbours, got {open}");
+        }
     }
 }

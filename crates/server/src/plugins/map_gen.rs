@@ -24,7 +24,7 @@ use fellytip_shared::{
     components::{EntityKind, WorldPosition},
     world::{
         civilization::{assign_territories, generate_roads, generate_settlements, Settlements},
-        map::{generate_map, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
+        map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
     },
 };
 
@@ -156,6 +156,8 @@ fn generate_and_save(
     generate_roads(&mut map, &settlements);
     let road_count = map.road_tiles.iter().filter(|&&r| r).count();
     tracing::info!(road_count, "Road network stamped");
+    map.spawn_points = generate_spawn_points(&map);
+    tracing::info!(count = map.spawn_points.len(), "Spawn points computed");
 
     if let Some(path) = save_map_file(&map) {
         rt.block_on(set_map_file_path(pool, &path));
@@ -185,6 +187,7 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
                         && loaded.width == config.width
                         && loaded.height == config.height
                         && !loaded.road_tiles.is_empty()
+                        && !loaded.spawn_points.is_empty()
                         && loaded.columns.len() == config.width * config.height =>
                 {
                     tracing::info!(seed = config.seed, "World map loaded from cache — skipping generation");
