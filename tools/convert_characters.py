@@ -125,7 +125,7 @@ for model_file in CHARACTER_MODELS:
     else:
         bpy.context.view_layer.objects.active = armature
 
-        for anim_file in ANIMATION_FILES:
+        for anim_idx, anim_file in enumerate(ANIMATION_FILES):
             anim_path = os.path.join(ANIMATIONS_DIR, anim_file)
             if not os.path.exists(anim_path):
                 print(f"  [SKIP] animation not found: {anim_path}")
@@ -134,8 +134,9 @@ for model_file in CHARACTER_MODELS:
             anim_name = os.path.splitext(anim_file)[0]
             print(f"  Importing animation: {anim_name}")
 
-            # Snapshot existing actions before import.
-            before = set(bpy.data.actions.keys())
+            # Snapshot scene objects and actions before import.
+            before_objects = set(bpy.data.objects.keys())
+            before_actions = set(bpy.data.actions.keys())
 
             bpy.ops.import_scene.fbx(
                 filepath=anim_path,
@@ -144,25 +145,52 @@ for model_file in CHARACTER_MODELS:
                 automatic_bone_orientation=False,
             )
 
-            # Find the newly imported action.
-            after = set(bpy.data.actions.keys())
-            new_actions = after - before
-            if not new_actions:
-                print(f"  [WARN] No new action found after importing {anim_name}")
+            # Delete every object the FBX import created — they are duplicate
+            # rigs/meshes we don't need; we only want the action it brought in.
+            for obj_name in list(set(bpy.data.objects.keys()) - before_objects):
+                obj = bpy.data.objects.get(obj_name)
+                if obj:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+
+            # Find the newly imported action, skipping binding-pose extras.
+            new_actions = set(bpy.data.actions.keys()) - before_actions
+            action = None
+            for aname in sorted(new_actions):
+                if "Targeting Pose" not in aname:
+                    action = bpy.data.actions[aname]
+                    break
+            if action is None:
+                print(f"  [WARN] No usable action found after importing {anim_name}")
                 continue
 
-            action = bpy.data.actions[next(iter(new_actions))]
-            action.name = anim_name
+            # Prefix with zero-padded index so the GLTF exporter keeps the
+            # intended order (Blender sorts NLA strips alphabetically on export).
+            action.name = f"{anim_idx:02d}_{anim_name}"
 
             # Push action to an NLA track so it's included in the GLB export.
             if armature.animation_data is None:
                 armature.animation_data_create()
             track = armature.animation_data.nla_tracks.new()
-            track.name = anim_name
-            track.strips.new(anim_name, int(action.frame_range[0]), action)
+            track.name = action.name
+            track.strips.new(action.name, int(action.frame_range[0]), action)
 
         # Clear the active action so we export via NLA strips, not just one action.
         armature.animation_data.action = None
+
+        # Remove NLA tracks the FBX importer auto-pushed (binding/targeting poses).
+        import re
+        bad_tracks = [
+            track for track in armature.animation_data.nla_tracks
+            if not any(re.match(r'^\d{2}_', strip.name) for strip in track.strips)
+        ]
+        for track in bad_tracks:
+            armature.animation_data.nla_tracks.remove(track)
+
+        # Also purge from bpy.data.actions — Blender 5.1's GLTF exporter exports
+        # all actions referencing the armature, not just those in NLA tracks.
+        for action_name in list(bpy.data.actions.keys()):
+            if not re.match(r'^\d{2}_', action_name):
+                bpy.data.actions.remove(bpy.data.actions[action_name])
 
     # Export as GLB with all NLA strip animations embedded.
     print(f"  Exporting → {out_path}")
