@@ -5,3 +5,5 @@
 *.db-wal
 *.bin
 server.local.toml
+server.log
+client.log

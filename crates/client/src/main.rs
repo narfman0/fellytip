@@ -189,7 +189,7 @@ fn main() {
             app.add_plugins(MinimalPlugins)
                 .add_plugins(RemotePlugin::default())
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT_HEADLESS))
-                .add_systems(Update, headless_auto_attack);
+                .add_systems(Update, (headless_auto_attack, headless_auto_move));
         } else {
             add_windowed_plugins(&mut app);
         }
@@ -352,10 +352,12 @@ fn log_replicated_positions(query: Query<(Entity, &WorldPosition), With<Replicat
 }
 
 /// Headless-mode only: sends `BasicAttack` every 2 seconds for ralph integration tests.
-/// Allows `combat_resolves` to assert that damage lands without a real keyboard.
+/// Reads `PredictedPosition` so the server position stays at the correct spawn location
+/// rather than being overwritten with [0,0,0].
 #[cfg(not(target_family = "wasm"))]
 fn headless_auto_attack(
     mut sender: Option<Single<&mut MessageSender<PlayerInput>>>,
+    pred_q: Query<&PredictedPosition, With<LocalPlayer>>,
     time: Res<Time>,
     mut elapsed: Local<f32>,
 ) {
@@ -365,13 +367,46 @@ fn headless_auto_attack(
     }
     *elapsed = 0.0;
     let Some(ref mut s) = sender else { return };
+    let pos = pred_q.single().map(|p| [p.x, p.y, p.z]).unwrap_or([0.0; 3]);
     s.send::<PlayerInputChannel>(PlayerInput {
         move_dir: [0.0, 0.0],
-        pos: [0.0, 0.0, 0.0],
+        pos,
         action: Some(ActionIntent::BasicAttack),
         target: None,
     });
     tracing::debug!("Headless: auto BasicAttack sent");
+}
+
+/// Headless-mode only: walks the player right for 3 s then left for 3 s, repeating.
+/// Sends `PlayerInput` with movement every frame so ralph can observe position change.
+/// No terrain checks — `WorldMap` is not loaded in headless mode (mirrors the fallback
+/// branch in `send_player_input` when the map resource is absent).
+#[cfg(not(target_family = "wasm"))]
+fn headless_auto_move(
+    mut sender: Option<Single<&mut MessageSender<PlayerInput>>>,
+    mut pred_q: Query<&mut PredictedPosition, With<LocalPlayer>>,
+    time: Res<Time>,
+    mut phase_elapsed: Local<f32>,
+    mut phase_right: Local<bool>,
+) {
+    let Some(ref mut s) = sender else { return };
+    let Ok(mut pred) = pred_q.single_mut() else { return };
+
+    *phase_elapsed += time.delta_secs();
+    if *phase_elapsed >= 3.0 {
+        *phase_elapsed = 0.0;
+        *phase_right = !*phase_right;
+    }
+
+    let dir_x: f32 = if *phase_right { 1.0 } else { -1.0 };
+    pred.x += dir_x * PLAYER_SPEED * time.delta_secs();
+
+    s.send::<PlayerInputChannel>(PlayerInput {
+        move_dir: [dir_x, 0.0],
+        pos: [pred.x, pred.y, pred.z],
+        action: None,
+        target: None,
+    });
 }
 
 /// Read keyboard/gamepad input, apply client-authoritative movement prediction

@@ -93,6 +93,29 @@ Built-in endpoints:
 - `bevy/get` — read components on a specific entity
 - `bevy/insert` / `bevy/spawn` / `bevy/destroy` — mutate ECS
 
-The `ralph` tool uses these to assert live game state in end-to-end scenarios. Example: after pressing Space, ralph queries `Health` on the boss entity and asserts it decreased.
+The `ralph` tool uses these to assert live game state in end-to-end scenarios. Scenarios:
+
+| Scenario | What it checks |
+|---|---|
+| `basic_movement` | At least one `WorldPosition` entity exists after a client connects |
+| `combat_resolves` | At least one entity has `Health.current < Health.max` (damage landed) |
+| `player_moves` | The player's `WorldPosition` changes by > 0.1 units over ~4 s |
+
+## Headless automation
+
+The headless client (`--headless`) runs two automation systems instead of keyboard input:
+
+- **`headless_auto_attack`** — sends `BasicAttack` every 2 s (drives `combat_resolves`)
+- **`headless_auto_move`** — walks right 3 s / left 3 s repeating at `PLAYER_SPEED` (drives `player_moves`); no terrain checks since `WorldMap` is not loaded in headless mode
+
+Both systems read `PredictedPosition` (seeded from the first replicated `WorldPosition`) to keep the sent `pos` accurate.
+
+## Smoke-test script
+
+`scripts/smoke_test.sh` builds the workspace, starts server + headless client, runs all ralph scenarios, dumps logs on failure, and exits with ralph's exit code:
+
+```bash
+bash scripts/smoke_test.sh
+```
 
 Debug builds of the client support `bevy-inspector-egui` behind the `debug` feature flag: `cargo run -p fellytip-client --features debug`.

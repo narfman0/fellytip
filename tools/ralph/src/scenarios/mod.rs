@@ -1,5 +1,6 @@
 pub mod basic_movement;
 pub mod combat_resolves;
+pub mod player_moves;
 
 use anyhow::Result;
 
@@ -12,6 +13,7 @@ pub fn all_scenarios() -> Vec<Box<dyn Scenario>> {
     vec![
         Box::new(basic_movement::BasicMovement),
         Box::new(combat_resolves::CombatResolves),
+        Box::new(player_moves::PlayerMoves),
     ]
 }
 
