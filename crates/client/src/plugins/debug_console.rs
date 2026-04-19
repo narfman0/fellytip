@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiPreUpdateSet, EguiPrimaryContextPass, egui};
 use fellytip_shared::{
     components::{Experience, Health, PlayerStandings},
     world::{faction::standing_tier, story::GameEntityId},
@@ -32,7 +32,12 @@ pub struct DebugConsolePlugin;
 impl Plugin for DebugConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugConsole>()
-            .add_systems(Update, toggle_debug_console)
+            .add_systems(
+                PreUpdate,
+                toggle_debug_console
+                    .after(EguiPreUpdateSet::ProcessInput)
+                    .before(EguiPreUpdateSet::BeginPass),
+            )
             .add_systems(EguiPrimaryContextPass, draw_debug_console);
     }
 }

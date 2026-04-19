@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiPreUpdateSet, EguiPrimaryContextPass, egui};
 use lightyear::prelude::client::NetcodeClient;
 
 #[derive(Resource, Default)]
@@ -12,7 +12,12 @@ pub struct PauseMenuPlugin;
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
-            .add_systems(Update, toggle_pause_menu)
+            .add_systems(
+                PreUpdate,
+                toggle_pause_menu
+                    .after(EguiPreUpdateSet::ProcessInput)
+                    .before(EguiPreUpdateSet::BeginPass),
+            )
             .add_systems(EguiPrimaryContextPass, draw_pause_menu);
     }
 }
