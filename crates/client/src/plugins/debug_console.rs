@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPreUpdateSet, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use fellytip_shared::{
     components::{Experience, Health, PlayerStandings},
     world::{faction::standing_tier, story::GameEntityId},
@@ -32,23 +32,7 @@ pub struct DebugConsolePlugin;
 impl Plugin for DebugConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugConsole>()
-            .add_systems(
-                PreUpdate,
-                toggle_debug_console
-                    .after(EguiPreUpdateSet::ProcessInput)
-                    .before(EguiPreUpdateSet::BeginPass),
-            )
             .add_systems(EguiPrimaryContextPass, draw_debug_console);
-    }
-}
-
-fn toggle_debug_console(keyboard: Res<ButtonInput<KeyCode>>, mut console: ResMut<DebugConsole>) {
-    if keyboard.just_pressed(KeyCode::Backquote) {
-        console.open = !console.open;
-        if console.open {
-            console.input.clear();
-            console.request_focus = true;
-        }
     }
 }
 
@@ -57,10 +41,19 @@ fn draw_debug_console(
     mut console: ResMut<DebugConsole>,
     mut player_q: LocalPlayerQuery,
 ) -> Result {
+    let egui_ctx = ctx.ctx_mut()?;
+
+    if egui_ctx.input(|i| i.key_pressed(egui::Key::Backtick)) {
+        console.open = !console.open;
+        if console.open {
+            console.input.clear();
+            console.request_focus = true;
+        }
+    }
+
     if !console.open {
         return Ok(());
     }
-    let egui_ctx = ctx.ctx_mut()?;
 
     let input_id = egui::Id::new("debug_console_input");
     let mut pending_cmd: Option<String> = None;
@@ -99,7 +92,6 @@ fn draw_debug_console(
                     pending_cmd = Some(cmd);
                 }
                 console.input.clear();
-                // Re-focus for next command.
                 egui_ctx.memory_mut(|m| m.request_focus(input_id));
             }
         });

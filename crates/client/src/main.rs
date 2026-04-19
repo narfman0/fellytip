@@ -141,6 +141,16 @@ fn maybe_spawn_server() -> Option<std::process::Child> {
     Some(child)
 }
 
+/// Lightyear's UDP receive thread blocks indefinitely on `recv_from` with no
+/// timeout. When the user closes the window Bevy drops the socket but cannot
+/// join the stuck thread, causing a hang. Force-exit here so the OS reclaims
+/// everything immediately, matching what the pause-menu "Exit Game" button does.
+fn exit_on_window_close(mut events: bevy::ecs::message::MessageReader<bevy::window::WindowCloseRequested>) {
+    if events.read().next().is_some() {
+        std::process::exit(0);
+    }
+}
+
 fn add_windowed_plugins(app: &mut App) {
     // Windowed: full render stack.  DefaultPlugins includes LogPlugin so we
     // do NOT call tracing_subscriber::fmt::init() to avoid a double-init.
@@ -163,7 +173,8 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::BattleVisualsPlugin)
     .add_plugins(plugins::HudPlugin)
     .add_plugins(plugins::PauseMenuPlugin)
-    .add_plugins(plugins::DebugConsolePlugin);
+    .add_plugins(plugins::DebugConsolePlugin)
+    .add_systems(Update, exit_on_window_close);
 }
 
 fn main() {
@@ -427,6 +438,7 @@ fn headless_auto_move(
 ///
 /// Uses `Option<Res<...>>` so headless mode (no window, no input plugin) skips
 /// gracefully.
+#[allow(clippy::too_many_arguments)]
 fn send_player_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mut sender: Option<Single<&mut MessageSender<PlayerInput>>>,
@@ -435,12 +447,13 @@ fn send_player_input(
     map: Option<Res<WorldMap>>,
     time: Res<Time>,
     console: Option<Res<plugins::DebugConsole>>,
+    pause_menu: Option<Res<plugins::pause_menu::PauseMenu>>,
 ) {
     // Headless mode has no InputPlugin so keyboard is None there — bail early.
     // Do NOT check sender here: local prediction runs regardless of connection
     // state so the visual stays responsive even before the handshake completes.
     let Some(keyboard) = keyboard else { return };
-    if console.is_some_and(|c| c.open) {
+    if console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open) {
         return;
     }
 

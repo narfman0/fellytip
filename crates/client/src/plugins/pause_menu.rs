@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPreUpdateSet, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use lightyear::prelude::client::NetcodeClient;
 
 #[derive(Resource, Default)]
@@ -12,19 +12,7 @@ pub struct PauseMenuPlugin;
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
-            .add_systems(
-                PreUpdate,
-                toggle_pause_menu
-                    .after(EguiPreUpdateSet::ProcessInput)
-                    .before(EguiPreUpdateSet::BeginPass),
-            )
             .add_systems(EguiPrimaryContextPass, draw_pause_menu);
-    }
-}
-
-fn toggle_pause_menu(keyboard: Res<ButtonInput<KeyCode>>, mut menu: ResMut<PauseMenu>) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        menu.open = !menu.open;
     }
 }
 
@@ -34,14 +22,21 @@ fn draw_pause_menu(
     mut commands: Commands,
     clients: Query<Entity, With<NetcodeClient>>,
 ) -> Result {
+    let egui_ctx = ctx.ctx_mut()?;
+
+    if egui_ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        menu.open = !menu.open;
+    }
+
     if !menu.open {
         return Ok(());
     }
+
     egui::Window::new("Paused")
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .resizable(false)
         .collapsible(false)
-        .show(ctx.ctx_mut()?, |ui| {
+        .show(egui_ctx, |ui| {
             ui.set_min_width(200.0);
             ui.vertical_centered(|ui| {
                 if ui.button("New Game").clicked() {
