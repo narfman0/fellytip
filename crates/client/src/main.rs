@@ -3,8 +3,6 @@ mod plugins;
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
-#[cfg(not(target_family = "wasm"))]
-use fellytip_server::{parse_arg, ServerGamePlugin};
 use core::time::Duration;
 use fellytip_shared::{
     PLAYER_SPEED, PRIVATE_KEY, PROTOCOL_ID, TICK_HZ,
@@ -171,16 +169,14 @@ fn main() {
 
     #[cfg(not(target_family = "wasm"))]
     {
-        let headless   = std::env::args().any(|a| a == "--headless");
-        let host_mode  = std::env::args().any(|a| a == "--host");
-
-        // In windowed debug builds, ensure a local server is running before the
-        // Bevy app starts.  Disabled in release builds (server must be started
-        // separately).  Pass --auto-launch to force auto-launch in release builds.
-        // Skipped in host mode because we embed the server directly in this process.
+        let headless  = std::env::args().any(|a| a == "--headless");
+        // --host means "I want to host and play": ensures the server binary is
+        // auto-launched (identical to --auto-launch but semantically distinct).
+        // The server process binds UDP :5000 for remote players to join.
         let auto_launch = cfg!(debug_assertions)
-            || std::env::args().any(|a| a == "--auto-launch");
-        let _server_child = if !headless && !host_mode && auto_launch {
+            || std::env::args().any(|a| a == "--auto-launch")
+            || std::env::args().any(|a| a == "--host");
+        let _server_child = if !headless && auto_launch {
             maybe_spawn_server()
         } else {
             None
@@ -200,29 +196,6 @@ fn main() {
     }
     #[cfg(target_family = "wasm")]
     add_windowed_plugins(&mut app);
-
-    // Host mode: embed the server in this process so other players can connect
-    // directly.  The embedded server listens on UDP :5000 (same port as a
-    // dedicated server), and the local client connects to it via loopback.
-    // `idle_secs: None` keeps the server alive as long as the host player is
-    // running the app.
-    #[cfg(not(target_family = "wasm"))]
-    if std::env::args().any(|a| a == "--host") {
-        use lightyear::prelude::server::ServerPlugins;
-        use fellytip_shared::{WORLD_SEED, world::map::{MAP_WIDTH, MAP_HEIGHT}};
-        let args: Vec<String> = std::env::args().collect();
-        app.add_plugins(ServerPlugins {
-                tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),
-            })
-           .add_plugins(ServerGamePlugin {
-                seed:              parse_arg(&args, "--seed",               WORLD_SEED),
-                width:             parse_arg(&args, "--map-width",          MAP_WIDTH),
-                height:            parse_arg(&args, "--map-height",         MAP_HEIGHT),
-                history_warp_ticks: parse_arg(&args, "--history-warp-ticks", 10u64),
-                npcs_per_faction:  parse_arg(&args, "--npcs-per-faction",   3usize),
-                idle_secs:         None,
-            });
-    }
 
     app.add_plugins(ClientPlugins {
             tick_duration: Duration::from_secs_f64(1.0 / TICK_HZ),

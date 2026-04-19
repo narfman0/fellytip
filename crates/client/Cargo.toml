@@ -23,7 +23,6 @@ uuid               = { workspace = true }
 bevy               = { workspace = true, features = ["bevy_remote"] }
 lightyear          = { workspace = true, features = ["std", "server", "udp", "websocket"] }
 tracing-subscriber = { workspace = true }
-fellytip-server    = { path = "../server" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 lightyear          = { workspace = true, features = ["std", "websocket"] }
