@@ -154,23 +154,33 @@ fn link_anim_players(
 /// Also handles the one-time idle initialisation on first link.
 fn drive_character_anims(
     time:           Res<Time>,
-    mut char_query: Query<(&Transform, &mut CharacterAnimState)>,
+    mut char_query: Query<(&mut Transform, &mut CharacterAnimState)>,
     mut transitions: Query<&mut AnimationTransitions>,
     mut players:    Query<&mut AnimationPlayer>,
 ) {
     let dt = time.delta_secs();
 
-    for (transform, mut state) in &mut char_query {
+    for (mut transform, mut state) in &mut char_query {
         let Some(player_entity) = state.anim_player_entity else { continue };
         if state.graph_nodes.is_empty() { continue; }
 
+        let delta = transform.translation - state.last_translation;
+
         // Compute movement speed; avoid division by near-zero dt on first frame.
         let speed = if dt > 0.0 {
-            transform.translation.distance(state.last_translation) / dt
+            delta.length() / dt
         } else {
             0.0
         };
         state.last_translation = transform.translation;
+
+        // Rotate to face movement direction (horizontal plane only).
+        if speed > WALK_THRESHOLD {
+            let horizontal = Vec3::new(delta.x, 0.0, delta.z);
+            if horizontal.length_squared() > 1e-6 {
+                transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, horizontal.normalize());
+            }
+        }
 
         let target = if speed > RUN_THRESHOLD {
             ANIM_RUN
@@ -194,5 +204,41 @@ fn drive_character_anims(
 
         state.current_anim = target;
         state.initialized  = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::math::{Quat, Vec3};
+
+    fn facing_rotation(delta: Vec3) -> Option<Quat> {
+        let horizontal = Vec3::new(delta.x, 0.0, delta.z);
+        if horizontal.length_squared() > 1e-6 {
+            Some(Quat::from_rotation_arc(Vec3::NEG_Z, horizontal.normalize()))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn faces_movement_direction() {
+        for (delta, expected_forward) in [
+            (Vec3::new(1.0, 0.0, 0.0), Vec3::X),
+            (Vec3::new(0.0, 0.0, 1.0), Vec3::Z),
+            (Vec3::new(-1.0, 0.0, 0.0), Vec3::NEG_X),
+            (Vec3::new(0.0, 5.0, 1.0), Vec3::Z), // vertical ignored
+        ] {
+            let rot = facing_rotation(delta).expect("should produce rotation");
+            let forward = rot * Vec3::NEG_Z;
+            assert!(
+                forward.dot(expected_forward) > 0.999,
+                "delta {delta:?}: expected forward {expected_forward:?}, got {forward:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_rotation_when_stationary() {
+        assert!(facing_rotation(Vec3::ZERO).is_none());
     }
 }
