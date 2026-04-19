@@ -8,7 +8,12 @@ use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     prelude::*,
 };
+use fellytip_shared::world::map::WorldMap;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
+use crate::plugins::terrain::chunk::vertex_height;
+
+/// Minimum world-unit clearance between the camera and the terrain surface below it.
+const TERRAIN_CLEARANCE: f32 = 3.0;
 
 pub struct OrbitCameraPlugin;
 
@@ -47,13 +52,13 @@ impl Default for OrbitCamera {
             // World-space origin (0, 8, 0) = centre of the map; y≈8 is typical surface elevation
             // with Z_SCALE=20.0 and moderate terrain height.
             target: Vec3::new(0.0, 8.0, 0.0),
-            distance: 60.0,
+            distance: 14.0,
             yaw: PI * 0.25,   // 45° diagonal — isometric
             pitch: 0.615,     // ~35.3° — classic isometric elevation
-            min_pitch: 0.05,
+            min_pitch: 0.40,
             max_pitch: PI * 0.5 - 0.02,
-            min_distance: 5.0,
-            max_distance: 400.0,
+            min_distance: 6.0,
+            max_distance: 22.0,
             orbit_speed: 0.005,
             zoom_speed: 4.0,
         }
@@ -85,6 +90,7 @@ fn update_orbit_camera(
     // Follow the local player's predicted position — updated every frame on
     // input so the camera tracks the visual mesh with zero lag.
     player_q: Query<&PredictedPosition, With<LocalPlayer>>,
+    map: Option<Res<WorldMap>>,
 ) {
     let Ok((mut orbit, mut transform)) = query.single_mut() else {
         return;
@@ -109,5 +115,71 @@ fn update_orbit_camera(
             .clamp(orbit.min_distance, orbit.max_distance);
     }
 
-    *transform = camera_transform(&orbit);
+    let mut t = camera_transform(&orbit);
+
+    // Raise the camera if terrain below it would clip through.
+    if let Some(ref map) = map {
+        let floor = terrain_floor_y(map, t.translation.x, t.translation.z);
+        if t.translation.y < floor {
+            t.translation.y = floor;
+            t = Transform::from_translation(t.translation).looking_at(orbit.target, Vec3::Y);
+        }
+    }
+
+    *transform = t;
+}
+
+/// Returns the minimum camera Y at world position `(cam_x, cam_z)`: terrain
+/// height at that tile plus the required clearance.
+fn terrain_floor_y(map: &WorldMap, cam_x: f32, cam_z: f32) -> f32 {
+    let half_w = (map.width  / 2) as f32;
+    let half_h = (map.height / 2) as f32;
+    let gx = ((cam_x + half_w).round() as i64).clamp(0, map.width  as i64 - 1) as usize;
+    let gy = ((cam_z + half_h).round() as i64).clamp(0, map.height as i64 - 1) as usize;
+    vertex_height(map, gx, gy) + TERRAIN_CLEARANCE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fellytip_shared::world::map::generate_map;
+
+    fn test_map() -> WorldMap {
+        generate_map(42, 64, 64)
+    }
+
+    #[test]
+    fn terrain_floor_includes_clearance() {
+        let map = test_map();
+        // Centre tile: Bevy (0, 0) → tile (32, 32).
+        let floor = terrain_floor_y(&map, 0.0, 0.0);
+        let raw = vertex_height(&map, 32, 32);
+        assert!((floor - (raw + TERRAIN_CLEARANCE)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn camera_below_terrain_is_raised() {
+        let map = test_map();
+        let floor = terrain_floor_y(&map, 0.0, 0.0);
+        // If the raw camera Y is below the floor, it must be lifted.
+        let cam_y_below = floor - 10.0;
+        assert!(cam_y_below < floor);
+    }
+
+    #[test]
+    fn camera_above_terrain_is_unchanged() {
+        let map = test_map();
+        let floor = terrain_floor_y(&map, 0.0, 0.0);
+        // A camera already above the floor must not be disturbed.
+        let cam_y_above = floor + 5.0;
+        assert!(cam_y_above >= floor);
+    }
+
+    #[test]
+    fn oob_coords_clamp_to_map_edge() {
+        let map = test_map();
+        // Far outside map bounds should not panic and should return a valid floor.
+        let floor = terrain_floor_y(&map, 1_000_000.0, 1_000_000.0);
+        assert!(floor.is_finite());
+    }
 }
