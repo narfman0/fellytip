@@ -57,7 +57,7 @@ impl Default for OrbitCamera {
             pitch: 0.615,     // ~35.3° — classic isometric elevation
             min_pitch: 0.40,
             max_pitch: PI * 0.5 - 0.02,
-            min_distance: 6.0,
+            min_distance: 2.0,
             max_distance: 22.0,
             orbit_speed: 0.005,
             zoom_speed: 4.0,

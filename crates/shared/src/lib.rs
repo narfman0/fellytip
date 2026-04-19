@@ -33,4 +33,4 @@ pub const TICK_HZ: f64 = 62.5;
 
 /// Player movement speed in world units per second.
 /// Shared between server authoritative movement and client-side prediction.
-pub const PLAYER_SPEED: f32 = 10.0;
+pub const PLAYER_SPEED: f32 = 2.5;
