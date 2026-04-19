@@ -161,7 +161,8 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::CharacterAnimationPlugin)
     .add_plugins(plugins::EntityRendererPlugin)
     .add_plugins(plugins::BattleVisualsPlugin)
-    .add_plugins(plugins::HudPlugin);
+    .add_plugins(plugins::HudPlugin)
+    .add_plugins(plugins::PauseMenuPlugin);
 }
 
 fn main() {
@@ -212,15 +213,17 @@ fn main() {
         )
         .add_systems(
             Update,
-            (try_connect, log_replicated_positions, reconcile_prediction, receive_greet),
+            (try_connect, log_replicated_positions, reconcile_prediction),
         )
         .add_systems(
             Update,
-            // Chain ensures tag_local_player's deferred inserts (LocalPlayer,
-            // PredictedPosition) are flushed by apply_deferred before
-            // send_player_input runs, so the correct spawn position is sent on
-            // the very first replication frame instead of pos=[0,0,0].
-            (tag_local_player, ApplyDeferred, send_player_input.in_set(ClientSet::Input)).chain(),
+            // receive_greet → tag_local_player → ApplyDeferred → send_player_input:
+            //   receive_greet sets LocalPlayerId from the server's GreetMsg.
+            //   tag_local_player then finds the matching GameEntityId and inserts
+            //   LocalPlayer + PredictedPosition in the same frame.
+            //   ApplyDeferred flushes those inserts so send_player_input sees them
+            //   immediately, avoiding a one-frame delay on the first input.
+            (receive_greet, tag_local_player, ApplyDeferred, send_player_input.in_set(ClientSet::Input)).chain(),
         )
         .add_observer(on_connected)
         .add_observer(on_disconnected);
@@ -431,8 +434,10 @@ fn send_player_input(
     map: Option<Res<WorldMap>>,
     time: Res<Time>,
 ) {
+    // Headless mode has no InputPlugin so keyboard is None there — bail early.
+    // Do NOT check sender here: local prediction runs regardless of connection
+    // state so the visual stays responsive even before the handshake completes.
     let Some(keyboard) = keyboard else { return };
-    let Some(ref mut sender) = sender else { return };
 
     // Raw WASD input on screen axes (before camera rotation).
     let mut raw_x = 0.0_f32; // A/D strafe
@@ -527,9 +532,11 @@ fn send_player_input(
         None
     };
 
-    // Only send once the local player is tagged; avoids sending pos=[0,0,0]
-    // on the first replication frame (which would teleport the server player
-    // to the map centre before PredictedPosition is initialised).
+    // Send to server only when connected AND the local player is tagged.
+    // Skipping without sender means the visual still updates (prediction ran
+    // above) while offline; skipping without pred avoids sending pos=[0,0,0]
+    // on the first replication frame.
+    let Some(ref mut sender) = sender else { return };
     let Ok(pred) = pred_q.single() else { return };
     let pos = [pred.x, pred.y, pred.z];
     sender.send::<PlayerInputChannel>(PlayerInput {
