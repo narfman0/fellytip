@@ -5,12 +5,14 @@
 | Crate | Responsibility |
 |---|---|
 | `crates/shared` | Pure types, combat rules, world generation, protocol — no ECS, no I/O |
-| `crates/server` | Bevy ECS server: networking, world sim scheduling, persistence, map gen |
-| `crates/client` | Bevy ECS client: networking, rendering, input |
+| `crates/server` | Bevy ECS game logic lib: world sim, AI, persistence, combat, map gen. No binary. |
+| `crates/client` | Single runnable binary: links server lib, adds rendering, input, egui HUD |
 | `tools/ralph` | BRP HTTP test driver — automated end-to-end scenario assertions |
 | `tools/combat_sim` | proptest harness for combat and ecology rules, no ECS |
 | `tools/world_gen` | Standalone ASCII world preview: `cargo run -p world_gen -- --seed N` |
 | `tools/worldwatch` | eframe desktop monitor: reads BRP + SQLite and displays live world state |
+
+`crates/server` is a **lib-only** crate. There is no separate server process. All plugins (`WorldSimPlugin`, `AiPlugin`, `CombatPlugin`, etc.) run in-process inside the single `fellytip-client` binary. The crate boundary is preserved so a true server binary can be re-introduced behind a `multiplayer` feature flag later without major surgery.
 
 ## Design constraints
 
@@ -43,44 +45,45 @@ The `InterruptFrame` enum must be matched exhaustively — no `_` wildcard. This
 ## Data flow
 
 ```
-Client keyboard input
-  → PlayerInput message (UDP, unreliable)
-  → Server MessageReceiver<PlayerInput>
-  → process_player_input (FixedUpdate)
-      → moves WorldPosition
-      → queues PendingAttack if BasicAttack
+Keyboard input (client Update, 60+ Hz)
+  → send_player_input
+      → moves PredictedPosition (client-side, zero-latency)
+      → writes ActionIntent to LocalPlayerInput resource
+  → sync_pred_to_world → copies PredictedPosition → WorldPosition (same frame)
+
+WorldPosition update → process_player_input (FixedUpdate, 62.5 Hz)
+  → reads LocalPlayerInput resource
+  → queues PendingAttack if BasicAttack intent present
   → initiate_attacks
       → pushes InterruptFrame onto attacker's InterruptStack
   → resolve_interrupts
       → steps each stack (pure: InterruptStack::step)
       → applies Vec<Effect> to Health components
       → awards XP, emits WriteStoryEvent, despawns dead entities
-  → Replication (50 ms interval)
-      → WorldPosition + Health + GrowthStage replicated to clients
-        (only to peers that have the entity's chunk in Hot or Warm zone)
 ```
 
 ```
 World sim tick (1 Hz)
-  → update_chunk_temperature → ChunkTemperature zones per client
-  → update_npc_replication   → re-targets Replicate on each NPC
+  → update_chunk_temperature → ChunkTemperature Hot/Warm zones (single player)
   → update_faction_goals     → utility scoring → active FactionGoal
   → tick_population_system   → birth counters, war party formation events
   → age_npcs_system          → GrowthStage += 1/300; adult health upgrade
   → check_war_party_formation→ tags adults as WarPartyMember
-  → march_war_parties        → moves warriors; spawns ActiveBattle + BattleStartMsg
-  → run_battle_rounds        → seeded combat; BattleAttackMsg; BattleEndMsg
+  → march_war_parties        → moves warriors; writes BattleStartMsg
+  → run_battle_rounds        → seeded combat; writes BattleAttackMsg / BattleEndMsg
   → wander_npcs              → placeholder (non-war-party guards stationary)
   → EcologyPlugin            → Lotka-Volterra per region; StoryEvents on collapse
-  → StoryPlugin              → flushes WriteStoryEvent → StoryLog + SQLite
+  → StoryPlugin              → collect_story_events: WriteStoryEvent → StoryLog + StoryMsg
+                             → flush_story_log (every 300 ticks): StoryLog → SQLite
 ```
+
+Messages (`BattleStartMsg`, `BattleEndMsg`, `BattleAttackMsg`, `StoryMsg`) flow through Bevy's native `MessageWriter` / `MessageReader` within the same process — no network hop.
 
 ## Key version pins
 
 | Dependency | Version | Note |
 |---|---|---|
-| `bevy` | 0.18 | Do not bump without checking Lightyear compatibility |
-| `lightyear` | 0.26.4 | Targets Bevy 0.18 specifically |
+| `bevy` | 0.18 | |
 | `sqlx` | 0.8 | 0.9 is alpha; stay on 0.8 |
 | `bevy_egui` | 0.39 | |
 | `bevy-inspector-egui` | 0.36 | Behind `debug` feature flag |
@@ -106,7 +109,7 @@ World sim tick (1 Hz)
 | `Settlements` | List of generated settlements; used for NPC spawn placement |
 | `FactionRegistry` | All live `Faction` structs (including disposition maps); mutated by world-sim AI |
 | `FactionPopulationState` | Per-settlement `SettlementPopulation` (birth ticks, adult/child counts, cooldowns) |
-| `ChunkTemperature` | Per-client Hot/Warm zone chunk sets; rebuilt every WorldSim tick |
+| `ChunkTemperature` | Hot/Warm zone chunk sets around the local player; rebuilt every WorldSim tick |
 | `PlayerReputationMap` | Per-player, per-faction standing scores (`HashMap<Uuid, HashMap<FactionId, i32>>`); clamped to `[-999, 1000]`; persisted to `player_faction_standing` SQLite table |
 | `EcologyState` | Per-region predator/prey population counts |
 | `StoryLog` | In-memory ordered event log; flushed to SQLite periodically |

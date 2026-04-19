@@ -19,7 +19,6 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use lightyear::prelude::{NetworkTarget, Replicate};
 use fellytip_shared::{
     components::{EntityKind, WorldPosition},
     world::{
@@ -232,7 +231,6 @@ fn spawn_settlement_markers(settlements: Res<Settlements>, mut commands: Command
                 z: settlement.z,
             },
             EntityKind::Settlement,
-            Replicate::to_clients(NetworkTarget::All),
         ));
         tracing::debug!(name = %settlement.name, "Settlement marker spawned");
     }

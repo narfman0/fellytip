@@ -18,12 +18,11 @@ Milestones are ordered by dependency. Each one builds on the previous.
 ## Acceptance criteria per milestone
 
 ### Milestone 0
-- `cargo run -p fellytip-server` starts without error.
-- `cargo run -p fellytip-client` connects to the server.
-- WASD inputs move the player entity and the `WorldPosition` component updates on the client.
+- `cargo run -p fellytip-client` starts without error.
+- WASD inputs move the player entity and the `WorldPosition` component updates.
 
 ### Milestone 0b
-- `ralph basic_movement` scenario passes against a live server + headless client.
+- `ralph basic_movement` scenario passes against a running headless client (`--headless`).
 - BRP `bevy/query` on `WorldPosition` returns correct data.
 
 ### Milestone 1

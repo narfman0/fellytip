@@ -1,34 +1,35 @@
 //! Story plugin: collects WriteStoryEvent messages and appends them to
 //! the StoryLog resource.  Events are flushed to SQLite every
 //! `FLUSH_INTERVAL_TICKS` world-sim ticks (≈5 minutes at 1 Hz).
-//! Significant events are also broadcast to all connected clients as `StoryMsg`.
+//! Significant events are broadcast as Bevy events so the client HUD can
+//! display them without a network hop.
+//!
+//! MULTIPLAYER: restore ServerMultiMessageSender broadcast alongside EventWriter.
 
-use bevy::ecs::message::MessageReader;
+use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 use fellytip_shared::{
-    protocol::{StoryMsg, WorldStateChannel},
+    protocol::StoryMsg,
     world::story::{StoryEvent, StoryEventKind, StoryLog, WriteStoryEvent},
 };
-use lightyear::prelude::{server::Server, NetworkTarget, ServerMultiMessageSender};
 
 use crate::plugins::persistence::Db;
 use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
 
 pub struct StoryPlugin;
 
-/// How many world-sim ticks between SQLite flushes.
 const FLUSH_INTERVAL_TICKS: u64 = 300; // 5 min at 1 Hz
 
 impl Plugin for StoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StoryLog>();
         app.add_message::<WriteStoryEvent>();
+        app.add_message::<StoryMsg>();
         app.add_systems(Update, collect_story_events);
         app.add_systems(WorldSimSchedule, flush_story_log);
     }
 }
 
-/// Format a `StoryEventKind` into a human-readable string for client display.
 fn format_story_event(ev: &StoryEvent) -> String {
     let day = ev.world_day;
     match &ev.kind {
@@ -57,26 +58,20 @@ fn format_story_event(ev: &StoryEvent) -> String {
     }
 }
 
-/// Each frame: drain WriteStoryEvent queue → append to StoryLog and broadcast to clients.
+/// Each frame: drain WriteStoryEvent queue → append to StoryLog and emit StoryMsg event.
 fn collect_story_events(
     mut reader: MessageReader<WriteStoryEvent>,
     mut log: ResMut<StoryLog>,
-    mut msg_sender: ServerMultiMessageSender,
-    server: Option<Single<&Server>>,
+    mut story_writer: MessageWriter<StoryMsg>,
 ) {
     for WriteStoryEvent(ev) in reader.read() {
         tracing::info!(kind = ?ev.kind, tick = ev.tick, "Story event recorded");
-        // Broadcast to all connected clients.
-        if let Some(ref s) = server {
-            let text = format_story_event(ev);
-            let msg = StoryMsg { text };
-            let _ = msg_sender.send::<StoryMsg, WorldStateChannel>(&msg, s, &NetworkTarget::All);
-        }
+        let text = format_story_event(ev);
+        story_writer.write(StoryMsg { text });
         log.push(ev.clone());
     }
 }
 
-/// Serialize one story event into a row and insert it into SQLite.
 async fn insert_story_event(
     pool: &sqlx::Pool<sqlx::Sqlite>,
     ev: &StoryEvent,
@@ -110,10 +105,6 @@ async fn insert_story_event(
     Ok(())
 }
 
-/// Flush all pending story events to SQLite immediately (blocking).
-///
-/// Called by the timed flush system and by the graceful shutdown hook so that
-/// both code paths share the same SQL logic.
 pub fn flush_story_now(log: &mut StoryLog, db: &Db) {
     let events: Vec<StoryEvent> = log.events.drain(..).collect();
     if events.is_empty() {
@@ -138,7 +129,6 @@ pub fn flush_story_now(log: &mut StoryLog, db: &Db) {
     });
 }
 
-/// Every `FLUSH_INTERVAL_TICKS` world-sim ticks: write accumulated events to SQLite.
 fn flush_story_log(mut log: ResMut<StoryLog>, tick: Res<WorldSimTick>, db: Res<Db>) {
     if tick.0 == 0 || !tick.0.is_multiple_of(FLUSH_INTERVAL_TICKS) {
         return;

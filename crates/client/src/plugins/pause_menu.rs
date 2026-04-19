@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
-use lightyear::prelude::client::NetcodeClient;
 
 #[derive(Resource, Default)]
 pub struct PauseMenu {
@@ -19,8 +18,6 @@ impl Plugin for PauseMenuPlugin {
 fn draw_pause_menu(
     mut ctx: EguiContexts,
     mut menu: ResMut<PauseMenu>,
-    mut commands: Commands,
-    clients: Query<Entity, With<NetcodeClient>>,
 ) -> Result {
     let egui_ctx = ctx.ctx_mut()?;
 
@@ -40,9 +37,7 @@ fn draw_pause_menu(
             ui.set_min_width(200.0);
             ui.vertical_centered(|ui| {
                 if ui.button("New Game").clicked() {
-                    for entity in &clients {
-                        commands.entity(entity).despawn();
-                    }
+                    // MULTIPLAYER: disconnect from server here.
                     menu.open = false;
                 }
                 ui.add_space(8.0);

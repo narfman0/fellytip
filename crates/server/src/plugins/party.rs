@@ -2,8 +2,6 @@
 //! and exposes a `PartyRegistry` resource for visibility culling and HUD sync.
 
 use bevy::prelude::*;
-use lightyear::prelude::server::*;
-use lightyear::prelude::*;
 
 /// Maximum clients per party (hard limit for Milestone 3).
 // Used in tests and enforced in join(); visibility culling uses it in Step 13.
@@ -80,18 +78,8 @@ pub struct PartyPlugin;
 impl Plugin for PartyPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PartyRegistry>();
-        app.add_observer(on_client_disconnected_party_cleanup);
-    }
-}
-
-/// When a client disconnects, remove them from any party they were in.
-fn on_client_disconnected_party_cleanup(
-    trigger: On<Add, Disconnected>,
-    query: Query<(), With<ClientOf>>,
-    mut registry: ResMut<PartyRegistry>,
-) {
-    if query.get(trigger.entity).is_ok() {
-        registry.leave(trigger.entity);
+        // MULTIPLAYER: restore on_client_disconnected_party_cleanup observer
+        // to remove players from parties when they disconnect.
     }
 }
 

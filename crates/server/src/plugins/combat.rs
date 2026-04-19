@@ -10,7 +10,6 @@ use std::collections::HashMap;
 
 use bevy::{ecs::message::MessageWriter, prelude::*};
 use fellytip_shared::{
-    TICK_HZ,
     combat::{
         hit_die_for_class, hp_on_level_up, xp_to_next_level,
         interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
@@ -20,24 +19,29 @@ use fellytip_shared::{
         },
     },
     components::{Experience, Health, WorldPosition},
-    inputs::{ActionIntent, PlayerInput},
+    inputs::ActionIntent,
     world::{
         faction::{kill_standing_delta, standing_tier, PlayerReputationMap},
-        map::{is_walkable_at, WorldMap},
         story::{GameEntityId, StoryEvent, StoryEventKind, WriteStoryEvent},
     },
 };
 
 use crate::plugins::ai::{FactionMember, FactionNpcRank, FactionRegistry};
-use lightyear::prelude::{server::ClientOf, MessageReceiver};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-// ── Server-only combat components ─────────────────────────────────────────────
+// ── Local player input buffer ─────────────────────────────────────────────────
 
-/// Links a `ClientOf` entity to its spawned player entity.
-#[derive(Component)]
-pub struct PlayerEntity(pub Entity);
+/// Actions queued by the client input system for the current frame.
+///
+/// The client pushes to this resource from `send_player_input` in Update;
+/// `process_player_input` drains it in FixedUpdate.
+///
+/// MULTIPLAYER: replace with MessageReceiver<PlayerInput> on ClientOf entities.
+#[derive(Resource, Default)]
+pub struct LocalPlayerInput {
+    pub actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)>,
+}
 
 /// Server-only combat participant tracking.
 #[derive(Component)]
@@ -99,6 +103,7 @@ pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<LocalPlayerInput>();
         app.add_systems(
             FixedUpdate,
             check_faction_aggression
@@ -159,122 +164,52 @@ fn check_faction_aggression(
 
 // ── Input processing ──────────────────────────────────────────────────────────
 
-/// Read `PlayerInput` messages arriving from clients, accept the client's
-/// authoritative position, and queue combat action markers.
+/// Drain `LocalPlayerInput` actions and queue combat markers on the player entity.
 ///
-/// The client predicts movement locally (with terrain walkability checks using
-/// its local copy of `WorldMap`) and sends its computed `pos` every frame.
-/// The server accepts this position directly.  If the client's position has
-/// been in non-walkable terrain for > 10 seconds, the server snaps it back to
-/// the last valid position via [`PositionSanityTimer`].
+/// Movement is handled by `sync_pred_to_world` in the client (Update); this
+/// system only processes the action intents accumulated since the last tick.
+///
+/// MULTIPLAYER: restore MessageReceiver<PlayerInput> iteration over ClientOf
+/// entities and re-add the position-acceptance + sanity-timer logic.
 fn process_player_input(
-    mut clients: Query<(&mut MessageReceiver<PlayerInput>, &PlayerEntity), With<ClientOf>>,
-    mut player_state: Query<(&mut WorldPosition, &mut LastPlayerInput, &mut PositionSanityTimer)>,
+    mut local_input: ResMut<LocalPlayerInput>,
+    player_q: Query<Entity, Without<ExperienceReward>>,
     enemies: Query<(Entity, &CombatParticipant), With<ExperienceReward>>,
-    map: Option<Res<WorldMap>>,
     mut commands: Commands,
 ) {
-    let dt = (1.0 / TICK_HZ) as f32;
+    let Ok(player_entity) = player_q.single() else { return };
+    let pending_actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)> =
+        local_input.actions.drain(..).collect();
 
-    for (mut receiver, player_entity) in clients.iter_mut() {
-        // Phase 1: drain all received messages this tick.
-        // Keep only the last pos/move_dir (most recent wins); collect all actions.
-        let mut pending_actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)> = Vec::new();
-        let mut got_new_input = false;
-        let mut new_dir = [0.0_f32; 2];
-        let mut new_pos = [0.0_f32; 3];
-
-        for input in receiver.receive() {
-            new_dir = input.move_dir;
-            new_pos = input.pos;
-            got_new_input = true;
-            pending_actions.push((input.action, input.target));
-        }
-
-        // Phase 2: update LastPlayerInput if we received any message this tick.
-        if got_new_input {
-            if let Ok((_, mut last, _)) = player_state.get_mut(player_entity.0) {
-                last.move_dir = new_dir;
-            }
-        }
-
-        // Phase 3: accept client-authoritative position.
-        //
-        // If input was received this tick, apply the client's sent position
-        // directly.  If no message arrived (packet drop), the position is left
-        // unchanged — the client will send again next frame.
-        //
-        // The sanity check enforces a server correction only when the client
-        // position has been continuously off-terrain for > 10 seconds.
-        if let Ok((mut pos, _, mut sanity)) = player_state.get_mut(player_entity.0) {
-            if got_new_input {
-                pos.x = new_pos[0];
-                pos.y = new_pos[1];
-                pos.z = new_pos[2];
-            }
-
-            if let Some(ref m) = map {
-                if is_walkable_at(m, pos.x, pos.y, pos.z) {
-                    sanity.excess_secs  = 0.0;
-                    sanity.last_valid_x = pos.x;
-                    sanity.last_valid_y = pos.y;
-                    sanity.last_valid_z = pos.z;
+    for (action, target_uuid) in pending_actions {
+        match action {
+            Some(ActionIntent::BasicAttack) => {
+                let target = if let Some(uuid) = target_uuid {
+                    enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
                 } else {
-                    sanity.excess_secs += dt;
-                    if sanity.excess_secs > 10.0 {
-                        pos.x = sanity.last_valid_x;
-                        pos.y = sanity.last_valid_y;
-                        pos.z = sanity.last_valid_z;
-                        sanity.excess_secs = 0.0;
-                        tracing::debug!(
-                            entity = ?player_entity.0,
-                            "Position sanity override: snapped back to last valid position"
-                        );
-                    }
+                    enemies.iter().next().map(|(e, _)| e)
+                };
+                if let Some(target_entity) = target {
+                    commands
+                        .entity(player_entity)
+                        .insert(PendingAttack { target: target_entity });
+                    tracing::debug!(target = ?target_entity, "BasicAttack queued");
                 }
             }
-        }
-
-        // Phase 4: handle combat actions from this tick's messages.
-        for (action, target_uuid) in pending_actions {
-            match action {
-                Some(ActionIntent::BasicAttack) => {
-                    let target = if let Some(uuid) = target_uuid {
-                        enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
-                    } else {
-                        enemies.iter().next().map(|(e, _)| e)
-                    };
-                    if let Some(target_entity) = target {
-                        commands
-                            .entity(player_entity.0)
-                            .insert(PendingAttack { target: target_entity });
-                        tracing::debug!(
-                            player = ?player_entity.0,
-                            target = ?target_entity,
-                            "BasicAttack queued"
-                        );
-                    }
+            Some(ActionIntent::UseAbility(ability_id)) => {
+                let target = if let Some(uuid) = target_uuid {
+                    enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
+                } else {
+                    enemies.iter().next().map(|(e, _)| e)
+                };
+                if let Some(target_entity) = target {
+                    commands
+                        .entity(player_entity)
+                        .insert(PendingAbility { target: target_entity, ability_id });
+                    tracing::debug!(target = ?target_entity, ability_id, "UseAbility queued");
                 }
-                Some(ActionIntent::UseAbility(ability_id)) => {
-                    let target = if let Some(uuid) = target_uuid {
-                        enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
-                    } else {
-                        enemies.iter().next().map(|(e, _)| e)
-                    };
-                    if let Some(target_entity) = target {
-                        commands
-                            .entity(player_entity.0)
-                            .insert(PendingAbility { target: target_entity, ability_id });
-                        tracing::debug!(
-                            player = ?player_entity.0,
-                            target = ?target_entity,
-                            ability_id,
-                            "UseAbility queued"
-                        );
-                    }
-                }
-                Some(ActionIntent::Interact) | Some(ActionIntent::Dodge) | None => {}
             }
+            Some(ActionIntent::Interact) | Some(ActionIntent::Dodge) | None => {}
         }
     }
 }

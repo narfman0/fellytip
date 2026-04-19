@@ -1,12 +1,15 @@
 //! Battle visualization plugin.
 //!
 //! Subscribes to `BattleStartMsg`, `BattleEndMsg`, and `BattleAttackMsg`
-//! from the server and renders:
+//! Bevy events emitted by the server-side AI plugin, and renders:
 //!   - A pulsing translucent torus ring at each active battle site.
 //!   - A "Battle Log" resource consumed by `hud.rs` to display recent events.
+//!
+//! MULTIPLAYER: restore MessageReceiver queries on Client entities for the
+//! three battle message types and StoryMsg.
 
+use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
-use lightyear::prelude::{client::Client, MessageReceiver};
 use fellytip_shared::{
     protocol::{BattleAttackMsg, BattleEndMsg, BattleStartMsg, StoryMsg},
     world::population::BATTLE_RADIUS,
@@ -93,7 +96,6 @@ fn setup_battle_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Torus ring: major radius ≈ BATTLE_RADIUS, minor radius 0.15 (thin tube).
     let ring_mesh = meshes.add(Torus::new(BATTLE_RADIUS, 0.15));
     let ring_mat = materials.add(StandardMaterial {
         base_color: Color::srgba(1.0, 0.15, 0.05, 0.4),
@@ -109,15 +111,13 @@ fn setup_battle_assets(
 // ── Systems ───────────────────────────────────────────────────────────────────
 
 fn on_battle_start(
-    mut receiver: Query<&mut MessageReceiver<BattleStartMsg>, With<Client>>,
+    mut events: MessageReader<BattleStartMsg>,
     assets: Option<Res<BattleAssets>>,
     mut commands: Commands,
     mut log: ResMut<BattleLog>,
 ) {
     let Some(assets) = assets else { return };
-    let Ok(mut recv) = receiver.single_mut() else { return };
-    for msg in recv.receive() {
-        // Spawn the ring at the battle site. Coordinate mapping: (world_x, z_elev, world_y).
+    for msg in events.read() {
         let translation = Vec3::new(msg.x, msg.z, msg.y);
         commands.spawn((
             BattleSiteMarker {
@@ -128,11 +128,7 @@ fn on_battle_start(
             Mesh3d(assets.ring_mesh.clone()),
             MeshMaterial3d(assets.ring_mat.clone()),
         ));
-        let entry = format!(
-            "⚔ {} attacks {}!",
-            msg.attacker_faction, msg.defender_faction
-        );
-        log.push(entry);
+        log.push(format!("⚔ {} attacks {}!", msg.attacker_faction, msg.defender_faction));
         tracing::debug!(
             attacker = %msg.attacker_faction,
             defender = %msg.defender_faction,
@@ -142,50 +138,39 @@ fn on_battle_start(
 }
 
 fn on_battle_end(
-    mut receiver: Query<&mut MessageReceiver<BattleEndMsg>, With<Client>>,
+    mut events: MessageReader<BattleEndMsg>,
     markers: Query<(Entity, &BattleSiteMarker)>,
     mut commands: Commands,
     mut log: ResMut<BattleLog>,
 ) {
-    let Ok(mut recv) = receiver.single_mut() else { return };
-    for msg in recv.receive() {
-        // Despawn the matching ring.
+    for msg in events.read() {
         for (entity, marker) in &markers {
             if marker.settlement_id == msg.settlement_id {
                 commands.entity(entity).despawn();
             }
         }
-        let entry = format!(
+        log.push(format!(
             "🏁 {} wins! ({} vs {} casualties)",
             msg.winner_faction, msg.attacker_casualties, msg.defender_casualties
-        );
-        log.push(entry);
+        ));
     }
 }
 
-/// Log attack events for visibility; no per-entity flash (client lacks CombatantId).
-fn on_battle_attack(
-    mut receiver: Query<&mut MessageReceiver<BattleAttackMsg>, With<Client>>,
-) {
-    let Ok(mut recv) = receiver.single_mut() else { return };
-    for _msg in recv.receive() {
-        // Consumed to prevent buffer buildup; detailed flash deferred to future milestone.
-    }
+fn on_battle_attack(mut events: MessageReader<BattleAttackMsg>) {
+    // Consumed to prevent buffer buildup; per-entity flash deferred to future milestone.
+    for _ in events.read() {}
 }
 
-/// Receive `StoryMsg` broadcasts from the server and append to `ClientStoryLog`.
 fn on_story_msg(
-    mut receiver: Query<&mut MessageReceiver<StoryMsg>, With<Client>>,
+    mut events: MessageReader<StoryMsg>,
     mut log: ResMut<ClientStoryLog>,
 ) {
-    let Ok(mut recv) = receiver.single_mut() else { return };
-    for msg in recv.receive() {
+    for msg in events.read() {
         tracing::debug!(text = %msg.text, "Story event received");
         log.push(msg.text.clone());
     }
 }
 
-/// Pulse the ring opacity using a sine wave.
 fn animate_battle_rings(
     time: Res<Time>,
     mut rings: Query<(&mut BattleSiteMarker, &MeshMaterial3d<StandardMaterial>)>,

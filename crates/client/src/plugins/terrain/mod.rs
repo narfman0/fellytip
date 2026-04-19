@@ -18,8 +18,6 @@ use fellytip_shared::{
     components::{Experience, WorldMeta},
     world::map::{generate_map, MAP_HEIGHT, MAP_WIDTH},
 };
-use lightyear::prelude::Replicated;
-
 use manager::{
     apply_chunk_meshes, rebuild_dirty_chunks, update_chunk_visibility,
     ChunkManager, TerrainAssets,
@@ -63,7 +61,8 @@ fn setup_terrain_assets(
     commands.insert_resource(map);
 }
 
-type ChangedWorldMeta = (With<Replicated>, With<Experience>, Changed<WorldMeta>);
+// MULTIPLAYER: restore With<Replicated> to limit to server-sent player entities.
+type ChangedWorldMeta = (With<Experience>, Changed<WorldMeta>);
 
 /// When the server sends `WorldMeta` on the local player entity, regenerate the
 /// `WorldMap` if the seed or dimensions differ.  This makes the client's terrain

@@ -8,11 +8,8 @@ debug = []
 
 [dependencies]
 fellytip-shared    = { workspace = true }
-# bevy and lightyear must be in [dependencies] (not only target-specific) so that
-# proc-macro expansions (#[derive(Component)] etc.) resolve bevy_ecs correctly.
-# Platform-specific features are additive via [target.*.dependencies] below.
+fellytip-server    = { path = "../server" }
 bevy               = { workspace = true, default-features = true, features = ["keyboard"] }
-lightyear          = { workspace = true, features = ["client", "netcode", "replication", "prediction", "interpolation", "input_native"] }
 bevy_egui          = { workspace = true, features = ["render"] }
 anyhow             = { workspace = true }
 rand               = { workspace = true }
@@ -21,14 +18,4 @@ uuid               = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 bevy               = { workspace = true, features = ["bevy_remote"] }
-lightyear          = { workspace = true, features = ["std", "server", "udp", "websocket"] }
 tracing-subscriber = { workspace = true }
-
-[target.'cfg(target_family = "wasm")'.dependencies]
-lightyear          = { workspace = true, features = ["std", "websocket"] }
-# Enable getrandom's JS backend for WASM.  uuid v1 (via getrandom 0.2),
-# rand 0.10 (via getrandom 0.3), and other deps (getrandom 0.4) all need
-# their respective feature flags activated as direct-dep overrides.
-getrandom          = { version = "0.2", features = ["js"] }
-getrandom3         = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
-getrandom4         = { package = "getrandom", version = "0.4", features = ["wasm_js"] }

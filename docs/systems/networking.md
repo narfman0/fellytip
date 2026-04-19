@@ -1,121 +1,111 @@
 # System: Networking
 
-Networking is handled by [Lightyear 0.26.4](https://github.com/cBournhonesque/lightyear), which targets Bevy 0.18. The transport layer is UDP (netcode).
+> **Current state:** single-process, no network layer. All game logic (server plugins + client plugins) runs in one `fellytip-client` binary. Lightyear has been removed. The architecture is structured so a true multiplayer server can be re-introduced behind a `multiplayer` feature flag without a rewrite.
 
-Port numbers and the protocol constants (`PROTOCOL_ID`, `PRIVATE_KEY`, `NET_PORT`) are defined in `crates/shared/src/lib.rs`. BRP port constants are defined in the server and client `main.rs` files respectively.
-
-## Topology
+## Single-binary topology
 
 ```
-Server (fellytip-server)
-  ├── UDP NET_PORT          — game traffic (Lightyear netcode)
-  └── HTTP BRP_PORT         — BRP JSON-RPC (observability, ralph)
-
-Client (fellytip-client)
-  ├── connects to server UDP NET_PORT
-  └── HTTP BRP_PORT_HEADLESS — BRP JSON-RPC (headless client observability)
+fellytip-client (one process)
+  ├── ServerGamePlugin  ← crates/server lib (world sim, AI, combat, persistence)
+  ├── FellytipProtocolPlugin ← type registration only
+  ├── Input / rendering / HUD plugins
+  └── HTTP BRP_PORT (15702) — BRP JSON-RPC (observability, ralph)
 ```
 
-Up to 4 clients may connect simultaneously. A 5th connection is rejected by `PartyPlugin`.
+There is no separate server process. Port 15702 is the only network socket (BRP only).
 
-## Replicated components
+## In-process messaging
 
-These components in `crates/shared/src/components.rs` are registered in `FellytipProtocolPlugin` and replicated from server to all clients:
+Server → client events use Bevy's native `MessageWriter<T>` / `MessageReader<T>` within the same process:
 
-| Component | Sync mode | Notes |
-|---|---|---|
-| `WorldPosition { x, y, z }` | Client-authoritative; server echoes back | Client predicts with local terrain; server only overrides after 10 s walkability violation |
-| `Health { current, max }` | Simple interpolation | Client renders health bars |
-| `Experience { xp, level, xp_to_next }` | Simple interpolation | Client renders level/XP |
-| `EntityKind` | Simple | Enum: FactionNpc / Wildlife / Settlement — drives visual differentiation on client |
-| `WorldMeta { seed, width, height }` | Server → client (once on connect) | Client regenerates local `WorldMap` so terrain walkability matches the server exactly |
-| `GrowthStage(f32)` | Simple | 0.0 = newborn, 1.0 = adult; drives NPC capsule scale (0.3 → 1.0) on client |
-| `FactionBadge { faction_id, rank }` | Simple | Only on `FactionNpc` entities; drives per-faction capsule colour on client |
-| `PlayerStandings { standings }` | Simple | Only on player entities; list of `(faction_name, score)` — drives HUD reputation display |
-
-All are serializable (`serde`) and reflectable (`bevy::reflect`).
-
-Players carry `WorldMeta`, `PlayerStandings`, but not `EntityKind`. Absence of `EntityKind` on a replicated entity indicates a player.
-
-## Messages
-
-| Message | Direction | Channel | Notes |
+| Message | Writer | Reader | Notes |
 |---|---|---|---|
-| `PlayerInput` | Client → Server | Unordered unreliable UDP | Movement + action intent every frame |
-| `GreetMsg` | Server → Client | Ordered reliable | Sent on connect to verify channel |
-| `StoryMsg { text }` | Server → Client | Ordered reliable | Significant world-story events; displayed in client story panel |
-| `BattleStartMsg` | Server → Client | Sequenced reliable | Broadcast when war party arrives at target settlement |
-| `BattleEndMsg` | Server → Client | Sequenced reliable | Broadcast when one side is eliminated |
-| `BattleAttackMsg` | Server → Client | Sequenced reliable | Broadcast per hit during a battle |
+| `BattleStartMsg` | `AiPlugin` (`march_war_parties`) | `BattleVisualsPlugin` | Triggers ring spawn + battle log entry |
+| `BattleEndMsg` | `AiPlugin` (`run_battle_rounds`) | `BattleVisualsPlugin` | Despawns ring; logs winner |
+| `BattleAttackMsg` | `AiPlugin` (`run_battle_rounds`) | `BattleVisualsPlugin` | Consumed; per-entity flash deferred |
+| `StoryMsg` | `StoryPlugin` (`collect_story_events`) | `BattleVisualsPlugin` | Appended to `ClientStoryLog` for HUD |
+| `WriteStoryEvent` | Various plugins | `StoryPlugin` | Triggers story log + SQLite flush |
 
-`PlayerInput` carries `move_dir: [f32; 2]`, `pos: [f32; 3]` (client-computed position), an optional `ActionIntent`, and an optional target UUID.
+All message types are registered with `app.add_message::<T>()` by the plugin that writes them. Registration is idempotent so readers can also register defensively.
+
+## Player input
+
+There is no `PlayerInput` network message. Input flows through a resource:
+
+```
+Keyboard → send_player_input (client Update)
+         → PredictedPosition (movement, immediate)
+         → LocalPlayerInput.actions (combat intents)
+
+sync_pred_to_world → WorldPosition ← same frame
+
+process_player_input (FixedUpdate, reads LocalPlayerInput)
+  → queues PendingAttack, clears LocalPlayerInput.actions
+```
+
+`LocalPlayerInput` is defined in `crates/server/src/plugins/combat.rs` and inserted as a `Resource` by `CombatPlugin`.
+
+## Player lifecycle
+
+The local player entity is spawned by `spawn_local_player` in `PostStartup` (after `MapGenPlugin`'s `Startup` chain finishes). It receives:
+
+- `WorldPosition` — initial position from `WorldMap::spawn_points[0]` or `find_surface_spawn`
+- `Health`, `CombatParticipant`, `Experience`, `PlayerStandings`
+- `GameEntityId(Uuid)` — stable cross-session identity
+- `LastPlayerInput`, `PositionSanityTimer`
+
+`tag_local_player` runs every `Update` frame until it finds an entity with `With<Experience>, Without<LocalPlayer>` and attaches the `LocalPlayer` marker and `PredictedPosition`.
 
 ## Interest management (`crates/server/src/plugins/interest.rs`)
 
-Each connected client has a two-tier active zone centred on its player entity:
+`ChunkTemperature` tracks Hot and Warm chunk sets centred on the single local player:
 
-| Zone | Chebyshev chunk radius | Replication | Individual NPC sim speed |
-|---|---|---|---|
-| Hot | 0–2 | Yes | 1.0× (full speed) |
-| Warm | 3–8 | Yes | 0.25× (quarter speed) |
-| Frozen | > 8 | No | 0.05× (~20× slower) |
+| Zone | Chebyshev chunk radius | Per-NPC sim speed |
+|---|---|---|
+| Hot | 0–2 | 1.0× (full speed) |
+| Warm | 3–8 | 0.25× (quarter speed) |
+| Frozen | > 8 | 0.05× (~20× slower) |
 
-Aggregate systems (birth counters, ecology, faction goals) always run at full speed — only per-NPC systems (aging, movement, battle rounds) are zone-gated.
+Aggregate systems (birth counters, ecology, faction goals) always run at full speed. Per-NPC systems (aging, movement, battle rounds) are zone-gated via `ChunkTemperature`.
 
-`update_chunk_temperature` rebuilds zone maps once per `WorldSimSchedule` tick (1 Hz) from current player positions. `update_npc_replication` then re-targets each NPC's `Replicate` component so only clients near the NPC receive its replication traffic.
+`update_npc_replication` is removed (no replication targets). Zone gating is still used to throttle expensive per-NPC work.
 
-## Client-side input and movement
+## Client-side movement
 
-`send_player_input` runs in `Update` on the client. It reads WASD/arrow keys, normalises the direction, rotates by camera yaw, and applies movement to `PredictedPosition` using the local `WorldMap` (same deterministic generation as the server). Terrain walkability (`is_walkable_at`) and Z elevation (`smooth_surface_at`) are computed locally — no server round-trip needed.
+`send_player_input` reads WASD/arrow keys, normalises the direction, rotates by camera yaw, and applies movement to `PredictedPosition` using the local `WorldMap` (same deterministic generation as the server-side map). Terrain walkability (`is_walkable_at`) and Z elevation (`smooth_surface_at`) are computed locally each frame.
 
-The computed `pos: [f32; 3]` is included in every `PlayerInput` message sent to the server.
-
-`PredictedPosition` drives the local player's Bevy `Transform` for zero-latency visual feedback. Remote entities use the replicated `WorldPosition`.
-
-## Server-side input processing
-
-`process_player_input` reads `MessageReceiver<PlayerInput>` on each `ClientOf` entity. It accepts the client's sent `pos` directly as the new `WorldPosition` (client is authoritative for XY and Z). A `PositionSanityTimer` component tracks how long the position has been in non-walkable terrain; after 10 continuous seconds it snaps the player back to the last valid position.
-
-## Connection lifecycle
-
-On `Add<Connected>` (netcode handshake complete), the server spawns a player entity with `WorldPosition`, `Health`, `CombatParticipant`, `Experience`, `WorldMeta`, `PositionSanityTimer`, and `Replicate::to_clients(NetworkTarget::All)`, then attaches `PlayerEntity(player)` to the `ClientOf` entity.
-
-The client's `TerrainPlugin` watches for `WorldMeta` arriving on the replicated player entity. If the seed or dimensions differ from the default, it regenerates `WorldMap` and marks all terrain chunks dirty for re-render.
-
-On `Add<LinkOf>`, a `ReplicationSender` is added to the link entity so the server can push updates to that specific client.
+`sync_pred_to_world` copies `PredictedPosition` → `WorldPosition` every `Update` frame so server-side systems (combat, AI) see current position.
 
 ## BRP observability
 
-Both the server and headless client expose the Bevy Remote Protocol (BRP) — a JSON-RPC HTTP API built into Bevy.
+The client exposes Bevy Remote Protocol (BRP) on port **15702**:
 
-Built-in endpoints:
 - `bevy/query` — query entities by component
 - `bevy/get` — read components on a specific entity
 - `bevy/insert` / `bevy/spawn` / `bevy/destroy` — mutate ECS
 
-The `ralph` tool uses these to assert live game state in end-to-end scenarios. Scenarios:
-
-| Scenario | What it checks |
-|---|---|
-| `basic_movement` | At least one `WorldPosition` entity exists after a client connects |
-| `combat_resolves` | At least one entity has `Health.current < Health.max` (damage landed) |
-| `player_moves` | The player's `WorldPosition` changes by > 0.1 units over ~4 s |
+`ralph` uses these endpoints to assert live game state. Headless mode (`--headless`) skips rendering but keeps BRP active.
 
 ## Headless automation
 
-The headless client (`--headless`) runs two automation systems instead of keyboard input:
+`--headless` skips `DefaultPlugins` and windowed plugins. Two automation systems replace keyboard input:
 
-- **`headless_auto_attack`** — sends `BasicAttack` every 2 s (drives `combat_resolves`)
-- **`headless_auto_move`** — walks right 3 s / left 3 s repeating at `PLAYER_SPEED` (drives `player_moves`); no terrain checks since `WorldMap` is not loaded in headless mode
+- **`headless_auto_attack`** — queues `BasicAttack` via `LocalPlayerInput` every 2 s
+- **`headless_auto_move`** — writes directly to `PredictedPosition`, alternating right/left every 3 s
 
-Both systems read `PredictedPosition` (seeded from the first replicated `WorldPosition`) to keep the sent `pos` accurate.
+## Multiplayer re-introduction path
 
-## Smoke-test script
+The codebase is structured to minimise the effort of adding Lightyear back:
 
-`scripts/smoke_test.sh` builds the workspace, starts server + headless client, runs all ralph scenarios, dumps logs on failure, and exits with ralph's exit code:
+1. Re-introduce `lightyear` behind `feature = "multiplayer"` in workspace `Cargo.toml`.
+2. Re-enable `FellytipProtocolPlugin::build()` — channel and replication registration.
+3. Restore `crates/server` as a binary process (the lib is already there).
+4. Re-wrap `LocalPlayerInput` as `MessageSender<PlayerInput>` behind `#[cfg(feature = "multiplayer")]`.
+5. Restore `on_client_connected` hook to spawn one entity per client.
+6. Restore `Replicate` on server entities for `WorldPosition`, `Health`, etc.
 
-```bash
-bash scripts/smoke_test.sh
-```
-
-Debug builds of the client support `bevy-inspector-egui` behind the `debug` feature flag: `cargo run -p fellytip-client --features debug`.
+Key architectural invariants that make this feasible without a rewrite:
+- Pure logic in `crates/shared` (no ECS, no network types)
+- `WorldSimSchedule` two-tick-rate design
+- `GameEntityId(Uuid)` stable identity
+- `PartyPlugin` already structured for multi-client

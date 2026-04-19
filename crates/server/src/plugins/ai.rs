@@ -5,14 +5,13 @@ use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 use crate::plugins::interest::ChunkTemperature;
 use crate::plugins::persistence::Db;
-use lightyear::prelude::{server::Server, NetworkTarget, Replicate, ServerMultiMessageSender};
+use fellytip_shared::protocol::{BattleAttackMsg, BattleEndMsg, BattleStartMsg};
 use fellytip_shared::{
     combat::{
         interrupt::InterruptStack,
         types::{CharacterClass, CombatantId, CombatantSnapshot, CombatantState, CombatState, CoreStats, Effect},
     },
     components::{EntityKind, FactionBadge, GrowthStage, Health, PlayerStandings, WorldPosition},
-    protocol::{BattleAttackMsg, BattleEndMsg, BattleStartMsg, CombatEventChannel},
     world::{
         civilization::Settlements,
         faction::{
@@ -119,7 +118,10 @@ impl Plugin for AiPlugin {
             .init_resource::<PlayerReputationMap>()
             .init_resource::<FactionPopulationState>()
             .add_message::<FormWarPartyEvent>()
-            .register_type::<FactionNpcRank>();
+            .register_type::<FactionNpcRank>()
+            .add_message::<BattleStartMsg>()
+            .add_message::<BattleEndMsg>()
+            .add_message::<BattleAttackMsg>();
         app.add_systems(
             WorldSimSchedule,
             (
@@ -223,9 +225,6 @@ pub fn spawn_faction_npcs(
                 CurrentGoal(None),
                 HomePosition(pos),
                 EntityKind::FactionNpc,
-                // Start with no replication target; update_npc_replication
-                // in InterestPlugin will set the correct target within 1 s.
-                Replicate::to_clients(NetworkTarget::None),
             ));
             tracing::debug!(
                 faction = %faction.name,
@@ -512,7 +511,6 @@ fn tick_population_system(
                         HomePosition(pos),
                         EntityKind::FactionNpc,
                         GrowthStage(0.0),
-                        Replicate::to_clients(NetworkTarget::None),
                     ));
                     tracing::debug!(faction = %next.faction_id.0, "Child NPC spawned");
                 }
@@ -690,8 +688,7 @@ fn march_war_parties(
     pop: Res<FactionPopulationState>,
     temp: Res<ChunkTemperature>,
     mut commands: Commands,
-    mut msg_sender: ServerMultiMessageSender,
-    server: Single<&Server>,
+    mut battle_start: MessageWriter<BattleStartMsg>,
 ) {
     for (war_member, mut pos) in &mut warriors {
         let speed = temp.speed_at_world(pos.x, pos.y);
@@ -748,15 +745,14 @@ fn march_war_parties(
                     round_acc: 0.0,
                 }).id();
 
-                let msg = BattleStartMsg {
+                battle_start.write(BattleStartMsg {
                     settlement_id: war_member.target_settlement_id,
                     attacker_faction: attacker_faction.0.to_string(),
                     defender_faction: defender_faction.0.to_string(),
                     x: war_member.target_x,
                     y: war_member.target_y,
                     z: target_pop.home_z,
-                };
-                let _ = msg_sender.send::<BattleStartMsg, CombatEventChannel>(&msg, &server, &NetworkTarget::All);
+                });
                 tracing::info!(
                     attacker = %attacker_faction.0,
                     defender = %defender_faction.0,
@@ -794,8 +790,8 @@ fn run_battle_rounds(
     tick: Res<WorldSimTick>,
     mut registry: ResMut<FactionRegistry>,
     mut commands: Commands,
-    mut msg_sender: ServerMultiMessageSender,
-    server: Single<&Server>,
+    mut battle_end: MessageWriter<BattleEndMsg>,
+    mut battle_attack: MessageWriter<BattleAttackMsg>,
     temp: Res<ChunkTemperature>,
     mut story_events: MessageWriter<WriteStoryEvent>,
 ) {
@@ -859,13 +855,12 @@ fn run_battle_rounds(
                 def_cas = battle.defender_casualties,
                 "Battle ended"
             );
-            let end_msg = BattleEndMsg {
+            battle_end.write(BattleEndMsg {
                 settlement_id: battle.settlement_id,
                 winner_faction: winner,
                 attacker_casualties: battle.attacker_casualties,
                 defender_casualties: battle.defender_casualties,
-            };
-            let _ = msg_sender.send::<BattleEndMsg, CombatEventChannel>(&end_msg, &server, &NetworkTarget::All);
+            });
 
             // Emit a story event for settlement destruction when attackers win.
             if !attacker_snaps.is_empty() {
@@ -936,7 +931,7 @@ fn run_battle_rounds(
                                 damage: *amount,
                                 is_kill: false,
                             };
-                            let _ = msg_sender.send::<BattleAttackMsg, CombatEventChannel>(&atk_msg, &server, &NetworkTarget::All);
+                            battle_attack.write(atk_msg);
                             let _ = is_defender; // casualties tracked on Die effect
                         }
                     }
@@ -956,7 +951,7 @@ fn run_battle_rounds(
                                 damage: 0,
                                 is_kill: true,
                             };
-                            let _ = msg_sender.send::<BattleAttackMsg, CombatEventChannel>(&kill_msg, &server, &NetworkTarget::All);
+                            battle_attack.write(kill_msg);
                             commands.entity(entity).despawn();
                         }
                     }

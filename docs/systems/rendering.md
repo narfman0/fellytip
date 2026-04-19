@@ -10,7 +10,7 @@ The client runs in two modes:
 
 **Windowed** — default; uses `DefaultPlugins` with a 3D PBR render pipeline. An orbit camera, scene lighting, and a smooth chunked terrain mesh are active.
 
-**Headless** — `cargo run -p fellytip-client -- --headless`. Uses `MinimalPlugins` with no window. Used for automated testing via BRP. The client still connects to the server, sends input, and receives replicated state — it just doesn't display anything.
+**Headless** — `cargo run -p fellytip-client -- --headless`. Uses `MinimalPlugins` with no window. Used for automated testing via BRP. All game logic still runs (world sim, combat, AI); it just doesn't display anything.
 
 ## Camera (`crates/client/src/plugins/camera.rs`)
 

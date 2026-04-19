@@ -20,7 +20,6 @@
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
-use lightyear::prelude::{NetworkTarget, Replicate};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -96,8 +95,6 @@ pub fn dm_spawn_npc(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
         HomePosition(pos),
         EntityKind::FactionNpc,
         GrowthStage(1.0),
-        // Start with no replication target; interest manager updates within 1 s.
-        Replicate::to_clients(NetworkTarget::None),
     )).id();
 
     tracing::info!(faction = %faction, x, y, z, entity = ?entity, "DM spawned NPC");

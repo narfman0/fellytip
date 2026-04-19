@@ -26,7 +26,6 @@
 use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
-use lightyear::prelude::Replicated;
 
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
 
@@ -138,8 +137,11 @@ fn ground_translation(pos: &WorldPosition) -> Vec3 {
 
 // ── Systems ───────────────────────────────────────────────────────────────────
 
-type NewReplicatedPos  = (Added<WorldPosition>,   With<Replicated>);
-type ChangedRemotePos  = (Changed<WorldPosition>,  With<Replicated>, Without<LocalPlayer>);
+// All entities with WorldPosition get visuals; local player is excluded from
+// remote-position sync since its transform tracks PredictedPosition instead.
+// MULTIPLAYER: restore With<Replicated> filters to limit to server-sent entities.
+type NewReplicatedPos  = Added<WorldPosition>;
+type ChangedRemotePos  = (Changed<WorldPosition>, Without<LocalPlayer>);
 type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
 type RemotePosItems<'a> = (
     &'a WorldPosition,

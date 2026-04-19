@@ -14,7 +14,6 @@ use fellytip_shared::{
         map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH, MAP_HALF_WIDTH},
     },
 };
-use lightyear::prelude::{NetworkTarget, Replicate};
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
@@ -245,7 +244,6 @@ fn sync_wildlife_entities(
                 WildlifeNpc { region: ecology.region.clone() },
                 EntityKind::Wildlife,
                 wildlife_kind,
-                Replicate::to_clients(NetworkTarget::All),
             ));
             spawns_this_tick += 1;
         }
