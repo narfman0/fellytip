@@ -3,6 +3,10 @@ name    = "fellytip-server"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "fellytip_server"
+path = "src/lib.rs"
+
 [dependencies]
 fellytip-shared    = { workspace = true }
 bevy               = { workspace = true, features = ["bevy_log", "multi_threaded", "bevy_remote"] }
