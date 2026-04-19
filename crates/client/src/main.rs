@@ -162,7 +162,8 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::EntityRendererPlugin)
     .add_plugins(plugins::BattleVisualsPlugin)
     .add_plugins(plugins::HudPlugin)
-    .add_plugins(plugins::PauseMenuPlugin);
+    .add_plugins(plugins::PauseMenuPlugin)
+    .add_plugins(plugins::DebugConsolePlugin);
 }
 
 fn main() {
@@ -433,11 +434,15 @@ fn send_player_input(
     mut pred_q: Query<&mut PredictedPosition, With<LocalPlayer>>,
     map: Option<Res<WorldMap>>,
     time: Res<Time>,
+    console: Option<Res<plugins::DebugConsole>>,
 ) {
     // Headless mode has no InputPlugin so keyboard is None there — bail early.
     // Do NOT check sender here: local prediction runs regardless of connection
     // state so the visual stays responsive even before the handshake completes.
     let Some(keyboard) = keyboard else { return };
+    if console.is_some_and(|c| c.open) {
+        return;
+    }
 
     // Raw WASD input on screen axes (before camera rotation).
     let mut raw_x = 0.0_f32; // A/D strafe
