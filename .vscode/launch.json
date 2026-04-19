@@ -5,7 +5,22 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Run fellytip",
+            "name": "Run fellytip client --host",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=fellytip-client",
+                    "--",
+                    "--host"
+                ]
+            },
+            "preLaunchTask": "rust: cargo build fellytip-server",
+            "args": []
+        },
+        {
+            "name": "Run fellytip server and client",
             "type": "lldb",
             "request": "launch",
             "cargo": {
