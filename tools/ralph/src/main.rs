@@ -1,4 +1,5 @@
 mod brp;
+mod harness;
 mod scenarios;
 
 use scenarios::{Scenario, all_scenarios, find_scenario};

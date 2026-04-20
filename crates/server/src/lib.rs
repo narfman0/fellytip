@@ -28,6 +28,9 @@ pub fn parse_arg<T: std::str::FromStr>(args: &[String], flag: &str, default: T) 
 /// Does NOT add networking (ServerPlugins/ClientPlugins/FellytipProtocolPlugin)
 /// — callers add those separately for multiplayer builds.
 ///
+/// When `combat_test` is true, skips map gen, ecology, AI, and dungeon plugins
+/// and adds `CombatTestPlugin` instead for a minimal two-entity combat world.
+///
 /// MULTIPLAYER: restore ServerPlugins, spawn_server, on_client_connected,
 /// on_client_disconnected, on_link_spawned, send_greet_msg, and idle_shutdown.
 pub struct ServerGamePlugin {
@@ -36,6 +39,7 @@ pub struct ServerGamePlugin {
     pub height: usize,
     pub history_warp_ticks: u64,
     pub npcs_per_faction: usize,
+    pub combat_test: bool,
 }
 
 impl Plugin for ServerGamePlugin {
@@ -51,14 +55,19 @@ impl Plugin for ServerGamePlugin {
             .add_plugins(plugins::world_sim::WorldSimPlugin)
             .add_plugins(plugins::story::StoryPlugin)
             .add_plugins(plugins::combat::CombatPlugin)
-            .add_plugins(plugins::map_gen::MapGenPlugin)
-            .add_plugins(plugins::ecology::EcologyPlugin)
-            .add_plugins(plugins::ai::AiPlugin)
             .add_plugins(plugins::interest::InterestPlugin)
-            .add_plugins(plugins::party::PartyPlugin)
-            .add_plugins(plugins::dungeon::DungeonPlugin)
-            .add_systems(Startup, plugins::ai::seed_factions)
-            .add_systems(PostStartup, spawn_local_player);
+            .add_plugins(plugins::party::PartyPlugin);
+
+        if self.combat_test {
+            app.add_plugins(plugins::combat_test::CombatTestPlugin);
+        } else {
+            app.add_plugins(plugins::map_gen::MapGenPlugin)
+                .add_plugins(plugins::ecology::EcologyPlugin)
+                .add_plugins(plugins::ai::AiPlugin)
+                .add_plugins(plugins::dungeon::DungeonPlugin)
+                .add_systems(Startup, plugins::ai::seed_factions)
+                .add_systems(PostStartup, spawn_local_player);
+        }
     }
 }
 
