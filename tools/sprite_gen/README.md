@@ -53,6 +53,21 @@ Terms of Use, but users are responsible for verifying current policy and
 for any third-party IP implications (e.g. resemblance to copyrighted
 characters). Re-verify before shipping generated sprites.
 
+## CI
+
+`.github/workflows/sprites.yml` runs on any change to `assets/bestiary.toml`
+or `tools/sprite_gen/**`:
+
+- **Pull requests** run `sprite_gen --all --dry-run` + a mock-backend
+  atlas generation; no secret required. The resulting atlases upload as
+  a `sprites-mock-<sha>` artifact so reviewers can see what the new
+  entries will produce.
+- **Pushes to `master`** run the real backend when the `SPRITE_GEN_API_KEY`
+  secret is configured on the `sprite-gen` environment, and upload the
+  resulting atlases as a `sprites-<sha>` artifact for human review before
+  they're committed as assets. If the secret isn't set, the job skips
+  cleanly rather than failing.
+
 ## Determinism
 
 - Atlas layout is a pure function of the bestiary entry.
