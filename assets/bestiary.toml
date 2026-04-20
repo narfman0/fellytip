@@ -1,0 +1,45 @@
+# Bestiary — single source of truth for AI-generated 8-direction sprites.
+#
+# Every in-game entity kind that needs a sprite gets one `[[entity]]` block.
+# The `sprite_gen` tool reads this file and produces one atlas PNG + one
+# Bevy `TextureAtlasLayout` RON per entity.  The billboard renderer reads
+# the same ids to pick the right sprite.
+#
+# Required fields:
+#   id             — stable lookup key (snake_case)
+#   display_name   — shown in HUD / inspector
+#   directions     — 4 or 8 (number of facing rotations)
+#   ai_prompt_base — describes the creature to the image backend
+#   ai_style       — locks art style across entities; reuse verbatim
+#   palette_seed   — keyword fed to the post-process palette quantizer
+#
+# At least one `[[entity.animation]]` block is required.  Each animation
+# becomes a row-group in the atlas.  `frames` and `fps` are integers.
+
+[[entity]]
+id             = "goblin_scout"
+display_name   = "Goblin Scout"
+directions     = 8
+ai_prompt_base = "goblin scout, small green creature with rusty dagger, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline"
+palette_seed   = "forest_green"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8

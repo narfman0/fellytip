@@ -1,6 +1,7 @@
 pub mod combat;
 pub mod world;
 
+pub mod bestiary;
 pub mod components;
 pub mod inputs;
 pub mod math;
