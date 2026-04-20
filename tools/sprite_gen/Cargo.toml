@@ -1,0 +1,17 @@
+[package]
+name    = "sprite_gen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fellytip-shared = { workspace = true }
+anyhow          = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
+serde           = { workspace = true }
+smol_str        = { workspace = true }
+image           = { workspace = true }
+ron             = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
