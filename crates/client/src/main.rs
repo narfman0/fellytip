@@ -58,6 +58,7 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::EntityRendererPlugin)
     .add_plugins(plugins::BattleVisualsPlugin)
     .add_plugins(plugins::HudPlugin)
+    .add_plugins(plugins::MapPlugin)
     .add_plugins(plugins::PauseMenuPlugin)
     .add_plugins(plugins::DebugConsolePlugin);
 }
@@ -189,10 +190,14 @@ fn send_player_input(
     time: Res<Time>,
     console: Option<Res<plugins::DebugConsole>>,
     pause_menu: Option<Res<plugins::pause_menu::PauseMenu>>,
+    map_win: Option<Res<plugins::MapWindow>>,
     mut local_input: ResMut<LocalPlayerInput>,
 ) {
     let Some(keyboard) = keyboard else { return };
-    if console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open) {
+    if console.is_some_and(|c| c.open)
+        || pause_menu.is_some_and(|m| m.open)
+        || map_win.is_some_and(|m| m.open)
+    {
         return;
     }
 
