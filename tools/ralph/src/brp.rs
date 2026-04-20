@@ -89,4 +89,27 @@ impl BrpClient {
     pub fn ping(&self) -> bool {
         self.call("world.list_resources", json!({})).is_ok()
     }
+
+    /// `dm/spawn_npc` — spawn a faction NPC at the given position.
+    /// Returns the spawned entity's bit-packed ID.
+    pub fn dm_spawn_npc(&self, faction: &str, x: f32, y: f32, z: f32) -> Result<u64> {
+        let result = self.call("dm/spawn_npc", json!({ "faction": faction, "x": x, "y": y, "z": z }))?;
+        result["entity"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("dm/spawn_npc: missing 'entity' in response"))
+    }
+
+    /// `dm/kill` — despawn an entity by its bit-packed ID.
+    #[allow(dead_code)]
+    pub fn dm_kill(&self, entity: u64) -> Result<()> {
+        self.call("dm/kill", json!({ "entity": entity }))?;
+        Ok(())
+    }
+
+    /// `dm/teleport` — move an entity to a new world position.
+    #[allow(dead_code)]
+    pub fn dm_teleport(&self, entity: u64, x: f32, y: f32, z: f32) -> Result<()> {
+        self.call("dm/teleport", json!({ "entity": entity, "x": x, "y": y, "z": z }))?;
+        Ok(())
+    }
 }

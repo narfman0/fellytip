@@ -74,29 +74,50 @@ fn main() {
 
     #[cfg(not(target_family = "wasm"))]
     {
-        let headless = args.iter().any(|a| a == "--headless");
+        let headless    = args.iter().any(|a| a == "--headless");
+        let combat_test = args.iter().any(|a| a == "--combat-test");
         if headless {
             tracing_subscriber::fmt::init();
             app.add_plugins(MinimalPlugins)
-                .add_plugins(RemotePlugin::default())
+                .add_plugins(
+                    RemotePlugin::default()
+                        .register_method("dm/spawn_npc",         fellytip_server::plugins::dm::dm_spawn_npc)
+                        .register_method("dm/kill",              fellytip_server::plugins::dm::dm_kill)
+                        .register_method("dm/teleport",          fellytip_server::plugins::dm::dm_teleport)
+                        .register_method("dm/set_faction",       fellytip_server::plugins::dm::dm_set_faction)
+                        .register_method("dm/trigger_war_party", fellytip_server::plugins::dm::dm_trigger_war_party)
+                        .register_method("dm/set_ecology",       fellytip_server::plugins::dm::dm_set_ecology)
+                )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
         } else {
             add_windowed_plugins(&mut app);
         }
+        app.add_plugins(FellytipProtocolPlugin)
+            .add_plugins(ServerGamePlugin {
+                seed,
+                width:               map_width,
+                height:              map_height,
+                history_warp_ticks:  history_warp,
+                npcs_per_faction:    npcs_per_fac,
+                combat_test,
+            });
     }
     #[cfg(target_family = "wasm")]
-    add_windowed_plugins(&mut app);
+    {
+        add_windowed_plugins(&mut app);
+        app.add_plugins(FellytipProtocolPlugin)
+            .add_plugins(ServerGamePlugin {
+                seed,
+                width:               map_width,
+                height:              map_height,
+                history_warp_ticks:  history_warp,
+                npcs_per_faction:    npcs_per_fac,
+                combat_test: false,
+            });
+    }
 
-    app.add_plugins(FellytipProtocolPlugin)
-        .add_plugins(ServerGamePlugin {
-            seed,
-            width:               map_width,
-            height:              map_height,
-            history_warp_ticks:  history_warp,
-            npcs_per_faction:    npcs_per_fac,
-        })
-        .configure_sets(
+    app.configure_sets(
             Update,
             (ClientSet::Input, ClientSet::SyncVisuals, ClientSet::SyncCamera).chain(),
         )
