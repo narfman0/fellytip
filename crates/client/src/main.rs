@@ -56,6 +56,7 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::SceneDecorationPlugin)
     .add_plugins(plugins::CharacterAnimationPlugin)
     .add_plugins(plugins::EntityRendererPlugin)
+    .add_plugins(plugins::BillboardSpritePlugin)
     .add_plugins(plugins::BattleVisualsPlugin)
     .add_plugins(plugins::HudPlugin)
     .add_plugins(plugins::MapPlugin)
