@@ -39,6 +39,15 @@ pub const MAX_FALL_SPEED: f32 = -50.0;
 /// flat tiles where bilinear interpolation may jitter by a small epsilon.
 pub const LAND_SNAP: f32 = 0.05;
 
+/// Vertical speed imparted on jump (world units/sec, upward = positive).
+pub const JUMP_SPEED: f32 = 9.0;
+
+/// Horizontal speed multiplier applied during a dash burst.
+pub const DASH_SPEED: f32 = 12.0;
+
+/// Duration of the dash burst in seconds.
+pub const DASH_DURATION: f32 = 0.18;
+
 /// Multiplier from normalised height `[0, 1]` to world-unit Z for surface terrain.
 /// At 20.0, mountain peaks reach ~20 world units above sea level.
 pub const Z_SCALE: f32 = 20.0;
@@ -252,6 +261,21 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
 /// terrain. See `docs/systems/world-map.md` for the wall-slide behaviour.
 pub fn is_walkable_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> bool {
     smooth_surface_at(map, x, y, current_z).is_some()
+}
+
+/// Approximate terrain normal at `(x, y)` via finite differences over
+/// `smooth_surface_at`. Used to project movement velocity onto the slope so
+/// the character neither speeds up going downhill nor stalls going uphill.
+///
+/// Returns `Vec3::Y` (flat-ground normal) when any sample is out of range.
+pub fn terrain_normal_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Vec3 {
+    const STEP: f32 = 0.5;
+    let h = |dx: f32, dy: f32| {
+        smooth_surface_at(map, x + dx, y + dy, current_z).unwrap_or(current_z)
+    };
+    let dzdx = (h(STEP, 0.0) - h(-STEP, 0.0)) / (2.0 * STEP);
+    let dzdy = (h(0.0, STEP) - h(0.0, -STEP)) / (2.0 * STEP);
+    Vec3::new(-dzdx, 1.0, -dzdy).normalize()
 }
 
 /// Find a walkable surface spawn point near the world origin (map centre).

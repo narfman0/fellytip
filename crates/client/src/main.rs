@@ -9,7 +9,7 @@ use fellytip_shared::{
     components::{Experience, WorldPosition},
     inputs::ActionIntent,
     protocol::FellytipProtocolPlugin,
-    world::map::{is_walkable_at, smooth_surface_at, WorldMap, GRAVITY, LAND_SNAP, MAX_FALL_SPEED, MAP_WIDTH, MAP_HEIGHT},
+    world::map::{is_walkable_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, MAP_WIDTH, MAP_HEIGHT},
 };
 use plugins::camera::OrbitCamera;
 
@@ -33,6 +33,12 @@ pub struct PredictedPosition {
     pub y: f32,
     pub z: f32,
     pub z_vel: f32,
+    /// True while the character is on a walkable surface (grounded-tracking
+    /// mode). When grounded, z follows terrain directly without gravity so
+    /// the character doesn't bounce on uneven slopes.
+    pub grounded: bool,
+    /// Remaining seconds in the current dash burst (0 = not dashing).
+    pub dash_timer: f32,
 }
 
 /// BRP HTTP port for the client (used by ralph scenarios in headless mode).
@@ -152,7 +158,7 @@ fn tag_local_player(
     let Ok((entity, pos)) = query.single() else { return };
     commands.entity(entity).insert((
         LocalPlayer,
-        PredictedPosition { x: pos.x, y: pos.y, z: pos.z, z_vel: 0.0 },
+        PredictedPosition { x: pos.x, y: pos.y, z: pos.z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
     ));
     tracing::debug!("Tagged local player entity {entity:?}");
 }
@@ -219,8 +225,24 @@ fn send_player_input(
 
     if let Ok(mut pred) = pred_q.single_mut() {
         let dt = time.delta_secs();
-        let new_x = pred.x + world_dx * PLAYER_SPEED * dt;
-        let new_y = pred.y + world_dy * PLAYER_SPEED * dt;
+
+        // ── Jump ─────────────────────────────────────────────────────────────
+        if keyboard.just_pressed(KeyCode::Space) && pred.grounded {
+            pred.z_vel = JUMP_SPEED;
+            pred.grounded = false;
+        }
+
+        // ── Dash ─────────────────────────────────────────────────────────────
+        let dashing = pred.dash_timer > 0.0;
+        if keyboard.just_pressed(KeyCode::ShiftLeft) && !dashing {
+            pred.dash_timer = DASH_DURATION;
+        }
+        pred.dash_timer = (pred.dash_timer - dt).max(0.0);
+
+        // ── Horizontal movement ───────────────────────────────────────────────
+        let speed = if pred.dash_timer > 0.0 { DASH_SPEED } else { PLAYER_SPEED };
+        let new_x = pred.x + world_dx * speed * dt;
+        let new_y = pred.y + world_dy * speed * dt;
 
         if let Some(ref m) = map {
             let can_xy = is_walkable_at(m, new_x, new_y, pred.z);
@@ -230,21 +252,53 @@ fn send_player_input(
             else if can_x  { pred.x = new_x; }
             else if can_y  { pred.y = new_y; }
 
-            if let Some(terrain_z) = smooth_surface_at(m, pred.x, pred.y, pred.z) {
-                if pred.z <= terrain_z + LAND_SNAP {
-                    pred.z = terrain_z;
-                    pred.z_vel = 0.0;
-                } else {
-                    pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
-                    pred.z += pred.z_vel * dt;
-                    if pred.z < terrain_z {
-                        pred.z = terrain_z;
+            // ── Vertical / gravity ────────────────────────────────────────────
+            let terrain_z = smooth_surface_at(m, pred.x, pred.y, pred.z);
+
+            if pred.grounded {
+                match terrain_z {
+                    Some(tz) if tz >= pred.z - STEP_HEIGHT => {
+                        // Ground-tracking: follow terrain height directly, no
+                        // gravity, so the character never bounces on slopes.
+                        pred.z = tz;
+                        pred.z_vel = 0.0;
+                    }
+                    _ => {
+                        // Walked off a ledge — enter airborne state.
+                        pred.grounded = false;
                         pred.z_vel = 0.0;
                     }
                 }
             } else {
+                // Airborne: integrate gravity.
                 pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
                 pred.z += pred.z_vel * dt;
+
+                if let Some(tz) = terrain_z {
+                    if pred.z <= tz + LAND_SNAP {
+                        pred.z = tz;
+                        pred.z_vel = 0.0;
+                        pred.grounded = true;
+                    }
+                }
+            }
+
+            // ── Slope speed correction ────────────────────────────────────────
+            // When grounded and moving, project the requested velocity onto the
+            // terrain plane so uphill/downhill movement stays at PLAYER_SPEED.
+            if pred.grounded && (world_dx != 0.0 || world_dy != 0.0) {
+                let normal = terrain_normal_at(m, pred.x, pred.y, pred.z);
+                // Horizontal world-space velocity (Bevy: x east, z south).
+                let vel = Vec3::new(world_dx * speed, 0.0, world_dy * speed);
+                // Project onto slope plane: v_proj = v - (v·n)n
+                let v_proj = vel - normal * vel.dot(normal);
+                let correction_dt = dt;
+                // Apply the difference between flat and projected movement.
+                let delta = v_proj - vel;
+                pred.x += delta.x * correction_dt;
+                pred.y += delta.z * correction_dt;
+                // The y-component of v_proj gives the along-slope elevation delta.
+                pred.z += v_proj.y * correction_dt;
             }
         } else {
             pred.x = new_x;
@@ -253,9 +307,9 @@ fn send_player_input(
     }
 
     // Queue combat action intents for server-side processing.
-    let action = if keyboard.just_pressed(KeyCode::Space) {
+    let action = if keyboard.just_pressed(KeyCode::KeyQ) {
         Some(ActionIntent::BasicAttack)
-    } else if keyboard.just_pressed(KeyCode::KeyQ) {
+    } else if keyboard.just_pressed(KeyCode::KeyE) {
         Some(ActionIntent::UseAbility(1))
     } else {
         None
