@@ -40,16 +40,17 @@ fn draw_debug_console(
     mut ctx: EguiContexts,
     mut console: ResMut<DebugConsole>,
     mut player_q: LocalPlayerQuery,
+    keyboard: Res<ButtonInput<KeyCode>>,
 ) -> Result {
-    let egui_ctx = ctx.ctx_mut()?;
-
-    if egui_ctx.input(|i| i.key_pressed(egui::Key::Backtick)) {
+    if keyboard.just_pressed(KeyCode::Backquote) {
         console.open = !console.open;
         if console.open {
             console.input.clear();
             console.request_focus = true;
         }
     }
+
+    let egui_ctx = ctx.ctx_mut()?;
 
     if !console.open {
         return Ok(());
