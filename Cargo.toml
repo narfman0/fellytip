@@ -32,6 +32,7 @@ proptest-derive     = "0.4"
 bevy_egui           = { version = "0.39", default-features = false }
 bevy-inspector-egui = { version = "0.36", default-features = false }
 reqwest             = { version = "0.12", features = ["json", "blocking"] }
+image               = { version = "0.25", default-features = false, features = ["png"] }
 fellytip-shared     = { path = "crates/shared" }
 
 [profile.dev.package."*"]

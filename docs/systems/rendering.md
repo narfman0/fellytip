@@ -83,6 +83,20 @@ Three systems run in order every `Update` frame:
 2. **`rebuild_dirty_chunks`** — calls `build_chunk_mesh` for each dirty chunk coord + LOD, inserts the new `Mesh` into `Assets<Mesh>`, caches the handle.
 3. **`apply_chunk_meshes`** — spawns new chunk entities, despawns out-of-range ones, swaps `Mesh3d` handles on entities whose LOD changed.
 
+## Billboard sprites (`crates/client/src/plugins/billboard_sprite.rs`)
+
+`BillboardSpritePlugin` reads `assets/bestiary.toml`, loads each entity's atlas PNG from `crates/client/assets/sprites/`, slices it into per-cell Bevy `Image`s + per-cell `StandardMaterial`s (unlit, alpha-blended), and spawns a billboard quad child for every replicated `WorldPosition` entity whose kind has a loaded atlas.
+
+The plugin is **additive** over the PBR `EntityRendererPlugin` — when a sprite atlas is present the billboard renders on top of the existing 3D model. This is intentional so the plugin can land before every bestiary entry has real assets; a follow-up will suppress the PBR mesh when an atlas is available.
+
+Per frame:
+- `face_camera` rotates each sprite's local transform to `Quat::from_rotation_y(camera.yaw)`.
+- `update_direction` uses `fellytip_shared::sprite_math::world_dir_to_sprite_row(velocity, camera.yaw, directions)` to pick the atlas row.
+- `advance_animation` ticks a per-entity frame timer at the animation's declared fps and wraps on overflow.
+- `swap_cell_material` points the entity's `MeshMaterial3d` at the cell material for the current `(row, frame)`.
+
+Direction math lives in `crates/shared/src/sprite_math.rs` so it's ECS-free and covered by unit tests (cardinal distinctness, antipodal symmetry, monotonic CCW sweep, camera-yaw rotation invariance).
+
 ## Entity rendering (`crates/client/src/plugins/entity_renderer.rs`)
 
 `EntityRendererPlugin` spawns a PBR mesh for each replicated entity that carries `WorldPosition`. Visual appearance is determined by `EntityKind` and the new `FactionBadge` component:

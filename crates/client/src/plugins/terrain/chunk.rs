@@ -223,7 +223,7 @@ fn stitch_row(indices: &mut Vec<u32>, vps: usize, vy_edge: usize, is_south: bool
     // For each even pair (k, k+2) on the edge, emit 3 stitching triangles
     // that merge via the interior neighbours.
     let mut k = 0u32;
-    while k + 2 <= vps - 1 {
+    while k + 2 < vps {
         let e0 = vy_e     * vps + k;
         let e2 = vy_e     * vps + k + 2;
         let m0 = vy_inner * vps + k;
@@ -263,7 +263,7 @@ fn stitch_col(indices: &mut Vec<u32>, vps: usize, vx_edge: usize, is_east: bool)
     let vx_inner = if is_east { vx_e - 1 } else { vx_e + 1 };
 
     let mut k = 0u32;
-    while k + 2 <= vps - 1 {
+    while k + 2 < vps {
         let e0 = k       * vps + vx_e;
         let e2 = (k + 2) * vps + vx_e;
         let m0 = k       * vps + vx_inner;

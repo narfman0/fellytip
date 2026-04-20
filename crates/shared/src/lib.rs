@@ -7,6 +7,7 @@ pub mod inputs;
 pub mod math;
 pub mod protocol;
 pub mod resources;
+pub mod sprite_math;
 
 // ── Network constants shared by server and client ────────────────────────────
 

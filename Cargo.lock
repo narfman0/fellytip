@@ -2964,7 +2964,9 @@ dependencies = [
  "bevy_egui",
  "fellytip-server",
  "fellytip-shared",
+ "image",
  "rand 0.10.0",
+ "smol_str 0.3.6",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -3002,6 +3004,7 @@ dependencies = [
  "serde_json",
  "smol_str 0.3.6",
  "thiserror 2.0.18",
+ "toml",
  "tracing",
  "uuid",
 ]
