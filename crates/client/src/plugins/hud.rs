@@ -9,7 +9,7 @@
 //! Only added in windowed mode; headless builds skip this plugin entirely.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContext, EguiContexts, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui};
 use fellytip_shared::{
     components::{Experience, Health, PlayerStandings},
     world::faction::standing_tier,
@@ -25,7 +25,18 @@ pub struct HudPlugin;
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
+            .add_systems(PostStartup, ensure_primary_egui_context)
             .add_systems(EguiPrimaryContextPass, (draw_hud, draw_standings, draw_battle_log, draw_story_log));
+    }
+}
+
+/// bevy_egui auto-setup occasionally misses the Camera3d on first frame; this guarantees it.
+fn ensure_primary_egui_context(
+    mut commands: Commands,
+    cameras: Query<Entity, (With<Camera3d>, Without<EguiContext>)>,
+) {
+    for entity in &cameras {
+        commands.entity(entity).insert(PrimaryEguiContext);
     }
 }
 

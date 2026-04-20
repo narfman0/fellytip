@@ -17,7 +17,7 @@ locked_iso = []
 fellytip-shared    = { workspace = true }
 fellytip-server    = { path = "../server" }
 bevy               = { workspace = true, default-features = true, features = ["keyboard"] }
-bevy_egui          = { workspace = true, features = ["render"] }
+bevy_egui          = { workspace = true, features = ["render", "default_fonts", "manage_clipboard"] }
 anyhow             = { workspace = true }
 rand               = { workspace = true }
 tracing            = { workspace = true }

@@ -781,6 +781,7 @@ version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d0a7e4806f3f242326d2c6157531c36d710f3bf320ebc0a1678e44635ed0eac"
 dependencies = [
+ "arboard",
  "bevy_app",
  "bevy_asset",
  "bevy_camera",
@@ -810,6 +811,7 @@ dependencies = [
  "image",
  "itertools 0.14.0",
  "js-sys",
+ "thread_local",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2852,11 +2854,18 @@ dependencies = [
  "bytemuck",
  "ecolor",
  "emath",
+ "epaint_default_fonts",
  "log",
  "nohash-hasher",
  "parking_lot",
  "profiling",
 ]
+
+[[package]]
+name = "epaint_default_fonts"
+version = "0.33.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c4fbe202b6578d3d56428fa185cdf114a05e49da05f477b3c7f0fbb221f1862"
 
 [[package]]
 name = "equivalent"

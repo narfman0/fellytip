@@ -89,8 +89,31 @@ impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MapWindow>()
             .init_resource::<TerrainTex>()
-            .add_systems(Update, build_terrain_texture)
+            .add_systems(Update, (build_terrain_texture, toggle_map))
             .add_systems(EguiPrimaryContextPass, (draw_map, draw_minimap));
+    }
+}
+
+// ── Toggle ────────────────────────────────────────────────────────────────────
+
+fn toggle_map(
+    keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mut map_win: ResMut<MapWindow>,
+    player_q: Query<&PredictedPosition, With<LocalPlayer>>,
+    console: Option<Res<DebugConsole>>,
+    pause_menu: Option<Res<PauseMenu>>,
+) {
+    let Some(kb) = keyboard else { return };
+    let blocked = console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open);
+    if !blocked && (kb.just_pressed(KeyCode::KeyM) || kb.just_pressed(KeyCode::Tab)) {
+        map_win.open = !map_win.open;
+        if map_win.open {
+            if let Ok(pos) = player_q.single() {
+                map_win.pan_x = pos.x;
+                map_win.pan_y = pos.y;
+                map_win.zoom = ZOOM_DEFAULT;
+            }
+        }
     }
 }
 
@@ -164,32 +187,13 @@ fn build_terrain_texture(
 
 // ── Map window ────────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 fn draw_map(
     mut ctx: EguiContexts,
-    keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mut map_win: ResMut<MapWindow>,
     tex: Res<TerrainTex>,
     settlements: Option<Res<Settlements>>,
     player_q: Query<(&PredictedPosition, Option<&PlayerStandings>), With<LocalPlayer>>,
-    console: Option<Res<DebugConsole>>,
-    pause_menu: Option<Res<PauseMenu>>,
 ) -> Result {
-    // Toggle on M or Tab, unless another overlay is open.
-    if let Some(ref kb) = keyboard {
-        let blocked = console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open);
-        if !blocked && (kb.just_pressed(KeyCode::KeyM) || kb.just_pressed(KeyCode::Tab)) {
-            map_win.open = !map_win.open;
-            if map_win.open {
-                if let Ok((pos, _)) = player_q.single() {
-                    map_win.pan_x = pos.x;
-                    map_win.pan_y = pos.y;
-                    map_win.zoom = ZOOM_DEFAULT;
-                }
-            }
-        }
-    }
-
     if !map_win.open {
         return Ok(());
     }
@@ -371,7 +375,7 @@ fn nearest_within(pos: Vec2, settlements: &Settlements, radius: f32) -> Option<&
 fn draw_minimap(
     mut ctx: EguiContexts,
     tex: Res<TerrainTex>,
-    player_q: Query<(&PredictedPosition, &Transform), With<LocalPlayer>>,
+    player_q: Query<(&PredictedPosition, Option<&Transform>), With<LocalPlayer>>,
     settlements: Option<Res<Settlements>>,
     console: Option<Res<DebugConsole>>,
     pause_menu: Option<Res<PauseMenu>>,
@@ -451,20 +455,21 @@ fn draw_minimap(
             painter.circle_filled(center, 5.0, egui::Color32::from_rgb(255, 60, 60));
             painter.circle_stroke(center, 5.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
 
-            // Facing direction arrow derived from Transform rotation.
-            // -Z is Bevy's default local forward; project onto the world XY plane.
-            let fwd = transform.rotation * Vec3::NEG_Z;
-            let dir = Vec2::new(fwd.x, fwd.y);
-            if dir.length_squared() > 0.01 {
-                let dir_norm = dir.normalize();
-                let arrow_end = egui::pos2(
-                    center.x + dir_norm.x * 12.0,
-                    center.y - dir_norm.y * 12.0,
-                );
-                painter.line_segment(
-                    [center, arrow_end],
-                    egui::Stroke::new(2.0, egui::Color32::WHITE),
-                );
+            // Facing direction arrow derived from Transform rotation (skipped until GLB loads).
+            if let Some(t) = transform {
+                let fwd = t.rotation * Vec3::NEG_Z;
+                let dir = Vec2::new(fwd.x, fwd.y);
+                if dir.length_squared() > 0.01 {
+                    let dir_norm = dir.normalize();
+                    let arrow_end = egui::pos2(
+                        center.x + dir_norm.x * 12.0,
+                        center.y - dir_norm.y * 12.0,
+                    );
+                    painter.line_segment(
+                        [center, arrow_end],
+                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                    );
+                }
             }
 
             // Minimap border.

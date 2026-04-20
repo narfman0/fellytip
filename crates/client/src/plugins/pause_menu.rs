@@ -11,19 +11,21 @@ pub struct PauseMenuPlugin;
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
+            .add_systems(Update, toggle_pause_menu)
             .add_systems(EguiPrimaryContextPass, draw_pause_menu);
+    }
+}
+
+fn toggle_pause_menu(keyboard: Res<ButtonInput<KeyCode>>, mut menu: ResMut<PauseMenu>) {
+    if keyboard.just_pressed(KeyCode::Escape) {
+        menu.open = !menu.open;
     }
 }
 
 fn draw_pause_menu(
     mut ctx: EguiContexts,
     mut menu: ResMut<PauseMenu>,
-    keyboard: Res<ButtonInput<KeyCode>>,
 ) -> Result {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        menu.open = !menu.open;
-    }
-
     let egui_ctx = ctx.ctx_mut()?;
 
     if !menu.open {

@@ -32,16 +32,12 @@ pub struct DebugConsolePlugin;
 impl Plugin for DebugConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugConsole>()
+            .add_systems(Update, toggle_debug_console)
             .add_systems(EguiPrimaryContextPass, draw_debug_console);
     }
 }
 
-fn draw_debug_console(
-    mut ctx: EguiContexts,
-    mut console: ResMut<DebugConsole>,
-    mut player_q: LocalPlayerQuery,
-    keyboard: Res<ButtonInput<KeyCode>>,
-) -> Result {
+fn toggle_debug_console(keyboard: Res<ButtonInput<KeyCode>>, mut console: ResMut<DebugConsole>) {
     if keyboard.just_pressed(KeyCode::Backquote) {
         console.open = !console.open;
         if console.open {
@@ -49,7 +45,13 @@ fn draw_debug_console(
             console.request_focus = true;
         }
     }
+}
 
+fn draw_debug_console(
+    mut ctx: EguiContexts,
+    mut console: ResMut<DebugConsole>,
+    mut player_q: LocalPlayerQuery,
+) -> Result {
     let egui_ctx = ctx.ctx_mut()?;
 
     if !console.open {
