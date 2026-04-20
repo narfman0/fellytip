@@ -91,6 +91,62 @@ Three systems run in order every `Update` frame:
 2. **`rebuild_dirty_chunks`** — calls `build_chunk_mesh` for each dirty chunk coord + LOD, inserts the new `Mesh` into `Assets<Mesh>`, caches the handle.
 3. **`apply_chunk_meshes`** — spawns new chunk entities, despawns out-of-range ones, swaps `Mesh3d` handles on entities whose LOD changed.
 
+## Bestiary (`assets/bestiary.toml`, `crates/shared/src/bestiary.rs`)
+
+`assets/bestiary.toml` is the single source of truth for all entity sprite definitions. `crates/shared/src/bestiary.rs` provides pure-data types (`Bestiary`, `BestiaryEntry`, `AnimationDef`) — no ECS, no I/O — so `sprite_gen` can load it without Bevy.
+
+### TOML schema
+
+Each `[[entity]]` block:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Stable lookup key; used as the directory name under `crates/client/assets/sprites/` |
+| `display_name` | string | Human-readable name used in AI prompts |
+| `directions` | int | Facing directions: `4` or `8` |
+| `ai_prompt_base` | string | Subject description passed to the AI image backend |
+| `ai_style` | string | Style suffix appended to every frame prompt |
+| `palette_seed` | string | Named seed for colour quantisation (keeps colours consistent across frames) |
+| `animations` | array | Ordered list of `AnimationDef` |
+
+Each `AnimationDef`:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | `idle`, `walk`, `attack`, `death` |
+| `frames` | int | Frame count for this clip |
+| `fps` | int | Playback speed |
+
+**Adding a new creature:**
+1. Add one `[[entity]]` block to `assets/bestiary.toml`.
+2. Run: `cargo run -p sprite_gen -- --entity <id>`
+3. Commit the generated `atlas.png` + `manifest.json`.
+
+### sprite_gen tool (`tools/sprite_gen/`)
+
+Reads bestiary, calls an AI backend per frame, stitches frames into an atlas, writes a JSON manifest.
+
+```bash
+# Mock backend — instant coloured placeholders, no API key needed
+cargo run -p sprite_gen -- --all
+
+# DALL-E 3 — real art
+cargo run -p sprite_gen -- --all --backend dalle --api-key sk-... --workers 4
+
+# Incremental — skip entities whose atlas is newer than bestiary.toml
+cargo run -p sprite_gen -- --all --incremental
+
+# Single entity
+cargo run -p sprite_gen -- --entity player
+
+# Dry-run — print prompts only, generate nothing
+cargo run -p sprite_gen -- --all --dry-run
+```
+
+Outputs per entity (written to `crates/client/assets/sprites/{id}/`):
+- `atlas.png` — `directions`-row × N-col sprite sheet
+- `manifest.json` — frame layout consumed by `BillboardSpritePlugin`
+
 ## Billboard sprites (`crates/client/src/plugins/billboard_sprite.rs`)
 
 `BillboardSpritePlugin` reads `assets/bestiary.toml`, loads each entity's atlas PNG from `crates/client/assets/sprites/`, slices it into per-cell Bevy `Image`s + per-cell `StandardMaterial`s (unlit, alpha-blended), and spawns a billboard quad child for every replicated `WorldPosition` entity whose kind has a loaded atlas.

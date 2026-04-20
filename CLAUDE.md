@@ -20,6 +20,7 @@ See `docs/` for product documentation:
 | `tools/combat_sim` | proptest harness — runs combat rules with no ECS |
 | `tools/ralph` | BRP HTTP test driver — asserts live world state via JSON-RPC |
 | `tools/world_gen` | ASCII world preview: `cargo run -p world_gen -- --seed N` |
+| `tools/sprite_gen` | Sprite atlas generator: `cargo run -p sprite_gen -- --all` (mock) or `--backend dalle --api-key sk-...` |
 
 ## Non-negotiable architecture rules
 
@@ -44,6 +45,8 @@ cargo test -p combat_sim               # 100k+ proptest traces
 cargo clippy --workspace -- -D warnings
 cargo run -p ralph -- --scenario all   # live end-to-end via BRP
 cargo run -p world_gen -- --seed 42    # ASCII world preview (sanity check)
+cargo run -p sprite_gen -- --all --dry-run        # preview AI prompts, no images written
+cargo run -p sprite_gen -- --all                  # generate mock atlas PNGs (no API key needed)
 ```
 
 Run `cargo clippy` before considering any task done.
