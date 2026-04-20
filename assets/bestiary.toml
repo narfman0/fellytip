@@ -1,0 +1,121 @@
+# Fellytip bestiary — single source of truth for entity sprite-sheet definitions.
+#
+# Add one [[entity]] block per creature type.
+# The sprite_gen tool reads this file and generates:
+#   crates/client/assets/sprites/{id}/atlas.png
+#   crates/client/assets/sprites/{id}/manifest.json
+#
+# Adding a new creature = one [[entity]] block + run:
+#   cargo run -p sprite_gen -- --entity <id> --output crates/client/assets/sprites/
+
+[[entity]]
+id            = "player"
+display_name  = "Adventurer"
+directions    = 8
+ai_prompt_base = "human adventurer, medieval fantasy hero with sword and shield, determined expression"
+ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+palette_seed   = "warm_iron"
+animations = [
+  { name = "idle",   frames = 4, fps = 4  },
+  { name = "walk",   frames = 8, fps = 12 },
+  { name = "attack", frames = 5, fps = 10 },
+  { name = "death",  frames = 6, fps = 8  },
+]
+
+[[entity]]
+id            = "faction_npc"
+display_name  = "Faction Guard"
+directions    = 8
+ai_prompt_base = "medieval fantasy guard, armored soldier in chainmail, standing alert with spear"
+ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+palette_seed   = "steel_blue"
+animations = [
+  { name = "idle",   frames = 4, fps = 4  },
+  { name = "walk",   frames = 8, fps = 12 },
+  { name = "attack", frames = 5, fps = 10 },
+  { name = "death",  frames = 6, fps = 8  },
+]
+
+[[entity]]
+id            = "wildlife_bison"
+display_name  = "Bison"
+directions    = 8
+ai_prompt_base = "large bison, shaggy dark-brown fur, massive curved horns, powerful build, prairie animal"
+ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+palette_seed   = "earth_brown"
+animations = [
+  { name = "idle",  frames = 4, fps = 3 },
+  { name = "walk",  frames = 6, fps = 8 },
+  { name = "death", frames = 5, fps = 6 },
+]
+
+[[entity]]
+id            = "wildlife_dog"
+display_name  = "Wild Dog"
+directions    = 8
+ai_prompt_base = "wild dog, lean and alert, scruffy tan and grey fur, ears perked"
+ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+palette_seed   = "tan_grey"
+animations = [
+  { name = "idle",  frames = 4, fps = 4  },
+  { name = "walk",  frames = 6, fps = 10 },
+  { name = "death", frames = 4, fps = 8  },
+]
+
+[[entity]]
+id            = "wildlife_horse"
+display_name  = "Horse"
+directions    = 8
+ai_prompt_base = "horse, strong and noble, chestnut brown with flowing dark mane, no rider"
+ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+palette_seed   = "chestnut"
+animations = [
+  { name = "idle",  frames = 4, fps = 3  },
+  { name = "walk",  frames = 8, fps = 10 },
+  { name = "death", frames = 5, fps = 6  },
+]
+
+# ── Future bestiary entries ───────────────────────────────────────────────────
+# Uncomment and run sprite_gen to add new creatures.
+
+# [[entity]]
+# id            = "goblin_scout"
+# display_name  = "Goblin Scout"
+# directions    = 8
+# ai_prompt_base = "goblin scout, small green creature with rusty dagger, tattered leather armor, sneaky posture"
+# ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+# palette_seed   = "forest_green"
+# animations = [
+#   { name = "idle",   frames = 4, fps = 4  },
+#   { name = "walk",   frames = 8, fps = 12 },
+#   { name = "attack", frames = 5, fps = 10 },
+#   { name = "death",  frames = 6, fps = 8  },
+# ]
+
+# [[entity]]
+# id            = "skeleton_warrior"
+# display_name  = "Skeleton Warrior"
+# directions    = 8
+# ai_prompt_base = "skeleton warrior, animated undead in rusted armor, wielding a chipped sword, hollow eye sockets glowing"
+# ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+# palette_seed   = "bone_white"
+# animations = [
+#   { name = "idle",   frames = 4, fps = 3  },
+#   { name = "walk",   frames = 6, fps = 8  },
+#   { name = "attack", frames = 5, fps = 10 },
+#   { name = "death",  frames = 8, fps = 8  },
+# ]
+
+# [[entity]]
+# id            = "dragon_young"
+# display_name  = "Young Dragon"
+# directions    = 8
+# ai_prompt_base = "young dragon, emerald green scales, compact wings folded, fierce expression, lithe body"
+# ai_style       = "pixel art, 64x64, isometric view, clean outline, transparent background, fantasy RPG style"
+# palette_seed   = "emerald_green"
+# animations = [
+#   { name = "idle",   frames = 6, fps = 4  },
+#   { name = "walk",   frames = 8, fps = 8  },
+#   { name = "attack", frames = 8, fps = 12 },
+#   { name = "death",  frames = 8, fps = 6  },
+# ]

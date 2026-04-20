@@ -1,3 +1,4 @@
+pub mod bestiary;
 pub mod combat;
 pub mod world;
 

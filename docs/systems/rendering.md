@@ -14,13 +14,14 @@ The client runs in two modes:
 
 ## Camera (`crates/client/src/plugins/camera.rs`)
 
-`OrbitCameraPlugin` spawns a single `Camera3d` with an `OrbitCamera` component. The default angles give the classic isometric look; the target starts at the centre of the world map.
+`OrbitCameraPlugin` spawns a single `Camera3d` with an `OrbitCamera` component locked to classic isometric angles (yaw=45°, pitch=35.3°). The target starts at the centre of the world map.
 
 | Control | Action |
 |---|---|
-| Right-click drag | Orbit (yaw + pitch) |
-| Middle-click drag | Orbit (yaw + pitch) |
 | Scroll wheel | Zoom in/out |
+| Right/Middle-click drag | Orbit (yaw + pitch) — only when `orbit_locked = false` |
+
+`OrbitCamera.orbit_locked` is `true` by default, giving a fixed isometric perspective. Set it to `false` at runtime (e.g. in a debug menu) to restore free orbit for development.
 
 Orbit state (yaw, pitch, distance, target) lives in `OrbitCamera`. The Bevy `Transform` is recomputed from those values every frame. Input is read from `AccumulatedMouseMotion` and `AccumulatedMouseScroll` resources (Bevy 0.18 input API).
 
@@ -82,6 +83,41 @@ Three systems run in order every `Update` frame:
 1. **`update_chunk_visibility`** — reads `OrbitCamera.target`, computes which chunks are within `render_radius`, selects LOD per chunk by distance, runs BFS LOD clamping, marks changed chunks as dirty, records out-of-range chunks for despawn.
 2. **`rebuild_dirty_chunks`** — calls `build_chunk_mesh` for each dirty chunk coord + LOD, inserts the new `Mesh` into `Assets<Mesh>`, caches the handle.
 3. **`apply_chunk_meshes`** — spawns new chunk entities, despawns out-of-range ones, swaps `Mesh3d` handles on entities whose LOD changed.
+
+## Billboard sprite renderer (`crates/client/src/plugins/billboard_sprite.rs`)
+
+`BillboardSpritePlugin` provides 2.5D character rendering: flat quad sprites in the 3D world, always facing the camera. Designed for AI-generated 8-direction animated sprite sheets.
+
+**Data pipeline:**
+1. `assets/bestiary.toml` defines every entity type with prompts, directions, and animation clips.
+2. `cargo run -p sprite_gen -- --all` generates 8-direction sprite sheets:
+   - `crates/client/assets/sprites/{entity_id}/atlas.png` — full atlas (8 rows × N cols).
+   - `crates/client/assets/sprites/{entity_id}/manifest.json` — layout for the renderer.
+3. At game startup, `load_sprite_registry` scans for manifests and populates `SpriteRegistry`.
+4. For each new entity whose kind matches a registry entry, `spawn_billboard_visuals` (in `PreUpdate`) adds `HasSpriteSheet` and spawns a companion `Mesh3d` quad entity.
+5. `update_billboard` (in `Update`) selects the atlas frame via `StandardMaterial.uv_transform` (scale + translate into the atlas UV space) and reorients the quad to face the camera each frame.
+
+**Atlas layout:** Rows = facing directions (0 = south, clockwise). Columns = concatenated animation frames (idle | walk | attack | death …).
+
+**Graceful degradation:** If no sprite sheets are present, `SpriteRegistry` is empty. `HasSpriteSheet` is never added to any entity, and `EntityRendererPlugin` renders everything as 3D GLB models as before.
+
+**Direction quantization:**
+- Compute velocity from frame-to-frame translation delta.
+- Rotate velocity into screen space (subtract camera yaw).
+- Snap to nearest of 8 octants.
+- 0 = south, 1 = SW, 2 = W, 3 = NW, 4 = N, 5 = NE, 6 = E, 7 = SE.
+
+**Generating sprites:**
+```bash
+# Mock backend (instant, coloured placeholders)
+cargo run -p sprite_gen -- --all --output crates/client/assets/sprites/
+
+# DALL-E 3 (requires OpenAI API key)
+cargo run -p sprite_gen -- --all --backend dalle --api-key sk-... --workers 4
+
+# Incremental: skip up-to-date entities
+cargo run -p sprite_gen -- --all --incremental
+```
 
 ## Entity rendering (`crates/client/src/plugins/entity_renderer.rs`)
 

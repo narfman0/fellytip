@@ -44,6 +44,9 @@ pub struct OrbitCamera {
     pub orbit_speed: f32,
     /// World units per scroll line (approximately).
     pub zoom_speed: f32,
+    /// When true, mouse drag does not change yaw or pitch (zoom only).
+    /// Set to false to re-enable free orbit for debugging.
+    pub orbit_locked: bool,
 }
 
 impl Default for OrbitCamera {
@@ -61,6 +64,7 @@ impl Default for OrbitCamera {
             max_distance: 22.0,
             orbit_speed: 0.005,
             zoom_speed: 4.0,
+            orbit_locked: true,
         }
     }
 }
@@ -102,8 +106,10 @@ fn update_orbit_camera(
         orbit.target = Vec3::new(pos.x, pos.z, pos.y);
     }
 
-    // Right-click or middle-click drag to orbit.
-    if buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle) {
+    // Right-click or middle-click drag to orbit (disabled when orbit_locked).
+    if !orbit.orbit_locked
+        && (buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle))
+    {
         orbit.yaw -= motion.delta.x * orbit.orbit_speed;
         orbit.pitch = (orbit.pitch + motion.delta.y * orbit.orbit_speed)
             .clamp(orbit.min_pitch, orbit.max_pitch);

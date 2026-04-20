@@ -27,6 +27,7 @@ use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
 
+use super::billboard_sprite::HasSpriteSheet;
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
 
 pub struct EntityRendererPlugin;
@@ -139,8 +140,9 @@ fn ground_translation(pos: &WorldPosition) -> Vec3 {
 
 // All entities with WorldPosition get visuals; local player is excluded from
 // remote-position sync since its transform tracks PredictedPosition instead.
+// Entities claimed by BillboardSpritePlugin (HasSpriteSheet) are excluded.
 // MULTIPLAYER: restore With<Replicated> filters to limit to server-sent entities.
-type NewReplicatedPos  = Added<WorldPosition>;
+type NewReplicatedPos  = (Added<WorldPosition>, Without<HasSpriteSheet>);
 type ChangedRemotePos  = (Changed<WorldPosition>, Without<LocalPlayer>);
 type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
 type RemotePosItems<'a> = (

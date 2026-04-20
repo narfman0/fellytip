@@ -1,0 +1,18 @@
+[package]
+name    = "sprite_gen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fellytip-shared = { workspace = true }
+anyhow          = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+toml            = { workspace = true }
+tokio           = { workspace = true }
+reqwest         = { workspace = true }
+tracing         = { workspace = true }
+tracing-subscriber = { workspace = true }
+image  = "0.24"
+clap   = { version = "4", features = ["derive"] }
+base64 = "0.22"
