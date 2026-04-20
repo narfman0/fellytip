@@ -5,6 +5,10 @@ edition = "2021"
 
 [features]
 debug = []
+# Fixed-orientation zoomable isometric camera.  When enabled, right/middle-click
+# drag no longer rotates the view — only scroll-wheel zoom is active.  Leaving
+# this off keeps the orbit camera useful for top-down debugging.
+locked_iso = []
 
 [dependencies]
 fellytip-shared    = { workspace = true }

@@ -18,11 +18,19 @@ The client runs in two modes:
 
 | Control | Action |
 |---|---|
-| Right-click drag | Orbit (yaw + pitch) |
-| Middle-click drag | Orbit (yaw + pitch) |
+| Right-click drag | Orbit (yaw + pitch) — **disabled when `locked_iso` is enabled** |
+| Middle-click drag | Orbit (yaw + pitch) — **disabled when `locked_iso` is enabled** |
 | Scroll wheel | Zoom in/out |
 
 Orbit state (yaw, pitch, distance, target) lives in `OrbitCamera`. The Bevy `Transform` is recomputed from those values every frame. Input is read from `AccumulatedMouseMotion` and `AccumulatedMouseScroll` resources (Bevy 0.18 input API).
+
+### `locked_iso` feature flag
+
+Cargo feature `locked_iso` on the `fellytip-client` crate locks the camera to a fixed-orientation dimetric isometric view — `yaw = ISO_YAW (45°)`, `pitch = ISO_PITCH (≈35.264°, atan(1/√2))`. Drag handlers are compiled out; only scroll zoom remains. This is the intended mode for the billboard-sprite art pipeline (see issue #13). Default builds keep the orbit handlers so top-down debugging via drag still works.
+
+```bash
+cargo run -p fellytip-client --features locked_iso
+```
 
 ## Lighting (`crates/client/src/plugins/scene_lighting.rs`)
 
