@@ -16,12 +16,252 @@
 # At least one `[[entity.animation]]` block is required.  Each animation
 # becomes a row-group in the atlas.  `frames` and `fps` are integers.
 
+# ── Keep ALL ai_style lines identical ────────────────────────────────────────
+# They lock the art direction — any drift here and every sprite re-renders
+# with a different look.
+
+# ── Player ────────────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "hero"
+display_name   = "Hero"
+directions     = 8
+ai_prompt_base = "adventurer hero, sword and shield, leather armor, determined expression, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "hero_warm_steel"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Faction NPCs ──────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "iron_wolves_npc"
+display_name   = "Iron Wolves Warrior"
+directions     = 8
+ai_prompt_base = "iron wolves clan warrior, steel-blue cloak, wolf sigil, longsword, grizzled veteran, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "iron_blue"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "merchant_guild_npc"
+display_name   = "Merchant Guild Caravaneer"
+directions     = 8
+ai_prompt_base = "merchant guild caravaneer, amber and gold robes, laden backpack, quarterstaff, shrewd look, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "guild_amber"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "ash_covenant_npc"
+display_name   = "Ash Covenant Zealot"
+directions     = 8
+ai_prompt_base = "ash covenant zealot, crimson robes, soot-smeared face, ritual dagger, fanatical eyes, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "ash_crimson"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "deep_tide_npc"
+display_name   = "Deep Tide Mariner"
+directions     = 8
+ai_prompt_base = "deep tide mariner, deep teal oilskin, coral spear, salt-weathered skin, fantasy medieval coastal"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "tide_teal"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Wildlife ──────────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "bison"
+display_name   = "Bison"
+directions     = 8
+ai_prompt_base = "american bison, shaggy brown coat, large shoulder hump, horns, wild, fantasy plains"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "bison_earth"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "dog"
+display_name   = "Wild Dog"
+directions     = 8
+ai_prompt_base = "wild dog, lean and alert, mottled tan coat, fangs bared, fantasy forest"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "wild_tan"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "horse"
+display_name   = "Horse"
+directions     = 8
+ai_prompt_base = "riding horse, glossy chestnut coat, flowing mane and tail, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "horse_chestnut"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Legacy placeholder ────────────────────────────────────────────────────────
+# goblin_scout is the first bestiary entry we ever shipped; kept so the
+# billboard plugin's placeholder-map (everything → first-loaded atlas) keeps
+# working during the transition.  Can be removed once the renderer switches
+# to EntityKind-aware lookup.
+
 [[entity]]
 id             = "goblin_scout"
 display_name   = "Goblin Scout"
 directions     = 8
 ai_prompt_base = "goblin scout, small green creature with rusty dagger, fantasy medieval"
-ai_style       = "pixel art, 64x64, isometric sprite, clean outline"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
 palette_seed   = "forest_green"
 
 [[entity.animation]]

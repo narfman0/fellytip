@@ -1,4 +1,5 @@
 pub mod battle;
+pub mod billboard_sprite;
 pub mod camera;
 pub mod character_animation;
 pub mod debug_console;
@@ -12,6 +13,7 @@ pub mod skybox;
 pub mod terrain;
 
 pub use battle::BattleVisualsPlugin;
+pub use billboard_sprite::BillboardSpritePlugin;
 pub use camera::OrbitCameraPlugin;
 pub use character_animation::CharacterAnimationPlugin;
 pub use debug_console::{DebugConsole, DebugConsolePlugin};

@@ -74,6 +74,28 @@ pub fn parse_bestiary(text: &str) -> Result<Vec<BestiaryEntry>, BestiaryError> {
     Ok(file.entries)
 }
 
+/// Bestiary ids that every in-game entity kind needs an entry for.  This
+/// list is the drift guard: add a new `EntityKind` / `WildlifeKind` variant
+/// or faction without updating `assets/bestiary.toml` and the
+/// `bestiary_covers_all_entity_kinds` test fails.
+///
+/// Resolution rules (consumed by the billboard renderer):
+///
+/// - No `EntityKind` on the replicated entity → `"hero"` (local player).
+/// - `EntityKind::FactionNpc` + `FactionBadge::faction_id` → `"{faction_id}_npc"`.
+/// - `EntityKind::Wildlife` + `WildlifeKind::{variant}` → lowercase variant name.
+/// - `EntityKind::Settlement` → no billboard; rendered by the PBR pipeline.
+pub const REQUIRED_BESTIARY_IDS: &[&str] = &[
+    "hero",
+    "ash_covenant_npc",
+    "deep_tide_npc",
+    "iron_wolves_npc",
+    "merchant_guild_npc",
+    "bison",
+    "dog",
+    "horse",
+];
+
 fn validate(entries: &[BestiaryEntry]) -> Result<(), BestiaryError> {
     let mut seen: HashSet<&SmolStr> = HashSet::new();
     for e in entries {
@@ -230,5 +252,26 @@ fps = 1
             .join("../../assets/bestiary.toml");
         let entries = load_bestiary(&path).expect("repo bestiary.toml must parse");
         assert!(!entries.is_empty(), "bestiary must declare at least one entity");
+    }
+
+    /// Drift guard: every id the client renderer expects must be present in
+    /// the checked-in bestiary.  Adding a new `EntityKind` / `WildlifeKind`
+    /// variant (or a new faction) without updating `assets/bestiary.toml`
+    /// fails here.
+    #[test]
+    fn bestiary_covers_all_entity_kinds() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/bestiary.toml");
+        let entries = load_bestiary(&path).expect("repo bestiary.toml must parse");
+        let ids: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.id.as_str()).collect();
+        for required in REQUIRED_BESTIARY_IDS {
+            assert!(
+                ids.contains(required),
+                "bestiary.toml is missing required entity id `{required}` — \
+                 add a `[[entity]]` block or remove the variant from \
+                 REQUIRED_BESTIARY_IDS"
+            );
+        }
     }
 }
