@@ -6,3 +6,7 @@ pub mod generator;
 pub mod incremental;
 pub mod layout;
 pub mod manifest;
+pub mod openai;
+pub mod palette;
+pub mod parallel;
+pub mod seeding;

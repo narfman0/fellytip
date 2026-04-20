@@ -3,9 +3,12 @@
 //! Usage:
 //!   cargo run -p sprite_gen -- [--all | --entity ID] [--output-dir DIR]
 //!                              [--bestiary PATH] [--dry-run] [--incremental]
+//!                              [--backend mock|openai] [--workers N]
+//!                              [--no-quantise]
 //!
-//! The default backend is the deterministic `MockGenerator`.  The real AI
-//! backend is wired up in a follow-up (issue #18).
+//! Default backend is the deterministic `MockGenerator`.  `--backend openai`
+//! reads `SPRITE_GEN_API_KEY` (and optionally `SPRITE_GEN_ENDPOINT` /
+//! `SPRITE_GEN_MODEL`) to hit DALL-E 3.
 
 use anyhow::{anyhow, Context, Result};
 use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry};
@@ -15,8 +18,16 @@ use sprite_gen::{
     incremental::can_skip,
     layout::AtlasLayout,
     manifest::{to_ron, AtlasManifest},
+    openai::OpenAiDalleGenerator,
+    palette::quantise_in_place,
 };
 use std::path::{Path, PathBuf};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Mock,
+    OpenAi,
+}
 
 struct Args {
     all: bool,
@@ -25,6 +36,9 @@ struct Args {
     output_dir: PathBuf,
     dry_run: bool,
     incremental: bool,
+    backend: Backend,
+    workers: usize,
+    quantise: bool,
 }
 
 fn main() -> Result<()> {
@@ -46,21 +60,39 @@ fn main() -> Result<()> {
     };
 
     if !args.dry_run {
-        std::fs::create_dir_all(&args.output_dir).with_context(|| {
-            format!("creating output dir {}", args.output_dir.display())
-        })?;
+        std::fs::create_dir_all(&args.output_dir)
+            .with_context(|| format!("creating output dir {}", args.output_dir.display()))?;
     }
 
-    let generator = MockGenerator;
+    // Select a backend.  MockGenerator is always safe; OpenAiDalleGenerator
+    // refuses to construct without SPRITE_GEN_API_KEY so a missing secret
+    // exits non-zero with a clear message.
+    let generator: Box<dyn SpriteGenerator + Sync> = match args.backend {
+        Backend::Mock => Box::new(MockGenerator),
+        Backend::OpenAi => {
+            if args.dry_run {
+                // Dry-run doesn't actually call the API, so we don't need a
+                // live backend.  The OpenAi prompt shape differs though —
+                // use it for prompt formatting if the key happens to exist.
+                match OpenAiDalleGenerator::from_env() {
+                    Ok(g) => Box::new(g),
+                    Err(_) => Box::new(MockGenerator),
+                }
+            } else {
+                Box::new(OpenAiDalleGenerator::from_env()?)
+            }
+        }
+    };
+
     for entry in selected {
-        run_entity(entry, &generator, &args)?;
+        run_entity(entry, generator.as_ref(), &args)?;
     }
     Ok(())
 }
 
 fn run_entity(
     entry: &BestiaryEntry,
-    generator: &dyn SpriteGenerator,
+    generator: &(dyn SpriteGenerator + Sync),
     args: &Args,
 ) -> Result<()> {
     let layout = AtlasLayout::from_entry(entry);
@@ -77,9 +109,20 @@ fn run_entity(
         return Ok(());
     }
 
-    eprintln!("  {} — generating {}×{} atlas", entry.id, layout.image_width(), layout.image_height());
-    let atlas = assemble_atlas(generator, entry, &layout)?;
-    atlas.save(&png_path).with_context(|| format!("writing {}", png_path.display()))?;
+    eprintln!(
+        "  {} — generating {}×{} atlas (workers={})",
+        entry.id,
+        layout.image_width(),
+        layout.image_height(),
+        args.workers,
+    );
+    let mut atlas = assemble_atlas(generator, entry, &layout, args.workers)?;
+    if args.quantise {
+        quantise_in_place(&mut atlas);
+    }
+    atlas
+        .save(&png_path)
+        .with_context(|| format!("writing {}", png_path.display()))?;
 
     let manifest: AtlasManifest = (&layout).into();
     let ron_text = to_ron(&manifest).context("serializing manifest to RON")?;
@@ -88,7 +131,7 @@ fn run_entity(
     Ok(())
 }
 
-fn print_prompts(entry: &BestiaryEntry, layout: &AtlasLayout, generator: &dyn SpriteGenerator) {
+fn print_prompts(entry: &BestiaryEntry, layout: &AtlasLayout, generator: &(dyn SpriteGenerator + Sync)) {
     println!("{}:", entry.id);
     for slot in &layout.animations {
         for dir in 0..layout.directions {
@@ -118,22 +161,36 @@ fn parse_args() -> Result<Args> {
     let mut output_dir = PathBuf::from("crates/client/assets/sprites");
     let mut dry_run = false;
     let mut incremental = false;
+    let mut backend = Backend::Mock;
+    let mut workers: usize = 1;
+    let mut quantise = true;
 
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
-            "--all"         => { all = true; }
-            "--entity"      => { entity = Some(next(&argv, &mut i, "--entity")?); }
-            "--bestiary"    => { bestiary = PathBuf::from(next(&argv, &mut i, "--bestiary")?); }
-            "--output-dir"  => { output_dir = PathBuf::from(next(&argv, &mut i, "--output-dir")?); }
-            "--dry-run"     => { dry_run = true; }
-            "--incremental" => { incremental = true; }
+            "--all"          => all = true,
+            "--entity"       => entity = Some(next(&argv, &mut i, "--entity")?),
+            "--bestiary"     => bestiary = PathBuf::from(next(&argv, &mut i, "--bestiary")?),
+            "--output-dir"   => output_dir = PathBuf::from(next(&argv, &mut i, "--output-dir")?),
+            "--dry-run"      => dry_run = true,
+            "--incremental"  => incremental = true,
+            "--backend"      => backend = parse_backend(&next(&argv, &mut i, "--backend")?)?,
+            "--workers"      => workers = next(&argv, &mut i, "--workers")?.parse().context("--workers must be a positive integer")?,
+            "--no-quantise"  => quantise = false,
             other => return Err(anyhow!("unknown flag `{other}`")),
         }
         i += 1;
     }
 
-    Ok(Args { all, entity, bestiary, output_dir, dry_run, incremental })
+    Ok(Args { all, entity, bestiary, output_dir, dry_run, incremental, backend, workers, quantise })
+}
+
+fn parse_backend(s: &str) -> Result<Backend> {
+    match s {
+        "mock"   => Ok(Backend::Mock),
+        "openai" => Ok(Backend::OpenAi),
+        other    => Err(anyhow!("unknown backend `{other}` (expected `mock` or `openai`)")),
+    }
 }
 
 fn next(argv: &[String], i: &mut usize, flag: &str) -> Result<String> {
@@ -144,7 +201,5 @@ fn next(argv: &[String], i: &mut usize, flag: &str) -> Result<String> {
 }
 
 fn default_bestiary_path() -> PathBuf {
-    // Repo root is two levels above this crate.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/bestiary.toml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/bestiary.toml")
 }

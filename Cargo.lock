@@ -2165,6 +2165,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "color_quant"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
+
+[[package]]
 name = "combat_sim"
 version = "0.1.0"
 dependencies = [
@@ -6672,10 +6678,14 @@ name = "sprite_gen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "color_quant",
  "fellytip-shared",
  "image",
+ "reqwest",
  "ron 0.8.1",
  "serde",
+ "serde_json",
  "smol_str 0.3.6",
  "tempfile",
  "thiserror 2.0.18",

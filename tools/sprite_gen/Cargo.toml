@@ -9,9 +9,13 @@ anyhow          = { workspace = true }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
 serde           = { workspace = true }
+serde_json      = { workspace = true }
 smol_str        = { workspace = true }
 image           = { workspace = true }
 ron             = { workspace = true }
+color_quant     = { workspace = true }
+reqwest         = { workspace = true }
+base64          = "0.22"
 
 [dev-dependencies]
 tempfile = "3"
