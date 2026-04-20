@@ -14,7 +14,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, EguiUse
 use fellytip_shared::{
     components::PlayerStandings,
     world::{
-        civilization::{SettlementKind, Settlements},
+        civilization::{Settlement, SettlementKind, Settlements},
         faction::{standing_tier, StandingTier},
         map::{TileKind, WorldMap},
     },
@@ -40,6 +40,13 @@ const ZOOM_MAX: f32 = 4.0;
 
 /// Egui canvas inside the map window (pixels).
 const CANVAS: f32 = 512.0;
+
+/// Always-visible minimap canvas size (pixels).
+const MINI_CANVAS: f32 = 180.0;
+/// Minimap zoom: pixels per world unit, giving ±50 world units visible radius.
+const MINI_ZOOM: f32 = 1.8;
+/// Proximity threshold for "Near: <town>" label (world units).
+const NEAR_RADIUS: f32 = 80.0;
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
@@ -83,7 +90,7 @@ impl Plugin for MapPlugin {
         app.init_resource::<MapWindow>()
             .init_resource::<TerrainTex>()
             .add_systems(Update, build_terrain_texture)
-            .add_systems(EguiPrimaryContextPass, draw_map);
+            .add_systems(EguiPrimaryContextPass, (draw_map, draw_minimap));
     }
 }
 
@@ -338,6 +345,142 @@ fn draw_map(
                 ui.colored_label(egui::Color32::from_rgb(220, 220, 220), "● Town");
                 ui.label("  Scroll=zoom  Drag=pan");
             });
+        });
+
+    Ok(())
+}
+
+// ── Always-visible minimap ────────────────────────────────────────────────────
+
+/// Returns the nearest settlement within `radius` world units of `pos`, or `None`.
+fn nearest_within(pos: Vec2, settlements: &Settlements, radius: f32) -> Option<&Settlement> {
+    settlements
+        .0
+        .iter()
+        .map(|s| {
+            let d = pos.distance(Vec2::new(s.x - MAP_W / 2.0, s.y - MAP_H / 2.0));
+            (d, s)
+        })
+        .filter(|(d, _)| *d < radius)
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, s)| s)
+}
+
+/// Always-visible minimap anchored top-right showing terrain around the player,
+/// settlement dots, facing direction arrow, coordinates, and nearby town name.
+fn draw_minimap(
+    mut ctx: EguiContexts,
+    tex: Res<TerrainTex>,
+    player_q: Query<(&PredictedPosition, &Transform), With<LocalPlayer>>,
+    settlements: Option<Res<Settlements>>,
+    console: Option<Res<DebugConsole>>,
+    pause_menu: Option<Res<PauseMenu>>,
+) -> Result {
+    // Hide behind other overlays.
+    if console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open) {
+        return Ok(());
+    }
+    let Some(terrain_id) = tex.0 else { return Ok(()) };
+    let Ok((pos, transform)) = player_q.single() else { return Ok(()) };
+
+    let px = pos.x;
+    let py = pos.y;
+
+    // Visible world radius from canvas centre to edge.
+    let vis_radius = (MINI_CANVAS / 2.0) / MINI_ZOOM;
+
+    // UV centre in the Y-flipped terrain texture (V=0 = north = high Y).
+    let center_u = (px + MAP_W / 2.0) / MAP_W;
+    let center_v = (MAP_H / 2.0 - py) / MAP_H;
+    let half_u = vis_radius / MAP_W;
+    let half_v = vis_radius / MAP_H;
+    let uv = egui::Rect::from_min_max(
+        egui::pos2(
+            (center_u - half_u).clamp(0.0, 1.0),
+            (center_v - half_v).clamp(0.0, 1.0),
+        ),
+        egui::pos2(
+            (center_u + half_u).clamp(0.0, 1.0),
+            (center_v + half_v).clamp(0.0, 1.0),
+        ),
+    );
+
+    egui::Window::new("##minimap")
+        .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
+        .resizable(false)
+        .title_bar(false)
+        .show(ctx.ctx_mut()?, |ui| {
+            let (resp, painter) =
+                ui.allocate_painter(egui::vec2(MINI_CANVAS, MINI_CANVAS), egui::Sense::hover());
+            let rect = resp.rect;
+            let center = rect.center();
+
+            // Dark fill behind the terrain (visible if clamped UVs cut off).
+            painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(8, 8, 16));
+
+            // Terrain image clipped to player vicinity.
+            painter.image(terrain_id, rect, uv, egui::Color32::WHITE);
+
+            // Settlement dots within the visible radius.
+            if let Some(ref setts) = settlements {
+                for s in &setts.0 {
+                    let wx = s.x - MAP_W / 2.0;
+                    let wy = s.y - MAP_H / 2.0;
+                    let dx = wx - px;
+                    let dy = wy - py;
+                    if dx.abs() > vis_radius * 1.5 || dy.abs() > vis_radius * 1.5 {
+                        continue;
+                    }
+                    let sp = egui::pos2(
+                        center.x + dx * MINI_ZOOM,
+                        center.y - dy * MINI_ZOOM,
+                    );
+                    if !rect.contains(sp) {
+                        continue;
+                    }
+                    let (r, fill) = match s.kind {
+                        SettlementKind::Capital => (4.0, egui::Color32::from_rgb(255, 220, 60)),
+                        SettlementKind::Town    => (3.0, egui::Color32::from_rgb(220, 220, 220)),
+                    };
+                    painter.circle_filled(sp, r, fill);
+                    painter.circle_stroke(sp, r, egui::Stroke::new(1.0, egui::Color32::BLACK));
+                }
+            }
+
+            // Player dot at canvas centre.
+            painter.circle_filled(center, 5.0, egui::Color32::from_rgb(255, 60, 60));
+            painter.circle_stroke(center, 5.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
+
+            // Facing direction arrow derived from Transform rotation.
+            // -Z is Bevy's default local forward; project onto the world XY plane.
+            let fwd = transform.rotation * Vec3::NEG_Z;
+            let dir = Vec2::new(fwd.x, fwd.y);
+            if dir.length_squared() > 0.01 {
+                let dir_norm = dir.normalize();
+                let arrow_end = egui::pos2(
+                    center.x + dir_norm.x * 12.0,
+                    center.y - dir_norm.y * 12.0,
+                );
+                painter.line_segment(
+                    [center, arrow_end],
+                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                );
+            }
+
+            // Minimap border.
+            painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 80, 80)), egui::StrokeKind::Inside);
+
+            // Coordinates and nearby settlement below the canvas.
+            ui.label(egui::RichText::new(format!("X {:.0}  Y {:.0}", px, py)).small());
+            if let Some(setts) = settlements {
+                if let Some(near) = nearest_within(Vec2::new(px, py), &setts, NEAR_RADIUS) {
+                    ui.label(
+                        egui::RichText::new(format!("Near: {}", near.name))
+                            .small()
+                            .color(egui::Color32::from_rgb(255, 220, 120)),
+                    );
+                }
+            }
         });
 
     Ok(())

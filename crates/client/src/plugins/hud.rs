@@ -41,6 +41,8 @@ fn draw_hud(
         .show(ctx.ctx_mut()?, |ui| {
             match player_q.single() {
                 Ok((health, exp, _)) => {
+                    ui.heading(format!("Level {}", exp.level));
+                    ui.separator();
                     let hp_frac =
                         (health.current as f32 / health.max.max(1) as f32).clamp(0.0, 1.0);
                     ui.label(format!("HP  {}/{}", health.current, health.max));
@@ -102,7 +104,7 @@ fn draw_battle_log(
     log: Res<BattleLog>,
 ) -> Result {
     egui::Window::new("Battle Log")
-        .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
+        .anchor(egui::Align2::LEFT_TOP, [10.0, 180.0])
         .resizable(false)
         .show(ctx.ctx_mut()?, |ui| {
             let entries = log.entries.iter().rev().take(20);
