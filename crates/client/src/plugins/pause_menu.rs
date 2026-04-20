@@ -18,12 +18,13 @@ impl Plugin for PauseMenuPlugin {
 fn draw_pause_menu(
     mut ctx: EguiContexts,
     mut menu: ResMut<PauseMenu>,
+    keyboard: Res<ButtonInput<KeyCode>>,
 ) -> Result {
-    let egui_ctx = ctx.ctx_mut()?;
-
-    if egui_ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if keyboard.just_pressed(KeyCode::Escape) {
         menu.open = !menu.open;
     }
+
+    let egui_ctx = ctx.ctx_mut()?;
 
     if !menu.open {
         return Ok(());
