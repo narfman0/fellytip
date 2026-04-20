@@ -178,7 +178,7 @@ fn drive_character_anims(
         if speed > WALK_THRESHOLD {
             let horizontal = Vec3::new(delta.x, 0.0, delta.z);
             if horizontal.length_squared() > 1e-6 {
-                transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, horizontal.normalize());
+                transform.rotation = Quat::from_rotation_arc(Vec3::Z, horizontal.normalize());
             }
         }
 
@@ -214,7 +214,7 @@ mod tests {
     fn facing_rotation(delta: Vec3) -> Option<Quat> {
         let horizontal = Vec3::new(delta.x, 0.0, delta.z);
         if horizontal.length_squared() > 1e-6 {
-            Some(Quat::from_rotation_arc(Vec3::NEG_Z, horizontal.normalize()))
+            Some(Quat::from_rotation_arc(Vec3::Z, horizontal.normalize()))
         } else {
             None
         }
@@ -229,7 +229,7 @@ mod tests {
             (Vec3::new(0.0, 5.0, 1.0), Vec3::Z), // vertical ignored
         ] {
             let rot = facing_rotation(delta).expect("should produce rotation");
-            let forward = rot * Vec3::NEG_Z;
+            let forward = rot * Vec3::Z;
             assert!(
                 forward.dot(expected_forward) > 0.999,
                 "delta {delta:?}: expected forward {expected_forward:?}, got {forward:?}"
