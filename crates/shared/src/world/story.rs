@@ -15,6 +15,7 @@ use uuid::Uuid;
 // ── Identifiers ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Component, Serialize, Deserialize, Reflect)]
+#[reflect(opaque)]
 pub struct GameEntityId(pub Uuid);
 
 // ── Event kinds ───────────────────────────────────────────────────────────────
