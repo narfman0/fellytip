@@ -276,7 +276,11 @@ fn ground_translation(pos: &WorldPosition) -> Vec3 {
 // All entities with WorldPosition get visuals; local player is excluded from
 // remote-position sync since its transform tracks PredictedPosition instead.
 // MULTIPLAYER: restore With<Replicated> filters to limit to server-sent entities.
-type NewReplicatedPos  = Added<WorldPosition>;
+//
+// Using a structural filter instead of Added<WorldPosition> so that entities
+// spawned during Startup/PostStartup are caught — Added<T> misses them because
+// their added_tick precedes the first Update run of this system.
+type NewReplicatedPos  = (With<WorldPosition>, Without<SceneRoot>);
 type ChangedRemotePos  = (Changed<WorldPosition>, Without<LocalPlayer>);
 type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
 type RemotePosItems<'a> = (
