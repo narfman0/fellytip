@@ -198,12 +198,14 @@ fn send_player_input(
     console: Option<Res<plugins::DebugConsole>>,
     pause_menu: Option<Res<plugins::pause_menu::PauseMenu>>,
     map_win: Option<Res<plugins::MapWindow>>,
+    char_screen: Option<Res<plugins::CharScreen>>,
     mut local_input: ResMut<LocalPlayerInput>,
 ) {
     let Some(keyboard) = keyboard else { return };
     if console.is_some_and(|c| c.open)
         || pause_menu.is_some_and(|m| m.open)
         || map_win.is_some_and(|m| m.open)
+        || char_screen.is_some_and(|s| s.open)
     {
         return;
     }

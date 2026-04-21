@@ -185,14 +185,13 @@ Direction math lives in `crates/shared/src/sprite_math.rs` so it's ECS-free and 
 
 | Entity type | Mesh | Colour |
 |---|---|---|
-| Player (no `EntityKind`) | capsule | warm gold |
-| `FactionNpc` with `FactionBadge` (iron_wolves) | capsule | steel blue |
-| `FactionNpc` with `FactionBadge` (merchant_guild) | capsule | amber |
-| `FactionNpc` with `FactionBadge` (ash_covenant) | capsule | crimson |
-| `FactionNpc` with `FactionBadge` (deep_tide) | capsule | deep teal |
-| `FactionNpc` without badge (fallback) | capsule | steel blue |
-| `Wildlife` | capsule | forest green |
-| `Settlement` | pillar (Cylinder3d, 3 units tall) | bright white |
+| Player (no `EntityKind`) | Kenney `characterMedium` GLB | — |
+| `FactionNpc` | Kenney character GLBs, tinted per faction | per faction |
+| `Wildlife` | Kenney animal GLBs (bison / dog / horse) | — |
+| `Settlement` (Town) | Kenney tent GLBs (`tent_detailedClosed`, `tent_smallClosed`) | — |
+| `Settlement` (Capital) | Kenney town GLBs (`windmill`, `stall-green`, `stall-red`) | — |
+
+Settlement visual selection is keyed on the `SettlementKind` component (now also a Bevy `Component`) attached to each settlement marker entity at spawn. Capitals use larger windmill/stall assets; towns use tent assets. The specific scene is chosen deterministically from the entity id hash.
 
 `FactionBadge { faction_id: String, rank: NpcRank }` is replicated from the server so the client can select the faction-specific material at spawn time.
 
@@ -212,20 +211,35 @@ Messages are received via the lightyear client `MessageReceiver<T>` pattern on t
 
 ## HUD (`crates/client/src/plugins/hud.rs`)
 
-`HudPlugin` draws four egui windows via `bevy_egui`. Only added in windowed mode.
+`HudPlugin` draws egui windows via `bevy_egui`. Only added in windowed mode.
 
-| Panel | Anchor | Contents |
-|---|---|---|
-| `##stats` | Bottom-left | HP bar + XP progress bar + level |
-| `Faction Standing` | Top-left | Per-faction reputation score + tier, colour-coded |
-| `Battle Log` | Top-right | Last 20 battle events from `BattleLog` |
-| `World Events` | Bottom-right | Last 10 story events from `ClientStoryLog` |
+| Panel | Trigger | Anchor | Contents |
+|---|---|---|---|
+| `##stats` | always | Bottom-left | HP bar + XP progress bar + level |
+| `Battle Log` | always | Top-left | Last 20 battle events from `BattleLog` |
+| `World Events` | always | Bottom-right | Last 10 story events from `ClientStoryLog` |
+| `Character` | `C` key toggle | Centre | Detailed stats grid + faction standings |
 
-**Faction Standing**: reads `PlayerStandings` from the local player entity (the component is replicated from the server and refreshed every world-sim tick). Tier colours: green (Friendly+), grey (Neutral), orange (Unfriendly), red (Hostile/Hated). Hidden until at least one standing is available.
+**Character screen** (`C` key): shows a centred overlay with level, HP, XP, and per-faction reputation scores with tier colours. Blocks movement input while open. Ignored when the debug console or pause menu is open.
+
+**Faction standings** were moved from the always-visible top-left panel into the `Character` screen.
 
 **World Events**: hidden until at least one story event has been received.
 
-Controls: Space → BasicAttack; Q → StrongAttack (ability 1).
+Controls: Space → BasicAttack; Q → StrongAttack (ability 1); C → Character screen.
+
+## Minimap (`crates/client/src/plugins/map.rs`)
+
+An always-visible 180×180 px minimap anchors to the top-right corner. It rotates so the player's forward direction is always at the top.
+
+- **Terrain**: rendered as a rotated textured quad mesh using computed UV coordinates per canvas corner (inverse rotation by camera yaw). The 512×512 terrain texture is generated once from `WorldMap` on startup.
+- **Settlement dots**: Capital (gold, 4 px) and Town (white, 3 px) dots are drawn at rotated canvas positions.
+- **Player dot**: red circle at canvas centre.
+- **Forward arrow**: white line pointing straight up (the map rotates, so "up" is always forward).
+- **North indicator**: small "N" label at the rotated north direction.
+- **Coordinates + nearby settlement**: shown below the canvas.
+
+The `M` / `Tab` keys open a full 512×512 pan-zoom map window.
 
 ## Upgrade path
 

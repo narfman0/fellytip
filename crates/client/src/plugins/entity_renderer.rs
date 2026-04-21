@@ -26,6 +26,7 @@
 use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
+use fellytip_shared::world::civilization::SettlementKind;
 
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
 
@@ -53,7 +54,10 @@ impl Plugin for EntityRendererPlugin {
 struct EntityVisualAssets {
     /// `[bison, dog, horse]` — index matches `WildlifeKind` variant order.
     wildlife_scenes:   [Handle<Scene>; 3],
-    settlement_scenes: Vec<Handle<Scene>>,
+    /// Scenes used for Town-kind settlements (small camps, tents).
+    town_scenes:       Vec<Handle<Scene>>,
+    /// Scenes used for Capital-kind settlements (larger buildings).
+    capital_scenes:    Vec<Handle<Scene>>,
     // Per-faction tint materials applied to faction NPC child meshes.
     iron_wolves_mat:    Handle<StandardMaterial>,
     merchant_guild_mat: Handle<StandardMaterial>,
@@ -85,12 +89,15 @@ fn setup_entity_assets(
         asset_server.load("nature/animal-horse.glb#Scene0"),
     ];
 
-    let settlement_scenes = vec![
+    let town_scenes = vec![
+        asset_server.load("nature/tent_detailedClosed.glb#Scene0"),
+        asset_server.load("nature/tent_smallClosed.glb#Scene0"),
+    ];
+
+    let capital_scenes = vec![
+        asset_server.load("town/windmill.glb#Scene0"),
         asset_server.load("town/stall-green.glb#Scene0"),
         asset_server.load("town/stall-red.glb#Scene0"),
-        asset_server.load("nature/tent_detailedClosed.glb#Scene0"),
-        asset_server.load("town/fountain-round.glb#Scene0"),
-        asset_server.load("town/windmill.glb#Scene0"),
     ];
 
     // Per-faction tint materials — applied to child `Mesh3d` entities spawned
@@ -119,7 +126,8 @@ fn setup_entity_assets(
 
     commands.insert_resource(EntityVisualAssets {
         wildlife_scenes,
-        settlement_scenes,
+        town_scenes,
+        capital_scenes,
         iron_wolves_mat,
         merchant_guild_mat,
         ash_covenant_mat,
@@ -163,6 +171,7 @@ type SpawnVisualQuery<'w, 's> = Query<
         Option<&'static GrowthStage>,
         Option<&'static FactionBadge>,
         Option<&'static WildlifeKind>,
+        Option<&'static SettlementKind>,
     ),
     NewReplicatedPos,
 >;
@@ -174,12 +183,16 @@ fn spawn_entity_visuals(
     char_assets:    Res<CharacterAssets>,
     query:          SpawnVisualQuery,
 ) {
-    for (entity, pos, kind, growth, badge, wildlife_kind) in &query {
+    for (entity, pos, kind, growth, badge, wildlife_kind, settlement_kind) in &query {
         match kind {
             // ── Settlement ────────────────────────────────────────────────────
             Some(EntityKind::Settlement) => {
-                let idx   = (entity.to_bits() as usize) % assets.settlement_scenes.len();
-                let scene = assets.settlement_scenes[idx].clone();
+                let scenes = match settlement_kind {
+                    Some(SettlementKind::Capital) => &assets.capital_scenes,
+                    _ => &assets.town_scenes,
+                };
+                let idx   = (entity.to_bits() as usize) % scenes.len();
+                let scene = scenes[idx].clone();
                 commands.entity(entity).insert((
                     SceneRoot(scene),
                     Transform::from_translation(ground_translation(pos))

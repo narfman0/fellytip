@@ -20,7 +20,8 @@ use crate::world::map::{TileKind, WorldMap};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, bevy::prelude::Component, bevy::prelude::Reflect)]
+#[reflect(Component)]
 pub enum SettlementKind {
     Capital,
     Town,
@@ -74,9 +75,9 @@ pub fn habitability(kind: TileKind) -> f32 {
 // ── Settlement generation ─────────────────────────────────────────────────────
 
 /// Minimum tile distance between any two settlements.
-const MIN_SETTLEMENT_DIST: f32 = 30.0;
+const MIN_SETTLEMENT_DIST: f32 = 60.0;
 /// Grid-cell size for Poisson-disk approximation (one candidate per cell).
-const GRID_CELL: usize = 32;
+const GRID_CELL: usize = 64;
 /// Fraction of cells that become Capitals (~1 in 8).
 const CAPITAL_PROB: f32 = 0.12;
 
@@ -107,6 +108,8 @@ fn surface_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
             let mut best_pos   = None;
             let mut best_z     = 0.0f32;
 
+            // Collect all habitable tiles in this cell, pick one randomly to break grid.
+            let mut candidates: Vec<(usize, usize, f32, f32)> = Vec::new();
             for dy in 0..GRID_CELL {
                 for dx in 0..GRID_CELL {
                     let ix = cx * GRID_CELL + dx;
@@ -114,13 +117,22 @@ fn surface_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
                     let col = map.column(ix, iy);
                     if let Some(layer) = col.layers.iter().find(|l| l.is_surface_kind() && l.walkable) {
                         let score = habitability(layer.kind);
-                        if score > best_score {
+                        if score >= 0.6 {
+                            candidates.push((ix, iy, score, layer.z_top));
+                        } else if score > best_score {
                             best_score = score;
                             best_pos   = Some((ix, iy));
                             best_z     = layer.z_top;
                         }
                     }
                 }
+            }
+            if !candidates.is_empty() {
+                let pick = rng.random_range(0..candidates.len());
+                let (ix, iy, score, z) = candidates[pick];
+                best_score = score;
+                best_pos   = Some((ix, iy));
+                best_z     = z;
             }
 
             if best_score < 0.3 {
@@ -421,6 +433,38 @@ mod tests {
         let pts = bresenham(0, 0, 4, 3);
         assert!(pts.contains(&(0, 0)), "start not in bresenham output");
         assert!(pts.contains(&(4, 3)), "end not in bresenham output");
+    }
+
+    #[test]
+    fn settlements_are_not_on_perfect_grid() {
+        // With random jitter, settlements should NOT all land at GRID_CELL-aligned positions.
+        let map = generate_map(99, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 99);
+        assert!(!settlements.is_empty());
+        // Check that at least one settlement's tile coordinates are not exact cell-center multiples.
+        let has_jitter = settlements.iter().any(|s| {
+            let cell_x = (s.x as usize) / GRID_CELL;
+            let cell_y = (s.y as usize) / GRID_CELL;
+            // A perfectly grid-aligned settlement would be at cell_x*GRID_CELL + GRID_CELL/2.
+            let grid_cx = (cell_x * GRID_CELL + GRID_CELL / 2) as f32;
+            let grid_cy = (cell_y * GRID_CELL + GRID_CELL / 2) as f32;
+            (s.x - grid_cx).abs() > 1.0 || (s.y - grid_cy).abs() > 1.0
+        });
+        assert!(has_jitter, "all settlements are on perfect grid positions — jitter not working");
+    }
+
+    #[test]
+    fn settlements_within_expected_density() {
+        // With GRID_CELL=64 and MIN_SETTLEMENT_DIST=60 we expect far fewer settlements
+        // than the old configuration (GRID_CELL=32, MIN_SETTLEMENT_DIST=30).
+        // Upper bound: at most cells_x * cells_y = (MAP_WIDTH/64)^2.
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 42);
+        let max_cells = (MAP_WIDTH / GRID_CELL) * (MAP_HEIGHT / GRID_CELL);
+        assert!(
+            settlements.len() <= max_cells,
+            "too many settlements: {} > max cells {}", settlements.len(), max_cells
+        );
     }
 
 }

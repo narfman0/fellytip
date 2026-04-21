@@ -18,7 +18,7 @@ pub use camera::OrbitCameraPlugin;
 pub use character_animation::CharacterAnimationPlugin;
 pub use debug_console::{DebugConsole, DebugConsolePlugin};
 pub use entity_renderer::EntityRendererPlugin;
-pub use hud::HudPlugin;
+pub use hud::{CharScreen, HudPlugin};
 pub use map::{MapPlugin, MapWindow};
 pub use pause_menu::PauseMenuPlugin;
 pub use scene_decoration::SceneDecorationPlugin;

@@ -21,6 +21,7 @@ use fellytip_shared::{
 };
 
 use crate::{LocalPlayer, PredictedPosition};
+use crate::plugins::camera::OrbitCamera;
 use crate::plugins::debug_console::DebugConsole;
 use crate::plugins::pause_menu::PauseMenu;
 
@@ -372,10 +373,12 @@ fn nearest_within(pos: Vec2, settlements: &Settlements, radius: f32) -> Option<&
 
 /// Always-visible minimap anchored top-right showing terrain around the player,
 /// settlement dots, facing direction arrow, coordinates, and nearby town name.
+/// The map rotates so the player's forward direction is always at the top.
 fn draw_minimap(
     mut ctx: EguiContexts,
     tex: Res<TerrainTex>,
-    player_q: Query<(&PredictedPosition, Option<&Transform>), With<LocalPlayer>>,
+    player_q: Query<&PredictedPosition, With<LocalPlayer>>,
+    camera_q: Query<&OrbitCamera>,
     settlements: Option<Res<Settlements>>,
     console: Option<Res<DebugConsole>>,
     pause_menu: Option<Res<PauseMenu>>,
@@ -385,29 +388,25 @@ fn draw_minimap(
         return Ok(());
     }
     let Some(terrain_id) = tex.0 else { return Ok(()) };
-    let Ok((pos, transform)) = player_q.single() else { return Ok(()) };
+    let Ok(pos) = player_q.single() else { return Ok(()) };
 
     let px = pos.x;
     let py = pos.y;
 
+    // Camera yaw: 0 = looking from +Z, increases CCW. Forward in world = (-sin_yaw, -cos_yaw).
+    let yaw = camera_q.iter().next().map(|c| c.yaw).unwrap_or(0.0);
+    let (sin_yaw, cos_yaw) = yaw.sin_cos();
+
+    // Converts a world-space offset (dx, dy) from the player to canvas-space delta,
+    // rotating so the player's forward direction points to canvas "up".
+    let world_to_canvas = |dx: f32, dy: f32| -> egui::Vec2 {
+        let cx = (-dx * cos_yaw + dy * sin_yaw) * MINI_ZOOM;
+        let cy = (dx * sin_yaw + dy * cos_yaw) * MINI_ZOOM;
+        egui::vec2(cx, cy)
+    };
+
     // Visible world radius from canvas centre to edge.
     let vis_radius = (MINI_CANVAS / 2.0) / MINI_ZOOM;
-
-    // UV centre in the Y-flipped terrain texture (V=0 = north = high Y).
-    let center_u = (px + MAP_W / 2.0) / MAP_W;
-    let center_v = (MAP_H / 2.0 - py) / MAP_H;
-    let half_u = vis_radius / MAP_W;
-    let half_v = vis_radius / MAP_H;
-    let uv = egui::Rect::from_min_max(
-        egui::pos2(
-            (center_u - half_u).clamp(0.0, 1.0),
-            (center_v - half_v).clamp(0.0, 1.0),
-        ),
-        egui::pos2(
-            (center_u + half_u).clamp(0.0, 1.0),
-            (center_v + half_v).clamp(0.0, 1.0),
-        ),
-    );
 
     egui::Window::new("##minimap")
         .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
@@ -419,13 +418,41 @@ fn draw_minimap(
             let rect = resp.rect;
             let center = rect.center();
 
-            // Dark fill behind the terrain (visible if clamped UVs cut off).
+            // Dark fill behind terrain.
             painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(8, 8, 16));
 
-            // Terrain image clipped to player vicinity.
-            painter.image(terrain_id, rect, uv, egui::Color32::WHITE);
+            // Terrain rendered as a rotated quad mesh so it follows the camera yaw.
+            // For each canvas corner, compute the world position and then its UV.
+            {
+                let half = MINI_CANVAS / 2.0;
+                let corners: [(f32, f32); 4] = [
+                    (-half, -half), // TL
+                    ( half, -half), // TR
+                    ( half,  half), // BR
+                    (-half,  half), // BL
+                ];
+                let mut mesh = egui::epaint::Mesh::with_texture(terrain_id);
+                for (cpx, cpy) in corners {
+                    // Canvas delta → world delta (inverse rotation by yaw+π).
+                    let cdx = cpx / MINI_ZOOM;
+                    let cdy = -cpy / MINI_ZOOM;
+                    let world_dx = -cdx * cos_yaw - cdy * sin_yaw;
+                    let world_dy = cdx * sin_yaw - cdy * cos_yaw;
+                    let wx = px + world_dx;
+                    let wy = py + world_dy;
+                    let u = ((wx + MAP_W / 2.0) / MAP_W).clamp(0.0, 1.0);
+                    let v = ((MAP_H / 2.0 - wy) / MAP_H).clamp(0.0, 1.0);
+                    mesh.vertices.push(egui::epaint::Vertex {
+                        pos: center + egui::vec2(cpx, cpy),
+                        uv: egui::pos2(u, v),
+                        color: egui::Color32::WHITE,
+                    });
+                }
+                mesh.indices = vec![0, 1, 2, 0, 2, 3];
+                painter.add(egui::Shape::Mesh(mesh.into()));
+            }
 
-            // Settlement dots within the visible radius.
+            // Settlement dots rotated to match minimap orientation.
             if let Some(ref setts) = settlements {
                 for s in &setts.0 {
                     let wx = s.x - MAP_W / 2.0;
@@ -435,10 +462,8 @@ fn draw_minimap(
                     if dx.abs() > vis_radius * 1.5 || dy.abs() > vis_radius * 1.5 {
                         continue;
                     }
-                    let sp = egui::pos2(
-                        center.x + dx * MINI_ZOOM,
-                        center.y - dy * MINI_ZOOM,
-                    );
+                    let cdelta = world_to_canvas(dx, dy);
+                    let sp = center + cdelta;
                     if !rect.contains(sp) {
                         continue;
                     }
@@ -455,22 +480,23 @@ fn draw_minimap(
             painter.circle_filled(center, 5.0, egui::Color32::from_rgb(255, 60, 60));
             painter.circle_stroke(center, 5.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
 
-            // Facing direction arrow derived from Transform rotation (skipped until GLB loads).
-            if let Some(t) = transform {
-                let fwd = t.rotation * Vec3::NEG_Z;
-                let dir = Vec2::new(fwd.x, fwd.y);
-                if dir.length_squared() > 0.01 {
-                    let dir_norm = dir.normalize();
-                    let arrow_end = egui::pos2(
-                        center.x + dir_norm.x * 12.0,
-                        center.y - dir_norm.y * 12.0,
-                    );
-                    painter.line_segment(
-                        [center, arrow_end],
-                        egui::Stroke::new(2.0, egui::Color32::WHITE),
-                    );
-                }
-            }
+            // Forward arrow always points up since the map rotates with the player.
+            let arrow_end = center - egui::vec2(0.0, 12.0);
+            painter.line_segment(
+                [center, arrow_end],
+                egui::Stroke::new(2.0, egui::Color32::WHITE),
+            );
+
+            // North indicator: small "N" label at the top of the rotated map.
+            // Rotated north direction on canvas.
+            let north_canvas = world_to_canvas(0.0, 1.0).normalized() * (MINI_CANVAS / 2.0 - 8.0);
+            painter.text(
+                center + north_canvas,
+                egui::Align2::CENTER_CENTER,
+                "N",
+                egui::FontId::proportional(10.0),
+                egui::Color32::from_rgb(200, 200, 255),
+            );
 
             // Minimap border.
             painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 80, 80)), egui::StrokeKind::Inside);

@@ -2,9 +2,9 @@
 //!
 //! Panels:
 //!   - Bottom-left: player health bar + XP progress.
-//!   - Top-left: faction reputation standings.
-//!   - Top-right: battle log.
+//!   - Top-left: battle log.
 //!   - Bottom-right: world story event feed.
+//!   - 'C' key: character screen overlay with detailed stats and faction standings.
 //!
 //! Only added in windowed mode; headless builds skip this plugin entirely.
 
@@ -16,17 +16,27 @@ use fellytip_shared::{
 };
 use crate::LocalPlayer;
 use crate::plugins::battle::{BattleLog, ClientStoryLog};
+use crate::plugins::debug_console::DebugConsole;
+use crate::plugins::pause_menu::PauseMenu;
 
 type LocalPlayerQuery<'w, 's> =
     Query<'w, 's, (&'static Health, &'static Experience, Option<&'static PlayerStandings>), With<LocalPlayer>>;
+
+/// Resource tracking whether the character screen is open.
+#[derive(Resource, Default)]
+pub struct CharScreen {
+    pub open: bool,
+}
 
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
+            .init_resource::<CharScreen>()
             .add_systems(PostStartup, ensure_primary_egui_context)
-            .add_systems(EguiPrimaryContextPass, (draw_hud, draw_standings, draw_battle_log, draw_story_log));
+            .add_systems(Update, toggle_char_screen)
+            .add_systems(EguiPrimaryContextPass, (draw_hud, draw_char_screen, draw_battle_log, draw_story_log));
     }
 }
 
@@ -37,6 +47,20 @@ fn ensure_primary_egui_context(
 ) {
     for entity in &cameras {
         commands.entity(entity).insert(PrimaryEguiContext);
+    }
+}
+
+fn toggle_char_screen(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut char_screen: ResMut<CharScreen>,
+    console: Option<Res<DebugConsole>>,
+    pause_menu: Option<Res<PauseMenu>>,
+) {
+    if console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open) {
+        return;
+    }
+    if keyboard.just_pressed(KeyCode::KeyC) {
+        char_screen.open = !char_screen.open;
     }
 }
 
@@ -61,9 +85,9 @@ fn draw_hud(
                         egui::ProgressBar::new(hp_frac)
                             .fill(egui::Color32::from_rgb(200, 50, 50)),
                     );
-                    ui.label(format!("Lv {}   {}/{} XP", exp.level, exp.xp, exp.xp_to_next));
                     let xp_frac =
                         (exp.xp as f32 / exp.xp_to_next.max(1) as f32).clamp(0.0, 1.0);
+                    ui.label(format!("XP  {}/{}", exp.xp, exp.xp_to_next));
                     ui.add(
                         egui::ProgressBar::new(xp_frac)
                             .fill(egui::Color32::from_rgb(50, 100, 200)),
@@ -77,25 +101,59 @@ fn draw_hud(
     Ok(())
 }
 
-/// Draw per-faction reputation standings (top-left).
-fn draw_standings(
+/// Draw the character screen overlay when 'C' is pressed.
+fn draw_char_screen(
     mut ctx: EguiContexts,
-    player_q: Query<&PlayerStandings, With<LocalPlayer>>,
+    player_q: LocalPlayerQuery,
+    mut char_screen: ResMut<CharScreen>,
 ) -> Result {
-    let Ok(standings) = player_q.single() else { return Ok(()) };
-    if standings.standings.is_empty() {
+    if !char_screen.open {
         return Ok(());
     }
-    egui::Window::new("Faction Standing")
-        .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
+    let mut open = char_screen.open;
+    egui::Window::new("Character")
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .resizable(false)
+        .open(&mut open)
         .show(ctx.ctx_mut()?, |ui| {
-            for (faction, score) in &standings.standings {
-                let tier = standing_tier(*score);
-                let color = tier_color(tier);
-                ui.colored_label(color, format!("{faction}: {score:+} ({tier:?})"));
+            match player_q.single() {
+                Ok((health, exp, standings_opt)) => {
+                    ui.heading(format!("Level {}", exp.level));
+                    ui.separator();
+
+                    egui::Grid::new("char_stats").num_columns(2).spacing([20.0, 4.0]).show(ui, |ui| {
+                        ui.label("Health:");
+                        ui.label(format!("{}/{}", health.current, health.max));
+                        ui.end_row();
+                        ui.label("Experience:");
+                        ui.label(format!("{}/{}", exp.xp, exp.xp_to_next));
+                        ui.end_row();
+                    });
+
+                    ui.separator();
+                    ui.heading("Faction Standing");
+                    ui.separator();
+
+                    if let Some(standings) = standings_opt {
+                        if standings.standings.is_empty() {
+                            ui.label("No known factions.");
+                        } else {
+                            for (faction, score) in &standings.standings {
+                                let tier = standing_tier(*score);
+                                let color = tier_color(tier);
+                                ui.colored_label(color, format!("{faction}: {score:+} ({tier:?})"));
+                            }
+                        }
+                    } else {
+                        ui.label("No faction data.");
+                    }
+                }
+                Err(_) => {
+                    ui.label("Connecting…");
+                }
             }
         });
+    char_screen.open = open;
     Ok(())
 }
 
@@ -109,13 +167,13 @@ fn tier_color(tier: fellytip_shared::world::faction::StandingTier) -> egui::Colo
     }
 }
 
-/// Draw the battle log panel (top-right).
+/// Draw the battle log panel (top-left).
 fn draw_battle_log(
     mut ctx: EguiContexts,
     log: Res<BattleLog>,
 ) -> Result {
     egui::Window::new("Battle Log")
-        .anchor(egui::Align2::LEFT_TOP, [10.0, 180.0])
+        .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
         .resizable(false)
         .show(ctx.ctx_mut()?, |ui| {
             let entries = log.entries.iter().rev().take(20);

@@ -231,6 +231,7 @@ fn spawn_settlement_markers(settlements: Res<Settlements>, mut commands: Command
                 z: settlement.z,
             },
             EntityKind::Settlement,
+            settlement.kind,
         ));
         tracing::debug!(name = %settlement.name, "Settlement marker spawned");
     }

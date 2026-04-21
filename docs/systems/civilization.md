@@ -17,9 +17,9 @@ A settlement has a kind, a world-space position, a name, and a stable UUID. The 
 
 ### Surface placement — Poisson-disk grid approximation
 
-The map is divided into fixed-size cells. Within each cell, the most habitable walkable tile is identified as a candidate. A candidate is accepted only if no existing settlement lies within the minimum spacing distance. This produces spacing similar to Poisson-disk sampling without the rejection-loop cost.
+The map is divided into fixed-size cells (`GRID_CELL = 64` tiles). Within each cell, the algorithm collects all walkable tiles with habitability ≥ 0.6 and picks one at random (using the seeded RNG) to break the visual grid pattern. If no high-habitability tile exists, it falls back to the best available tile. A candidate is accepted only if no existing settlement lies within `MIN_SETTLEMENT_DIST = 60` tiles.
 
-Habitability scores per biome are defined in the `habitability()` function in `civilization.rs`. Cells whose best tile falls below the minimum habitability threshold produce no settlement.
+Habitability scores per biome are defined in the `habitability()` function in `civilization.rs`. Cells whose best tile falls below the minimum habitability threshold (0.3) produce no settlement.
 
 ## Territory assignment
 
