@@ -6,10 +6,10 @@ use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
 use fellytip_server::{plugins::combat::LocalPlayerInput, ServerGamePlugin};
 use fellytip_shared::{
     PLAYER_SPEED, WORLD_SEED,
-    components::{Experience, WorldPosition},
+    components::{EntityBounds, Experience, WorldPosition},
     inputs::ActionIntent,
     protocol::FellytipProtocolPlugin,
-    world::map::{is_walkable_at, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT},
+    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT},
 };
 use plugins::camera::OrbitCamera;
 
@@ -159,6 +159,7 @@ fn tag_local_player(
     commands.entity(entity).insert((
         LocalPlayer,
         PredictedPosition { x: pos.x, y: pos.y, z: pos.z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
+        EntityBounds::PLAYER,
     ));
     tracing::debug!("Tagged local player entity {entity:?}");
 }
@@ -192,7 +193,7 @@ fn sync_pred_to_world(
 fn send_player_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     camera_q: Query<&OrbitCamera>,
-    mut pred_q: Query<&mut PredictedPosition, With<LocalPlayer>>,
+    mut pred_q: Query<(&mut PredictedPosition, &EntityBounds), With<LocalPlayer>>,
     map: Option<Res<WorldMap>>,
     time: Res<Time>,
     console: Option<Res<plugins::DebugConsole>>,
@@ -225,7 +226,8 @@ fn send_player_input(
     let world_dx =  cos_yaw * raw_x - sin_yaw * raw_y;
     let world_dy = -sin_yaw * raw_x - cos_yaw * raw_y;
 
-    if let Ok(mut pred) = pred_q.single_mut() {
+    if let Ok((mut pred, bounds)) = pred_q.single_mut() {
+        let bounds = *bounds;
         let dt = time.delta_secs();
 
         // ── Jump ─────────────────────────────────────────────────────────────
@@ -251,9 +253,9 @@ fn send_player_input(
 
         if let Some(ref m) = map {
             // Allow movement into water tiles so the player can swim.
-            let can_xy = is_walkable_at(m, new_x, new_y, pred.z) || is_water_at(m, new_x, new_y);
-            let can_x  = is_walkable_at(m, new_x, pred.y, pred.z) || is_water_at(m, new_x, pred.y);
-            let can_y  = is_walkable_at(m, pred.x, new_y, pred.z) || is_water_at(m, pred.x, new_y);
+            let can_xy = is_passable_with_bounds(m, new_x, new_y, pred.z, bounds) || is_water_at(m, new_x, new_y);
+            let can_x  = is_passable_with_bounds(m, new_x, pred.y, pred.z, bounds) || is_water_at(m, new_x, pred.y);
+            let can_y  = is_passable_with_bounds(m, pred.x, new_y, pred.z, bounds) || is_water_at(m, pred.x, new_y);
             if      can_xy { pred.x = new_x; pred.y = new_y; }
             else if can_x  { pred.x = new_x; }
             else if can_y  { pred.y = new_y; }

@@ -45,7 +45,7 @@ pub struct CurrentGoal(#[allow(dead_code)] pub Option<FactionGoal>);
 
 /// Server-only component: home position used for bounded wander / future pathfinding.
 #[derive(Component)]
-pub struct HomePosition(#[allow(dead_code)] pub WorldPosition);
+pub struct HomePosition(pub WorldPosition);
 
 /// Server-only component: NPC rank for kill-penalty calculation.
 #[derive(Component, Reflect)]
@@ -155,24 +155,46 @@ fn update_faction_goals(mut registry: ResMut<FactionRegistry>) {
     }
 }
 
-/// Faction NPCs are stationary for now; real pathfinding comes later.
-///
-/// NPCs in Frozen chunks (no client has them in Hot or Warm zone) are skipped
-/// to avoid wasting simulation budget on unobserved entities.
+/// Move faction NPCs a small amount per tick using deterministic bounded wandering.
+/// War party members are excluded — they march under `march_war_parties` instead.
+/// NPCs in Frozen chunks are skipped to avoid wasting simulation budget.
+#[allow(clippy::type_complexity)]
 fn wander_npcs(
-    query: Query<(&WorldPosition,), With<FactionMember>>,
-    temp:  Res<ChunkTemperature>,
+    mut query: Query<(Entity, &mut WorldPosition, &HomePosition), (With<FactionMember>, Without<WarPartyMember>)>,
+    temp: Res<ChunkTemperature>,
+    tick: Res<WorldSimTick>,
 ) {
-    for (pos,) in &query {
+    for (entity, mut pos, home) in &mut query {
         let tile_x = (pos.x + MAP_HALF_WIDTH as f32) as i32;
         let tile_y = (pos.y + MAP_HALF_HEIGHT as f32) as i32;
-        let chunk  = (tile_x.max(0) / CHUNK_TILES as i32, tile_y.max(0) / CHUNK_TILES as i32);
+        let chunk = (tile_x.max(0) / CHUNK_TILES as i32, tile_y.max(0) / CHUNK_TILES as i32);
 
         if !temp.is_active(chunk) {
             continue; // Frozen — skip simulation
         }
 
-        // Intentionally idle — real pathfinding will go here.
+        let zone_speed = temp.zone_speed(chunk);
+
+        // Slowly-rotating deterministic angle, unique per entity.
+        // entity.to_bits() cast to f32 is intentionally lossy — we only need rough variation.
+        #[allow(clippy::cast_precision_loss)]
+        let entity_seed = entity.to_bits() as f32 * 0.000001;
+        #[allow(clippy::cast_precision_loss)]
+        let angle = (entity_seed + tick.0 as f32 * 0.05).sin() * std::f32::consts::TAU;
+        let step = 0.15 * zone_speed;
+
+        // Townspeople stay within 4 tiles of their home settlement.
+        let home_dx = home.0.x - pos.x;
+        let home_dy = home.0.y - pos.y;
+        let dist_sq = home_dx * home_dx + home_dy * home_dy;
+        if dist_sq > 4.0f32.powi(2) {
+            let dist = dist_sq.sqrt();
+            pos.x += (home_dx / dist) * 0.1 * zone_speed;
+            pos.y += (home_dy / dist) * 0.1 * zone_speed;
+        } else {
+            pos.x += angle.cos() * step;
+            pos.y += angle.sin() * step;
+        }
     }
 }
 

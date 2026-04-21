@@ -8,7 +8,7 @@
 
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
-use crate::components::{EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
+use crate::components::{EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -73,6 +73,7 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<GrowthStage>();
         app.register_type::<FactionBadge>();
         app.register_type::<PlayerStandings>();
+        app.register_type::<EntityBounds>();
         app.register_type::<GameEntityId>();
         // Messages are registered by the plugins that emit them (StoryPlugin, AiPlugin).
         // MULTIPLAYER: add_channel / register_message / register_component calls here.

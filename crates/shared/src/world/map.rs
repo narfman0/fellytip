@@ -286,6 +286,54 @@ pub fn is_walkable_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> bool {
     smooth_surface_at(map, x, y, current_z).is_some()
 }
 
+/// Returns `true` if an entity whose floor is at `entity_z` can pass through
+/// `col` horizontally.
+///
+/// Passage is allowed when:
+/// 1. A walkable surface exists reachable from `entity_z` (normal ground movement).
+/// 2. `entity_z` is at or above the highest layer top in the column (aerial clearance).
+///    Void columns (no layers) are always impassable.
+fn column_is_clear(col: &TileColumn, entity_z: f32) -> bool {
+    if col.surface_layer(entity_z, STEP_HEIGHT).is_some() {
+        return true;
+    }
+    let max_z_top = col.layers.iter().map(|l| l.z_top).fold(f32::NEG_INFINITY, f32::max);
+    if max_z_top == f32::NEG_INFINITY {
+        return false; // void column
+    }
+    // Strict greater-than: entity must be meaningfully above the obstacle top.
+    // At exactly z_top the entity is at the obstacle surface, not above it.
+    entity_z > max_z_top
+}
+
+/// Passability check with an entity bounding box.
+///
+/// Checks all four corners of the entity's footprint at `(cx, cy)`. A corner
+/// that falls outside the map boundary is treated as impassable.
+///
+/// Replaces [`is_walkable_at`] in the movement loop. Passing
+/// [`crate::components::EntityBounds::POINT`] reproduces the legacy
+/// single-point behaviour exactly.
+pub fn is_passable_with_bounds(
+    map: &WorldMap,
+    cx: f32,
+    cy: f32,
+    entity_z: f32,
+    bounds: crate::components::EntityBounds,
+) -> bool {
+    for (dx, dy) in bounds.corners() {
+        match map.column_at(cx + dx, cy + dy) {
+            None => return false,
+            Some(col) => {
+                if !column_is_clear(col, entity_z) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Returns `true` if the tile at `(x, y)` is a Water or River tile.
 ///
 /// Unlike [`is_walkable_at`], this ignores walkability — Water/River tiles
@@ -1020,6 +1068,93 @@ mod tests {
                 .filter(|&&(nx, ny)| is_walkable_at(&map, nx, ny, z))
                 .count();
             assert!(open >= 2, "spawn at ({x},{y}) must have >= 2 open neighbours, got {open}");
+        }
+    }
+
+    #[test]
+    fn spawn_tile_passable_with_point_bounds() {
+        use crate::components::EntityBounds;
+        let map = generate_map(42, 64, 64);
+        let (sx, sy, sz) = find_surface_spawn(&map);
+        assert!(
+            is_passable_with_bounds(&map, sx, sy, sz, EntityBounds::POINT),
+            "spawn tile must be passable with point bounds"
+        );
+    }
+
+    #[test]
+    fn mountain_tile_blocked_below_peak() {
+        use crate::components::EntityBounds;
+        let map = generate_map(42, 64, 64);
+        let mountain = map.columns.iter().enumerate().find(|(_, col)| {
+            col.layers.iter().any(|l| l.kind == TileKind::Mountain)
+        });
+        if let Some((idx, col)) = mountain {
+            let ix = idx % map.width;
+            let iy = idx / map.width;
+            let x = ix as f32 - (map.width / 2) as f32 + 0.5;
+            let y = iy as f32 - (map.height / 2) as f32 + 0.5;
+            let z_top = col.layers.iter().map(|l| l.z_top).fold(f32::NEG_INFINITY, f32::max);
+            // At the mountain surface level, entity is not above it — blocked.
+            assert!(
+                !is_passable_with_bounds(&map, x, y, z_top, EntityBounds::POINT),
+                "entity at mountain z_top should still be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn entity_above_obstacle_can_pass() {
+        use crate::components::EntityBounds;
+        let map = generate_map(42, 64, 64);
+        let mountain = map.columns.iter().enumerate().find(|(_, col)| {
+            col.layers.iter().any(|l| l.kind == TileKind::Mountain)
+        });
+        if let Some((idx, col)) = mountain {
+            let ix = idx % map.width;
+            let iy = idx / map.width;
+            let x = ix as f32 - (map.width / 2) as f32 + 0.5;
+            let y = iy as f32 - (map.height / 2) as f32 + 0.5;
+            let z_top = col.layers.iter().map(|l| l.z_top).fold(f32::NEG_INFINITY, f32::max);
+            // At ground level: blocked.
+            assert!(!is_passable_with_bounds(&map, x, y, 0.0, EntityBounds::POINT));
+            // Above mountain top: clear.
+            assert!(is_passable_with_bounds(&map, x, y, z_top + 0.1, EntityBounds::POINT));
+        }
+    }
+
+    #[test]
+    fn wide_bounds_blocked_by_adjacent_obstacle() {
+        use crate::components::EntityBounds;
+        let map = generate_map(42, 64, 64);
+        'outer: for iy in 1..(map.height - 1) {
+            for ix in 1..(map.width - 1) {
+                // Find a walkable tile at its own surface z.
+                let col = map.column(ix, iy);
+                let surface_z = match col.layers.iter().filter(|l| l.walkable).map(|l| l.z_top).reduce(f32::max) {
+                    Some(z) => z,
+                    None => continue,
+                };
+                // Find a non-walkable right neighbour whose max z_top >= surface_z
+                // (so aerial clearance does NOT apply when entity is at surface_z).
+                let right = map.column(ix + 1, iy);
+                let right_max_z = right.layers.iter().map(|l| l.z_top).fold(f32::NEG_INFINITY, f32::max);
+                if right_max_z < surface_z { continue; } // aerial clearance would wrongly allow passage
+                if right.surface_layer(surface_z, STEP_HEIGHT).is_some() { continue; } // right is walkable — no test
+                let cx = ix as f32 - (map.width / 2) as f32 + 0.5;
+                let cy = iy as f32 - (map.height / 2) as f32 + 0.5;
+                assert!(
+                    is_passable_with_bounds(&map, cx, cy, surface_z, EntityBounds::POINT),
+                    "point check should pass on walkable centre"
+                );
+                let wide = EntityBounds { half_w: 0.6, height: 1.8 };
+                // Shift centre right so right corners land on the obstacle tile.
+                assert!(
+                    !is_passable_with_bounds(&map, cx + 0.45, cy, surface_z, wide),
+                    "wide bounds should be blocked by adjacent obstacle"
+                );
+                break 'outer;
+            }
         }
     }
 }

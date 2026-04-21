@@ -148,6 +148,36 @@ pub struct WorldMeta {
     pub height: u32,
 }
 
+/// Axis-aligned bounding box for collision.
+///
+/// `half_w` is the horizontal radius checked in all four cardinal quadrants.
+/// `height` is the entity's vertical extent (feet to crown), reserved for
+/// ceiling-clearance checks in a future pass.
+#[derive(Component, Clone, Copy, PartialEq, Debug, Serialize, Deserialize, Reflect)]
+#[reflect(Component)]
+pub struct EntityBounds {
+    pub half_w: f32,
+    pub height: f32,
+}
+
+impl EntityBounds {
+    /// Default human-sized player bounds.
+    pub const PLAYER: Self = Self { half_w: 0.35, height: 1.8 };
+    /// Point check — identical to the old single-point `is_walkable_at` behaviour.
+    pub const POINT: Self = Self { half_w: 0.0, height: 0.0 };
+
+    /// The four corners of the footprint in (dx, dy) offsets from the entity centre.
+    #[inline]
+    pub fn corners(self) -> [(f32, f32); 4] {
+        let hw = self.half_w;
+        [(-hw, -hw), (hw, -hw), (-hw, hw), (hw, hw)]
+    }
+}
+
+impl Default for EntityBounds {
+    fn default() -> Self { Self::PLAYER }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +185,13 @@ mod tests {
     #[test]
     fn wildlife_kind_default_is_bison() {
         assert_eq!(WildlifeKind::default(), WildlifeKind::Bison);
+    }
+
+    #[test]
+    fn entity_bounds_corners_symmetric() {
+        let b = EntityBounds { half_w: 0.5, height: 1.0 };
+        let c = b.corners();
+        assert_eq!(c, [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)]);
     }
 
     #[test]
