@@ -22,7 +22,10 @@ use bevy::prelude::*;
 use fellytip_shared::{
     components::{EntityKind, WorldPosition},
     world::{
-        civilization::{assign_territories, generate_roads, generate_settlements, Settlements},
+        civilization::{
+            apply_building_tiles, assign_territories, generate_buildings, generate_roads,
+            generate_settlements, Buildings, Settlements,
+        },
         map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
     },
 };
@@ -155,6 +158,9 @@ fn generate_and_save(
     generate_roads(&mut map, &settlements);
     let road_count = map.road_tiles.iter().filter(|&&r| r).count();
     tracing::info!(road_count, "Road network stamped");
+    let buildings = generate_buildings(&settlements, &map, config.seed);
+    apply_building_tiles(&buildings, &mut map);
+    tracing::info!(count = buildings.len(), "Buildings stamped onto map");
     map.spawn_points = generate_spawn_points(&map);
     tracing::info!(count = map.spawn_points.len(), "Spawn points computed");
 
@@ -187,7 +193,8 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
                         && loaded.height == config.height
                         && !loaded.road_tiles.is_empty()
                         && !loaded.spawn_points.is_empty()
-                        && loaded.columns.len() == config.width * config.height =>
+                        && loaded.columns.len() == config.width * config.height
+                        && loaded.buildings_stamped =>
                 {
                     tracing::info!(seed = config.seed, "World map loaded from cache — skipping generation");
                     loaded
@@ -212,8 +219,16 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
     let assigned = territory.iter().filter(|t| t.is_some()).count();
     tracing::info!(assigned, "Territory tiles assigned");
 
+    // Generate buildings from the (already-stamped) map. Pure call — no map mutation
+    // here because apply_building_tiles already ran during generate_and_save and is
+    // baked into the cached .bin. If the map was just regenerated, it was also stamped
+    // there before this point.
+    let buildings = generate_buildings(&settlements, &map, config.seed);
+    tracing::info!(count = buildings.len(), "Buildings resource created");
+
     commands.insert_resource(map);
     commands.insert_resource(Settlements(settlements));
+    commands.insert_resource(Buildings(buildings));
     tracing::info!("World generation complete");
 }
 

@@ -16,14 +16,18 @@ use bevy::prelude::*;
 use fellytip_shared::{
     WORLD_SEED,
     components::{Experience, WorldMeta},
-    world::map::{generate_map, MAP_HEIGHT, MAP_WIDTH},
+    world::{
+        civilization::{
+            apply_building_tiles, generate_buildings, generate_settlements, Buildings, Settlements,
+        },
+        map::{generate_map, MAP_HEIGHT, MAP_WIDTH, WorldMap},
+    },
 };
 use manager::{
     apply_chunk_meshes, rebuild_dirty_chunks, update_chunk_visibility,
     ChunkManager, TerrainAssets,
 };
 use material::create_terrain_material;
-use fellytip_shared::world::map::WorldMap;
 
 pub struct TerrainPlugin;
 
@@ -52,12 +56,18 @@ fn setup_terrain_assets(
     // server used a different seed it will send WorldMeta and apply_world_meta
     // will regenerate with the correct values.
     tracing::info!(seed = WORLD_SEED, "Client regenerating world map for terrain rendering…");
-    let map = generate_map(WORLD_SEED, MAP_WIDTH, MAP_HEIGHT);
+    let mut map = generate_map(WORLD_SEED, MAP_WIDTH, MAP_HEIGHT);
     tracing::info!("World map ready — setting up terrain chunks");
+
+    let settlements = generate_settlements(&map, WORLD_SEED);
+    let buildings = generate_buildings(&settlements, &map, WORLD_SEED);
+    apply_building_tiles(&buildings, &mut map);
 
     let material = create_terrain_material(&mut materials);
     commands.insert_resource(TerrainAssets { material });
     commands.insert_resource(ChunkManager::default());
+    commands.insert_resource(Settlements(settlements));
+    commands.insert_resource(Buildings(buildings));
     commands.insert_resource(map);
 }
 
@@ -72,9 +82,11 @@ type ChangedWorldMeta = (With<Experience>, Changed<WorldMeta>);
 /// without needing `LocalPlayer` to be tagged yet, since `WorldMeta` may arrive
 /// on the same frame as the first `Experience` replication.
 fn apply_world_meta(
-    query:    Query<&WorldMeta, ChangedWorldMeta>,
-    mut map:  ResMut<WorldMap>,
-    mut mgr:  ResMut<ChunkManager>,
+    query:        Query<&WorldMeta, ChangedWorldMeta>,
+    mut map:      ResMut<WorldMap>,
+    mut mgr:      ResMut<ChunkManager>,
+    mut settlements: ResMut<Settlements>,
+    mut buildings:   ResMut<Buildings>,
 ) {
     let Some(meta) = query.iter().next() else { return };
 
@@ -89,7 +101,14 @@ fn apply_world_meta(
         seed = meta.seed, width = meta.width, height = meta.height,
         "WorldMeta received — regenerating terrain to match server seed"
     );
-    *map = generate_map(meta.seed, meta.width as usize, meta.height as usize);
+    let mut new_map = generate_map(meta.seed, meta.width as usize, meta.height as usize);
+    let new_settlements = generate_settlements(&new_map, meta.seed);
+    let new_buildings = generate_buildings(&new_settlements, &new_map, meta.seed);
+    apply_building_tiles(&new_buildings, &mut new_map);
+
+    *map = new_map;
+    *settlements = Settlements(new_settlements);
+    *buildings = Buildings(new_buildings);
 
     // Reset chunk manager so all chunks are rebuilt from the new map data.
     mgr.lod_cache.clear();

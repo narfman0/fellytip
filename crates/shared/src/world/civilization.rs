@@ -1,12 +1,15 @@
-//! Civilizations: settlements, territory, and road networks.
+//! Civilizations: settlements, territory, road networks, and building layouts.
 //!
 //! All functions are pure (no ECS) and deterministic given a seed.
 //! Call order expected by the server:
 //! ```text
-//! let map      = generate_map(seed);
-//! let civs     = generate_settlements(&map, seed);
+//! let map        = generate_map(seed);
+//! let civs       = generate_settlements(&map, seed);
 //! assign_territories(&map, &civs);
 //! generate_roads(&mut map, &civs);
+//! let buildings  = generate_buildings(&civs, &map, seed);
+//! apply_building_tiles(&buildings, &mut map);   // marks tiles non-walkable
+//! map.spawn_points = generate_spawn_points(&map); // must run AFTER apply_building_tiles
 //! ```
 
 use std::collections::VecDeque;
@@ -45,6 +48,43 @@ pub struct Settlement {
 /// Bevy resource holding all generated settlements.
 #[derive(Resource, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Settlements(pub Vec<Settlement>);
+
+// ── Building types ─────────────────────────────────────────────────────────────
+
+/// Visual/semantic category for a procedurally-placed settlement building.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Reflect)]
+pub enum BuildingKind {
+    TentDetailed,   // nature/tent_detailedClosed.glb  — town camps
+    TentSmall,      // nature/tent_smallClosed.glb      — town camps
+    CampfireStones, // nature/campfire_stones.glb       — town center
+    Windmill,       // town/windmill.glb                — capital landmark
+    Stall,          // town/stall.glb                   — capital market (plain)
+    StallBench,     // town/stall-bench.glb             — capital market (with bench)
+    StallGreen,     // town/stall-green.glb             — capital market
+    StallRed,       // town/stall-red.glb               — capital market
+    Fountain,       // town/fountain-round.glb          — capital center
+    Lantern,        // town/lantern.glb                 — capital street lighting
+}
+
+/// A single procedurally-placed building belonging to a settlement.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Building {
+    pub id: Uuid,
+    pub settlement_id: Uuid,
+    pub kind: BuildingKind,
+    /// Tile-space X (same convention as `Settlement.x`: range 0..MAP_WIDTH).
+    pub tx: u32,
+    /// Tile-space Y.
+    pub ty: u32,
+    /// World-space Z elevation (tile surface height at this position).
+    pub z: f32,
+    /// Rotation in 90-degree increments (0–3 maps to 0°, 90°, 180°, 270°).
+    pub rotation: u8,
+}
+
+/// Bevy resource holding all procedurally generated buildings.
+#[derive(Resource, Default, Clone, Debug, Serialize, Deserialize)]
+pub struct Buildings(pub Vec<Building>);
 
 /// Territory map: one optional settlement-index per tile column (flat row-major).
 ///
@@ -288,6 +328,210 @@ pub fn generate_roads(map: &mut WorldMap, settlements: &[Settlement]) {
     }
 }
 
+// ── Building generation ────────────────────────────────────────────────────────
+
+/// RNG seed offset so building placement doesn't produce the same stream as
+/// settlement placement (which also uses the raw `seed`).
+const BUILDING_SEED_OFFSET: u64 = 0xB411_D1A0;
+
+/// Town buildings: camp-style structures around a central campfire.
+const TOWN_CENTER: BuildingKind = BuildingKind::CampfireStones;
+const TOWN_POOL: &[BuildingKind] = &[
+    BuildingKind::TentDetailed,
+    BuildingKind::TentSmall,
+    BuildingKind::TentDetailed,  // weight detailed tents slightly higher
+];
+/// Capital buildings: civic and market structures.  Fountain is always placed
+/// at the center; lanterns fill outer rings as street lighting.
+const CAPITAL_CENTER: BuildingKind = BuildingKind::Fountain;
+const CAPITAL_POOL: &[BuildingKind] = &[
+    BuildingKind::Windmill,
+    BuildingKind::StallGreen,
+    BuildingKind::StallRed,
+    BuildingKind::Stall,
+    BuildingKind::StallBench,
+    BuildingKind::Lantern,
+    BuildingKind::TentSmall,
+];
+
+/// Ring radii (in tiles) used when placing Town buildings.
+const TOWN_RADII: &[u32] = &[2, 3, 4];
+/// Ring radii (in tiles) used when placing Capital buildings (excluding the
+/// center fountain which is placed at the settlement tile itself).
+const CAPITAL_RADII: &[u32] = &[2, 3, 4, 5, 6];
+
+/// Pure, deterministic building layout for all settlements.
+///
+/// Does **not** mutate the map; call [`apply_building_tiles`] afterwards to
+/// mark occupied tiles as impassable.
+pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64) -> Vec<Building> {
+    use rand::{RngExt, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+    use std::collections::HashSet;
+    use std::f32::consts::TAU;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(BUILDING_SEED_OFFSET));
+    let mut all: Vec<Building> = Vec::new();
+
+    for settlement in settlements {
+        let cx = settlement.x as u32;
+        let cy = settlement.y as u32;
+
+        // Track occupied tiles across this settlement to prevent overlap.
+        let mut occupied: HashSet<(u32, u32)> = HashSet::new();
+        // Reserve the settlement center tile.
+        occupied.insert((cx, cy));
+
+        match settlement.kind {
+            SettlementKind::Capital => {
+                // Always place a fountain at the exact center.
+                if is_tile_buildable(map, cx, cy) {
+                    all.push(make_building(
+                        &mut rng,
+                        settlement.id,
+                        CAPITAL_CENTER,
+                        cx, cy,
+                        map,
+                    ));
+                }
+
+                let count = 7 + (rng.random::<u32>() % 6) as usize; // 7–12
+                place_ring_buildings(
+                    &mut rng,
+                    &mut all,
+                    &mut occupied,
+                    settlement,
+                    map,
+                    CAPITAL_POOL,
+                    CAPITAL_RADII,
+                    count,
+                );
+            }
+
+            SettlementKind::Town => {
+                // Always place a campfire at the center.
+                if is_tile_buildable(map, cx, cy) {
+                    all.push(make_building(&mut rng, settlement.id, TOWN_CENTER, cx, cy, map));
+                }
+
+                let count = 3 + (rng.random::<u32>() % 3) as usize; // 3–5
+                place_ring_buildings(
+                    &mut rng,
+                    &mut all,
+                    &mut occupied,
+                    settlement,
+                    map,
+                    TOWN_POOL,
+                    TOWN_RADII,
+                    count,
+                );
+            }
+        }
+
+        // Suppress unused import warning from TAU if loop body doesn't use it.
+        let _ = TAU;
+    }
+
+    all
+}
+
+/// Place up to `count` buildings in concentric rings around the settlement center.
+#[allow(clippy::too_many_arguments)]
+fn place_ring_buildings(
+    rng: &mut impl rand::RngExt,
+    output: &mut Vec<Building>,
+    occupied: &mut std::collections::HashSet<(u32, u32)>,
+    settlement: &Settlement,
+    map: &WorldMap,
+    pool: &[BuildingKind],
+    radii: &[u32],
+    count: usize,
+) {
+    use std::f32::consts::TAU;
+
+    let cx = settlement.x as u32;
+    let cy = settlement.y as u32;
+
+    // Generate all candidate positions in the rings, then shuffle and pick.
+    let mut candidates: Vec<(u32, u32)> = Vec::new();
+    for &r in radii {
+        let steps = (r * 8).max(8) as usize; // ~8 positions per unit radius
+        for step in 0..steps {
+            let angle = TAU * step as f32 / steps as f32;
+            let tx = cx as i32 + (r as f32 * angle.cos()).round() as i32;
+            let ty = cy as i32 + (r as f32 * angle.sin()).round() as i32;
+            if tx >= 0 && ty >= 0 {
+                candidates.push((tx as u32, ty as u32));
+            }
+        }
+    }
+
+    // Fisher-Yates shuffle.
+    for i in (1..candidates.len()).rev() {
+        let j = (rng.random::<u32>() as usize) % (i + 1);
+        candidates.swap(i, j);
+    }
+
+    let mut placed = 0usize;
+    let mut pool_idx = 0usize;
+    for (tx, ty) in candidates {
+        if placed >= count { break; }
+        if occupied.contains(&(tx, ty)) { continue; }
+        if !is_tile_buildable(map, tx, ty) { continue; }
+        occupied.insert((tx, ty));
+        let kind = pool[pool_idx % pool.len()];
+        pool_idx += 1;
+        output.push(make_building(rng, settlement.id, kind, tx, ty, map));
+        placed += 1;
+    }
+}
+
+/// Returns `true` if tile `(tx, ty)` exists and has a walkable surface layer.
+fn is_tile_buildable(map: &WorldMap, tx: u32, ty: u32) -> bool {
+    if tx as usize >= map.width || ty as usize >= map.height { return false; }
+    let col = map.column(tx as usize, ty as usize);
+    col.layers.iter().any(|l| l.is_surface_kind() && l.walkable)
+}
+
+/// Construct a [`Building`] at the given tile position, sampling the surface Z.
+fn make_building(
+    rng: &mut impl rand::RngExt,
+    settlement_id: Uuid,
+    kind: BuildingKind,
+    tx: u32,
+    ty: u32,
+    map: &WorldMap,
+) -> Building {
+    let z = map
+        .column(tx as usize, ty as usize)
+        .layers
+        .iter()
+        .filter(|l| l.is_surface_kind() && l.walkable)
+        .map(|l| l.z_top)
+        .fold(f32::NEG_INFINITY, f32::max);
+    Building {
+        id: deterministic_uuid(rng),
+        settlement_id,
+        kind,
+        tx,
+        ty,
+        z,
+        rotation: (rng.random::<u8>() % 4),
+    }
+}
+
+/// Mark each building's tile as non-walkable in the map so movement systems
+/// treat buildings as solid obstacles.
+///
+/// Sets `map.buildings_stamped = true` so cached `.bin` files that predate
+/// this feature are automatically invalidated and regenerated.
+pub fn apply_building_tiles(buildings: &[Building], map: &mut WorldMap) {
+    for b in buildings {
+        map.mark_impassable(b.tx as usize, b.ty as usize);
+    }
+    map.buildings_stamped = true;
+}
+
 /// Bresenham line rasteriser.  Returns all integer points from `(x0,y0)` to `(x1,y1)`.
 fn bresenham(mut x0: i32, mut y0: i32, x1: i32, y1: i32) -> Vec<(i32, i32)> {
     let mut pts = Vec::new();
@@ -465,6 +709,89 @@ mod tests {
             settlements.len() <= max_cells,
             "too many settlements: {} > max cells {}", settlements.len(), max_cells
         );
+    }
+
+    #[test]
+    fn generate_buildings_town_count_in_range() {
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 42);
+        let buildings = generate_buildings(&settlements, &map, 42);
+
+        for s in settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Town)) {
+            let count = buildings.iter().filter(|b| b.settlement_id == s.id).count();
+            // 1 campfire center + 3–5 tents = 4–6 total
+            assert!(
+                (4..=6).contains(&count),
+                "Town '{}' has {count} buildings, expected 4–6", s.name
+            );
+        }
+    }
+
+    #[test]
+    fn generate_buildings_capital_count_in_range() {
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 42);
+        let buildings = generate_buildings(&settlements, &map, 42);
+
+        for s in settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Capital)) {
+            let count = buildings.iter().filter(|b| b.settlement_id == s.id).count();
+            // +1 for the center fountain
+            assert!(
+                (8..=13).contains(&count),
+                "Capital '{}' has {count} buildings, expected 8–13", s.name
+            );
+        }
+    }
+
+    #[test]
+    fn generate_buildings_no_tile_collision() {
+        let map = generate_map(7, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 7);
+        let buildings = generate_buildings(&settlements, &map, 7);
+
+        // Per-settlement uniqueness (buildings from different settlements may
+        // overlap tiles only in extreme edge cases, but within one settlement
+        // there must be no duplicates).
+        for s in &settlements {
+            let mut seen = std::collections::HashSet::new();
+            for b in buildings.iter().filter(|b| b.settlement_id == s.id) {
+                let pos = (b.tx, b.ty);
+                assert!(
+                    seen.insert(pos),
+                    "Settlement '{}' has two buildings at tile ({}, {})", s.name, b.tx, b.ty
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generate_buildings_deterministic() {
+        let map = generate_map(13, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 13);
+        let a = generate_buildings(&settlements, &map, 13);
+        let b = generate_buildings(&settlements, &map, 13);
+        assert_eq!(a.len(), b.len(), "building count is not deterministic");
+        for (ba, bb) in a.iter().zip(b.iter()) {
+            assert_eq!(ba.tx, bb.tx);
+            assert_eq!(ba.ty, bb.ty);
+            assert_eq!(ba.kind, bb.kind);
+        }
+    }
+
+    #[test]
+    fn apply_building_tiles_marks_impassable() {
+        let map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 5);
+        let buildings = generate_buildings(&settlements, &map, 5);
+        let mut map = map;
+        apply_building_tiles(&buildings, &mut map);
+
+        assert!(map.buildings_stamped, "buildings_stamped must be true after apply");
+        for b in &buildings {
+            let col = map.column(b.tx as usize, b.ty as usize);
+            let walkable = col.layers.iter().any(|l| l.is_surface_kind() && l.walkable);
+            assert!(!walkable, "tile ({},{}) should be impassable after apply_building_tiles", b.tx, b.ty);
+        }
     }
 
 }

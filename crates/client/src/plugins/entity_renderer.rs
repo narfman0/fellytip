@@ -23,10 +23,13 @@
 //! on input) for zero-latency visual response.  Remote entity transforms still
 //! track the authoritative `WorldPosition` from replication.
 
+use std::f32::consts::FRAC_PI_2;
+
 use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
-use fellytip_shared::world::civilization::SettlementKind;
+use fellytip_shared::world::civilization::{BuildingKind, Buildings, SettlementKind};
+use fellytip_shared::world::map::{MAP_HALF_HEIGHT, MAP_HALF_WIDTH};
 
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
 
@@ -34,11 +37,12 @@ pub struct EntityRendererPlugin;
 
 impl Plugin for EntityRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_entity_assets)
+        app.add_systems(Startup, (setup_entity_assets, setup_building_assets))
             .add_systems(
                 Update,
                 (
                     spawn_entity_visuals,
+                    spawn_building_visuals,
                     apply_faction_tint,
                     sync_remote_transforms,
                     sync_growth_stage_scale,
@@ -75,6 +79,91 @@ impl EntityVisualAssets {
             "deep_tide"      => Some(self.deep_tide_mat.clone()),
             _                => None,
         }
+    }
+}
+
+// ── Building assets ───────────────────────────────────────────────────────────
+
+/// Marker component on locally-spawned building visual entities.
+#[derive(Component)]
+struct BuildingVisual;
+
+/// GLB scene handles for all [`BuildingKind`] variants.
+#[derive(Resource)]
+struct BuildingAssets {
+    tent_detailed:   Handle<Scene>,
+    tent_small:      Handle<Scene>,
+    campfire_stones: Handle<Scene>,
+    windmill:        Handle<Scene>,
+    stall:           Handle<Scene>,
+    stall_bench:     Handle<Scene>,
+    stall_green:     Handle<Scene>,
+    stall_red:       Handle<Scene>,
+    fountain:        Handle<Scene>,
+    lantern:         Handle<Scene>,
+}
+
+impl BuildingAssets {
+    fn scene_for(&self, kind: BuildingKind) -> Handle<Scene> {
+        match kind {
+            BuildingKind::TentDetailed   => self.tent_detailed.clone(),
+            BuildingKind::TentSmall      => self.tent_small.clone(),
+            BuildingKind::CampfireStones => self.campfire_stones.clone(),
+            BuildingKind::Windmill       => self.windmill.clone(),
+            BuildingKind::Stall          => self.stall.clone(),
+            BuildingKind::StallBench     => self.stall_bench.clone(),
+            BuildingKind::StallGreen     => self.stall_green.clone(),
+            BuildingKind::StallRed       => self.stall_red.clone(),
+            BuildingKind::Fountain       => self.fountain.clone(),
+            BuildingKind::Lantern        => self.lantern.clone(),
+        }
+    }
+}
+
+fn setup_building_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(BuildingAssets {
+        tent_detailed:   asset_server.load("nature/tent_detailedClosed.glb#Scene0"),
+        tent_small:      asset_server.load("nature/tent_smallClosed.glb#Scene0"),
+        campfire_stones: asset_server.load("nature/campfire_stones.glb#Scene0"),
+        windmill:        asset_server.load("town/windmill.glb#Scene0"),
+        stall:           asset_server.load("town/stall.glb#Scene0"),
+        stall_bench:     asset_server.load("town/stall-bench.glb#Scene0"),
+        stall_green:     asset_server.load("town/stall-green.glb#Scene0"),
+        stall_red:       asset_server.load("town/stall-red.glb#Scene0"),
+        fountain:        asset_server.load("town/fountain-round.glb#Scene0"),
+        lantern:         asset_server.load("town/lantern.glb#Scene0"),
+    });
+}
+
+/// Spawns (or respawns) local building entities whenever the `Buildings` resource changes.
+///
+/// Building entities are purely client-side; they are not replicated.
+fn spawn_building_visuals(
+    mut commands:  Commands,
+    buildings:     Res<Buildings>,
+    assets:        Res<BuildingAssets>,
+    existing:      Query<Entity, With<BuildingVisual>>,
+) {
+    if !buildings.is_changed() { return; }
+
+    // Despawn old visuals before respawning (handles seed change via apply_world_meta).
+    for e in &existing {
+        commands.entity(e).despawn();
+    }
+
+    for b in &buildings.0 {
+        let wx = b.tx as f32 - MAP_HALF_WIDTH as f32 + 0.5;
+        let wy = b.ty as f32 - MAP_HALF_HEIGHT as f32 + 0.5;
+        let translation = Vec3::new(wx, b.z, wy);
+        let rotation = Quat::from_rotation_y(b.rotation as f32 * FRAC_PI_2);
+
+        commands.spawn((
+            SceneRoot(assets.scene_for(b.kind)),
+            Transform::from_translation(translation)
+                .with_rotation(rotation)
+                .with_scale(Vec3::splat(2.0)),
+            BuildingVisual,
+        ));
     }
 }
 
@@ -186,13 +275,13 @@ fn spawn_entity_visuals(
     for (entity, pos, kind, growth, badge, wildlife_kind, settlement_kind) in &query {
         match kind {
             // ── Settlement ────────────────────────────────────────────────────
+            // Spawn only the center-point marker; surrounding buildings are
+            // spawned separately by spawn_building_visuals from Buildings resource.
             Some(EntityKind::Settlement) => {
-                let scenes = match settlement_kind {
-                    Some(SettlementKind::Capital) => &assets.capital_scenes,
-                    _ => &assets.town_scenes,
+                let scene = match settlement_kind {
+                    Some(SettlementKind::Capital) => assets.capital_scenes[0].clone(), // windmill
+                    _ => assets.town_scenes[0].clone(), // detailed tent
                 };
-                let idx   = (entity.to_bits() as usize) % scenes.len();
-                let scene = scenes[idx].clone();
                 commands.entity(entity).insert((
                     SceneRoot(scene),
                     Transform::from_translation(ground_translation(pos))

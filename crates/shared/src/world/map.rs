@@ -106,6 +106,7 @@ impl TileKind {
         Self::River,
         Self::Void,
     ];
+
 }
 
 // ── Tile layer ────────────────────────────────────────────────────────────────
@@ -201,11 +202,26 @@ pub struct WorldMap {
     /// Populated by `generate_spawn_points` during world gen, after roads are stamped.
     #[serde(default)]
     pub spawn_points: Vec<(f32, f32, f32)>,
+    /// Set to `true` after `apply_building_tiles` runs. Used as a cache-invalidation
+    /// sentinel: old `.bin` files default to `false` and are regenerated automatically.
+    #[serde(default)]
+    pub buildings_stamped: bool,
 }
 
 impl WorldMap {
     pub fn column(&self, ix: usize, iy: usize) -> &TileColumn {
         &self.columns[ix + iy * self.width]
+    }
+
+    /// Mark the surface layer at tile `(ix, iy)` as non-walkable so buildings
+    /// act as solid obstacles for the existing `is_walkable_at` movement check.
+    pub fn mark_impassable(&mut self, ix: usize, iy: usize) {
+        let idx = ix + iy * self.width;
+        if let Some(col) = self.columns.get_mut(idx) {
+            if let Some(layer) = col.layers.iter_mut().find(|l| l.is_surface_kind()) {
+                layer.walkable = false;
+            }
+        }
     }
 
     /// Returns `None` if `(x, y)` is outside the map bounds.
@@ -515,7 +531,7 @@ pub fn generate_map(seed: u64, width: usize, height: usize) -> WorldMap {
 
     river_pass(&mut columns, &heights, width, height);
 
-    WorldMap { columns, width, height, seed, road_tiles: vec![false; width * height], spawn_points: Vec::new() }
+    WorldMap { columns, width, height, seed, road_tiles: vec![false; width * height], spawn_points: Vec::new(), buildings_stamped: false }
 }
 
 /// Steepest-descent river generation.
@@ -785,7 +801,7 @@ mod tests {
             walkable: true,
             corner_offsets: [0.0; 4],
         };
-        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], width: MAP_WIDTH, height: MAP_HEIGHT, seed: 0, road_tiles: vec![], spawn_points: vec![] };
+        let mut map = WorldMap { columns: vec![TileColumn::default(); MAP_WIDTH * MAP_HEIGHT], width: MAP_WIDTH, height: MAP_HEIGHT, seed: 0, road_tiles: vec![], spawn_points: vec![], buildings_stamped: false };
         map.columns[0] = TileColumn { layers: vec![make_layer(1.0)] };
         map.columns[1] = TileColumn { layers: vec![make_layer(3.0)] };
 
