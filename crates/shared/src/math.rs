@@ -18,10 +18,12 @@ pub fn tile_index(v: f32) -> usize {
 
 /// Fractional position within a tile in [0.0, 1.0).
 ///
-/// For `v = 2.7` returns `0.7`; for `v = -0.3` returns `0.3`.
+/// For `v = 2.7` returns `0.7`; for `v = -0.3` returns `0.7` (position 0.7
+/// of the way through tile `[-1, 0)`).  Uses `v - floor(v)` so the result
+/// always matches the tile selected by `column_at` (which also uses `floor`).
 #[inline]
 pub fn tile_frac(v: f32) -> f32 {
-    v.fract().abs()
+    v - v.floor()
 }
 
 /// Bilinear interpolation over a unit square.
@@ -164,8 +166,10 @@ mod tests {
     }
 
     #[test]
-    fn tile_frac_negative_is_abs() {
-        assert!((tile_frac(-0.3) - 0.3).abs() < 1e-6);
+    fn tile_frac_negative_matches_floor() {
+        // -0.3 is 0.7 of the way through tile [-1, 0) — same convention as column_at.
+        assert!((tile_frac(-0.3) - 0.7).abs() < 1e-6);
+        assert!((tile_frac(-1.0) - 0.0).abs() < 1e-6);
     }
 
     #[test]
