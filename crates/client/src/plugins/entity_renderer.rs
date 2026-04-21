@@ -23,7 +23,7 @@
 //! on input) for zero-latency visual response.  Remote entity transforms still
 //! track the authoritative `WorldPosition` from replication.
 
-use std::f32::consts::FRAC_PI_2;
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
@@ -44,12 +44,19 @@ impl Plugin for EntityRendererPlugin {
                     spawn_entity_visuals,
                     spawn_building_visuals,
                     apply_faction_tint,
+                    flicker_lantern_lights,
                     sync_remote_transforms,
                     sync_growth_stage_scale,
                     sync_local_player_transform.in_set(ClientSet::SyncVisuals),
                 ),
             );
     }
+}
+
+/// Per-lantern flicker state: unique phase offset so each lantern flickers independently.
+#[derive(Component)]
+struct LanternFlicker {
+    phase: f32,
 }
 
 // ── Assets ────────────────────────────────────────────────────────────────────
@@ -164,6 +171,25 @@ fn spawn_building_visuals(
                 .with_scale(Vec3::splat(2.0)),
             BuildingVisual,
         ));
+
+        if b.kind == BuildingKind::Lantern {
+            // Unique phase per lantern so each flickers independently.
+            let phase = (b.tx as f32 * 7.3 + b.ty as f32 * 3.7).rem_euclid(TAU);
+            commands.spawn((
+                PointLight {
+                    color: Color::srgb(1.0, 0.72, 0.25),
+                    intensity: 1_200.0,
+                    radius: 0.3,
+                    range: 10.0,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                // Place the light at the lantern flame height (model top ~ 2 units tall at scale 2).
+                Transform::from_translation(Vec3::new(wx, b.z + 2.5, wy)),
+                LanternFlicker { phase },
+                BuildingVisual,
+            ));
+        }
     }
 }
 
@@ -222,6 +248,19 @@ fn setup_entity_assets(
         ash_covenant_mat,
         deep_tide_mat,
     });
+}
+
+fn flicker_lantern_lights(
+    time: Res<Time>,
+    mut q: Query<(&mut PointLight, &LanternFlicker)>,
+) {
+    let t = time.elapsed_secs();
+    for (mut light, flicker) in &mut q {
+        let slow = f32::sin(t * 2.3 + flicker.phase) * 0.12;
+        let fast = f32::sin(t * 17.1 + flicker.phase * 1.9) * 0.06;
+        let scale = (1.0 + slow + fast).clamp(0.7, 1.3);
+        light.intensity = 1_200.0 * scale;
+    }
 }
 
 // ── Coordinate helpers ────────────────────────────────────────────────────────

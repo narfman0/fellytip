@@ -9,7 +9,7 @@ use fellytip_shared::{
     components::{Experience, WorldPosition},
     inputs::ActionIntent,
     protocol::FellytipProtocolPlugin,
-    world::map::{is_walkable_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, MAP_WIDTH, MAP_HEIGHT},
+    world::map::{is_walkable_at, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT},
 };
 use plugins::camera::OrbitCamera;
 
@@ -242,22 +242,55 @@ fn send_player_input(
         pred.dash_timer = (pred.dash_timer - dt).max(0.0);
 
         // ── Horizontal movement ───────────────────────────────────────────────
+        let in_water = map.as_ref().is_some_and(|m| is_water_at(m, pred.x, pred.y));
+        // Halve speed while swimming.
+        let speed_mul = if in_water { 0.5 } else { 1.0 };
         let speed = if pred.dash_timer > 0.0 { DASH_SPEED } else { PLAYER_SPEED };
-        let new_x = pred.x + world_dx * speed * dt;
-        let new_y = pred.y + world_dy * speed * dt;
+        let new_x = pred.x + world_dx * speed * speed_mul * dt;
+        let new_y = pred.y + world_dy * speed * speed_mul * dt;
 
         if let Some(ref m) = map {
-            let can_xy = is_walkable_at(m, new_x, new_y, pred.z);
-            let can_x  = is_walkable_at(m, new_x, pred.y, pred.z);
-            let can_y  = is_walkable_at(m, pred.x, new_y, pred.z);
+            // Allow movement into water tiles so the player can swim.
+            let can_xy = is_walkable_at(m, new_x, new_y, pred.z) || is_water_at(m, new_x, new_y);
+            let can_x  = is_walkable_at(m, new_x, pred.y, pred.z) || is_water_at(m, new_x, pred.y);
+            let can_y  = is_walkable_at(m, pred.x, new_y, pred.z) || is_water_at(m, pred.x, new_y);
             if      can_xy { pred.x = new_x; pred.y = new_y; }
             else if can_x  { pred.x = new_x; }
             else if can_y  { pred.y = new_y; }
 
             // ── Vertical / gravity ────────────────────────────────────────────
             let terrain_z = smooth_surface_at(m, pred.x, pred.y, pred.z);
+            let water_z   = water_surface_at(m, pred.x, pred.y);
 
-            if pred.grounded {
+            if let Some(wz) = water_z {
+                // Over water: apply gravity above surface, buoyancy below.
+                if pred.z > wz + LAND_SNAP {
+                    // Falling toward water surface.
+                    pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
+                    pred.z += pred.z_vel * dt;
+                    pred.grounded = false;
+                    if pred.z <= wz {
+                        pred.z = wz;
+                        pred.z_vel = 0.0;
+                        pred.grounded = true;
+                    }
+                } else if pred.z < wz - LAND_SNAP {
+                    // Submerged: buoyancy pushes up to surface.
+                    pred.z_vel = (pred.z_vel + SWIM_BUOYANCY * dt).min(SWIM_RISE_SPEED);
+                    pred.z += pred.z_vel * dt;
+                    pred.grounded = false;
+                    if pred.z >= wz {
+                        pred.z = wz;
+                        pred.z_vel = 0.0;
+                        pred.grounded = true;
+                    }
+                } else {
+                    // At surface: float.
+                    pred.z = wz;
+                    pred.z_vel = 0.0;
+                    pred.grounded = true;
+                }
+            } else if pred.grounded {
                 match terrain_z {
                     Some(tz) if tz >= pred.z - STEP_HEIGHT => {
                         // Ground-tracking: follow terrain height directly, no
@@ -285,10 +318,10 @@ fn send_player_input(
                 }
             }
 
-            // ── Slope speed correction ────────────────────────────────────────
-            // When grounded and moving, project the requested velocity onto the
-            // terrain plane so uphill/downhill movement stays at PLAYER_SPEED.
-            if pred.grounded && (world_dx != 0.0 || world_dy != 0.0) {
+            // ── Slope speed correction (land only) ───────────────────────────
+            // Project velocity onto the terrain plane so uphill/downhill
+            // movement stays at PLAYER_SPEED.  Skip in water (no terrain normal).
+            if pred.grounded && !in_water && (world_dx != 0.0 || world_dy != 0.0) {
                 let normal = terrain_normal_at(m, pred.x, pred.y, pred.z);
                 // Horizontal world-space velocity (Bevy: x east, z south).
                 let vel = Vec3::new(world_dx * speed, 0.0, world_dy * speed);

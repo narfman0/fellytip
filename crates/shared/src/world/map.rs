@@ -48,6 +48,13 @@ pub const DASH_SPEED: f32 = 12.0;
 /// Duration of the dash burst in seconds.
 pub const DASH_DURATION: f32 = 0.18;
 
+/// Upward acceleration applied to entities submerged below the water surface.
+/// Strong enough to quickly overcome gravity and bring the player up.
+pub const SWIM_BUOYANCY: f32 = 35.0;
+
+/// Maximum upward speed while swimming to the surface (world units/sec).
+pub const SWIM_RISE_SPEED: f32 = 6.0;
+
 /// Multiplier from normalised height `[0, 1]` to world-unit Z for surface terrain.
 /// At 20.0, mountain peaks reach ~20 world units above sea level.
 pub const Z_SCALE: f32 = 20.0;
@@ -277,6 +284,27 @@ pub fn smooth_surface_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> Opti
 /// terrain. See `docs/systems/world-map.md` for the wall-slide behaviour.
 pub fn is_walkable_at(map: &WorldMap, x: f32, y: f32, current_z: f32) -> bool {
     smooth_surface_at(map, x, y, current_z).is_some()
+}
+
+/// Returns `true` if the tile at `(x, y)` is a Water or River tile.
+///
+/// Unlike [`is_walkable_at`], this ignores walkability — Water/River tiles
+/// are never walkable but an entity can still swim on them.
+pub fn is_water_at(map: &WorldMap, x: f32, y: f32) -> bool {
+    map.column_at(x, y)
+        .and_then(|col| col.layers.last())
+        .map(|l| matches!(l.kind, TileKind::Water | TileKind::River))
+        .unwrap_or(false)
+}
+
+/// Returns the surface Z of the Water or River layer at `(x, y)`, or `None`
+/// if the tile is not water.  Used to float entities at the water surface.
+pub fn water_surface_at(map: &WorldMap, x: f32, y: f32) -> Option<f32> {
+    map.column_at(x, y)?
+        .layers
+        .iter()
+        .find(|l| matches!(l.kind, TileKind::Water | TileKind::River))
+        .map(|l| l.z_top)
 }
 
 /// Approximate terrain normal at `(x, y)` via finite differences over
@@ -860,6 +888,33 @@ mod tests {
             );
         }
         // If the seed has no water tiles, the test passes vacuously.
+    }
+
+    #[test]
+    fn is_water_at_true_over_water() {
+        let map = generate_map(0, MAP_WIDTH, MAP_HEIGHT);
+        let water_pos = map.columns.iter().enumerate().find_map(|(i, col)| {
+            if col.layers.first().map(|l| l.kind == TileKind::Water).unwrap_or(false) {
+                let ix = i % MAP_WIDTH;
+                let iy = i / MAP_WIDTH;
+                Some((
+                    ix as f32 + 0.5 - MAP_HALF_WIDTH as f32,
+                    iy as f32 + 0.5 - MAP_HALF_HEIGHT as f32,
+                ))
+            } else { None }
+        });
+        if let Some((wx, wy)) = water_pos {
+            assert!(is_water_at(&map, wx, wy), "Water tile should report is_water_at=true");
+            assert!(water_surface_at(&map, wx, wy).is_some(), "Water tile should have a surface z");
+        }
+    }
+
+    #[test]
+    fn is_water_at_false_over_land() {
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let (x, y, _) = find_surface_spawn(&map);
+        assert!(!is_water_at(&map, x, y), "Spawn tile should not be water");
+        assert!(water_surface_at(&map, x, y).is_none(), "Spawn tile should have no water surface");
     }
 
     #[test]
