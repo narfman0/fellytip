@@ -177,10 +177,24 @@ pub struct TileColumn {
 }
 
 impl TileColumn {
-    /// Return the highest walkable layer whose `z_top` is at or below
-    /// `current_z + step_height`. Returns `None` if no walkable layer
-    /// is reachable.
+    /// Return the highest walkable layer reachable from `current_z`.
+    ///
+    /// For single-walkable-layer columns (all normal terrain) the layer is
+    /// always returned regardless of height — the movement system snaps the
+    /// entity's z to the surface after horizontal movement.
+    ///
+    /// For multi-layer columns (bridges, future cave ceilings) `step_height`
+    /// is used to select the correct level: only layers whose `z_top` is at
+    /// or below `current_z + step_height` are considered.
     pub fn surface_layer(&self, current_z: f32, step_height: f32) -> Option<&TileLayer> {
+        let walkable_count = self.layers.iter().filter(|l| l.walkable).count();
+        if walkable_count == 0 {
+            return None;
+        }
+        if walkable_count == 1 {
+            return self.layers.iter().find(|l| l.walkable);
+        }
+        // Multi-layer: use step_height to choose the right level.
         self.layers
             .iter()
             .filter(|l| l.walkable && l.z_top <= current_z + step_height)
@@ -910,6 +924,28 @@ mod tests {
         // From bridge height (z ≈ 3.2) we get the bridge.
         let at_bridge = col.surface_layer(3.2, STEP_HEIGHT).unwrap();
         assert_eq!(at_bridge.kind, TileKind::Stone);
+    }
+
+    #[test]
+    fn single_layer_terrain_always_reachable() {
+        // Forest at z=10.0 with player approaching from z=7.0 (height diff > STEP_HEIGHT).
+        // With the old code this would return None; it must now return the forest layer.
+        let forest = TileLayer {
+            z_base: 8.0, z_top: 10.0, kind: TileKind::TemperateForest,
+            walkable: true, corner_offsets: [0.0; 4],
+        };
+        let col = TileColumn { layers: vec![forest] };
+        let layer = col.surface_layer(7.0, STEP_HEIGHT);
+        assert!(layer.is_some(), "single-layer forest must be reachable from any entity_z");
+        assert_eq!(layer.unwrap().kind, TileKind::TemperateForest);
+
+        // Building (walkable=false) must still be impassable.
+        let building = TileLayer {
+            z_base: 0.0, z_top: 3.0, kind: TileKind::Plains,
+            walkable: false, corner_offsets: [0.0; 4],
+        };
+        let blocked = TileColumn { layers: vec![building] };
+        assert!(blocked.surface_layer(0.0, STEP_HEIGHT).is_none(), "non-walkable tile must block");
     }
 
     #[test]
