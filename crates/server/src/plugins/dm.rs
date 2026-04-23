@@ -17,6 +17,7 @@
 //! | `dm/set_faction`        | Override a faction's food / gold / military    |
 //! | `dm/trigger_war_party`  | Immediately form a war party for a faction     |
 //! | `dm/set_ecology`        | Override prey / predator counts in a region    |
+//! | `dm/battle_history`     | Read the rolling battle record history         |
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
@@ -34,7 +35,7 @@ use fellytip_shared::{
 };
 
 use crate::plugins::{
-    ai::{CurrentGoal, FactionMember, FactionNpcRank, FactionPopulationState, FactionRegistry, HomePosition, WarPartyMember},
+    ai::{BattleHistory, CurrentGoal, FactionMember, FactionNpcRank, FactionPopulationState, FactionRegistry, HomePosition, WarPartyMember},
     combat::{CombatParticipant, ExperienceReward},
     ecology::EcologyState,
 };
@@ -248,4 +249,23 @@ pub fn dm_set_ecology(In(params): In<Option<Value>>, world: &mut World) -> BrpRe
 
     tracing::info!(region = %region, "DM updated ecology (prey={prey:?}, predator={pred:?})");
     Ok(json!({ "ok": true }))
+}
+
+// ── dm/battle_history ─────────────────────────────────────────────────────────
+
+/// Return recent `BattleRecord` entries newest-first.
+///
+/// Params: `{ limit?: u32 }` — defaults to 100 (the resource cap).
+/// Returns a JSON array of `{ winner_faction, loser_faction, target_settlement_id,
+/// tick, attacker_casualties, defender_casualties }`.
+pub fn dm_battle_history(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let limit = params
+        .as_ref()
+        .and_then(|p| p.get("limit"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(100) as usize;
+    let history = world.resource::<BattleHistory>();
+    let records: Vec<_> = history.records.iter().rev().take(limit).collect();
+    serde_json::to_value(&records)
+        .map_err(|e| BrpError::internal(format!("serialize battle history: {e}")))
 }

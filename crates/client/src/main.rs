@@ -99,6 +99,7 @@ fn main() {
                         .with_method("dm/set_faction",       fellytip_server::plugins::dm::dm_set_faction)
                         .with_method("dm/trigger_war_party", fellytip_server::plugins::dm::dm_trigger_war_party)
                         .with_method("dm/set_ecology",       fellytip_server::plugins::dm::dm_set_ecology)
+                        .with_method("dm/battle_history",    fellytip_server::plugins::dm::dm_battle_history)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
