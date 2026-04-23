@@ -133,6 +133,7 @@ impl Plugin for AiPlugin {
                 check_war_party_formation,
                 update_war_party_player_targets,
                 march_war_parties,
+                war_party_separation,
                 run_battle_rounds,
                 wander_npcs,
                 sync_player_standings,
@@ -1082,6 +1083,98 @@ fn run_battle_rounds(
                     health.current = cs.health;
                 }
             }
+        }
+    }
+}
+
+/// Separation radius in world tiles — repulse members closer than this.
+const SEPARATION_RADIUS: f32 = 1.5;
+/// Repulsion gain: push apart by `(radius - dist) * gain` tiles.
+const SEPARATION_GAIN: f32 = 0.5;
+/// Circle radius for Frozen zone formation offsets.
+const FROZEN_FORMATION_RADIUS: f32 = 1.5;
+
+/// Apply lightweight pairwise repulsion within each war party group (Hot/Warm zones).
+///
+/// Frozen zone: instead of repulsion, hold each member at a fixed offset from
+/// the group centroid arranged in a circle of radius `FROZEN_FORMATION_RADIUS`.
+fn war_party_separation(
+    mut warriors: Query<(Entity, &WarPartyMember, &mut WorldPosition)>,
+    temp: Res<ChunkTemperature>,
+) {
+    // Collect (entity, settlement_id, pos) snapshot.
+    let snapshot: Vec<(Entity, uuid::Uuid, f32, f32)> = warriors
+        .iter()
+        .map(|(e, w, pos)| (e, w.target_settlement_id, pos.x, pos.y))
+        .collect();
+
+    if snapshot.is_empty() {
+        return;
+    }
+
+    // Group by target_settlement_id.
+    let mut groups: HashMap<uuid::Uuid, Vec<usize>> = HashMap::new();
+    for (i, (_, sid, _, _)) in snapshot.iter().enumerate() {
+        groups.entry(*sid).or_default().push(i);
+    }
+
+    // Accumulate delta per entity.
+    let mut deltas: HashMap<Entity, (f32, f32)> = HashMap::new();
+
+    for (_, indices) in &groups {
+        let zone_speed = if indices.is_empty() {
+            continue;
+        } else {
+            let (_, _, x, y) = snapshot[indices[0]];
+            temp.speed_at_world(x, y)
+        };
+
+        if zone_speed <= crate::plugins::interest::FROZEN_SPEED + f32::EPSILON {
+            // Frozen: arrange at fixed offsets from centroid.
+            let n = indices.len();
+            let cx: f32 = indices.iter().map(|&i| snapshot[i].2).sum::<f32>() / n as f32;
+            let cy: f32 = indices.iter().map(|&i| snapshot[i].3).sum::<f32>() / n as f32;
+            for (slot, &idx) in indices.iter().enumerate() {
+                let (entity, _, _, _) = snapshot[idx];
+                let angle = (slot as f32 / n as f32) * std::f32::consts::TAU;
+                let target_x = cx + angle.cos() * FROZEN_FORMATION_RADIUS;
+                let target_y = cy + angle.sin() * FROZEN_FORMATION_RADIUS;
+                let (cur_x, cur_y) = (snapshot[idx].2, snapshot[idx].3);
+                let e = deltas.entry(entity).or_insert((0.0, 0.0));
+                e.0 += (target_x - cur_x) * 0.1;
+                e.1 += (target_y - cur_y) * 0.1;
+            }
+        } else {
+            // Hot/Warm: pairwise repulsion within SEPARATION_RADIUS.
+            for i in 0..indices.len() {
+                for j in (i + 1)..indices.len() {
+                    let (ea, _, ax, ay) = snapshot[indices[i]];
+                    let (eb, _, bx, by) = snapshot[indices[j]];
+                    let dx = ax - bx;
+                    let dy = ay - by;
+                    let dist_sq = dx * dx + dy * dy;
+                    if dist_sq > 0.0 && dist_sq < SEPARATION_RADIUS * SEPARATION_RADIUS {
+                        let dist = dist_sq.sqrt();
+                        let push = (SEPARATION_RADIUS - dist) * SEPARATION_GAIN;
+                        let nx = dx / dist;
+                        let ny = dy / dist;
+                        let da = deltas.entry(ea).or_insert((0.0, 0.0));
+                        da.0 += nx * push;
+                        da.1 += ny * push;
+                        let db = deltas.entry(eb).or_insert((0.0, 0.0));
+                        db.0 -= nx * push;
+                        db.1 -= ny * push;
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply accumulated deltas.
+    for (entity, _, mut pos) in &mut warriors {
+        if let Some((dx, dy)) = deltas.get(&entity) {
+            pos.x += dx;
+            pos.y += dy;
         }
     }
 }
