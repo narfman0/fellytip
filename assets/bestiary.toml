@@ -250,19 +250,15 @@ name   = "death"
 frames = 6
 fps    = 8
 
-# ── Legacy placeholder ────────────────────────────────────────────────────────
-# goblin_scout is the first bestiary entry we ever shipped; kept so the
-# billboard plugin's placeholder-map (everything → first-loaded atlas) keeps
-# working during the transition.  Can be removed once the renderer switches
-# to EntityKind-aware lookup.
+# ── Humanoid enemies ──────────────────────────────────────────────────────────
 
 [[entity]]
-id             = "goblin_scout"
-display_name   = "Goblin Scout"
+id             = "goblin"
+display_name   = "Goblin"
 directions     = 8
-ai_prompt_base = "goblin scout, small green creature with rusty dagger, fantasy medieval"
+ai_prompt_base = "goblin, small wiry green creature, rusty dagger and crude leather armor, beady yellow eyes, fantasy medieval dungeon"
 ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
-palette_seed   = "forest_green"
+palette_seed   = "goblin_green"
 
 [[entity.animation]]
 name   = "idle"
@@ -283,3 +279,403 @@ fps    = 10
 name   = "death"
 frames = 6
 fps    = 8
+
+[[entity]]
+id             = "kobold"
+display_name   = "Kobold"
+directions     = 8
+ai_prompt_base = "kobold, small rust-scaled draconic humanoid, crude spear and tattered hide armor, cunning eyes, fantasy medieval dungeon"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "kobold_rust"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "orc"
+display_name   = "Orc"
+directions     = 8
+ai_prompt_base = "orc, hulking green-grey humanoid, crude iron armor, greataxe, scarred face, warlike, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "orc_iron"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "hobgoblin"
+display_name   = "Hobgoblin"
+directions     = 8
+ai_prompt_base = "hobgoblin, disciplined martial humanoid, dark red skin, polished iron armor, longsword and shield, stern expression, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "hobgoblin_red"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "bugbear"
+display_name   = "Bugbear"
+directions     = 8
+ai_prompt_base = "bugbear, large hairy goblinoid, matted brown fur, morningstar, stealthy predatory stance, fantasy medieval dungeon"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "bugbear_brown"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Undead ────────────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "skeleton"
+display_name   = "Skeleton"
+directions     = 8
+ai_prompt_base = "animated humanoid skeleton, rusted sword and shield, glowing amber eye sockets, tattered cloth, undead, fantasy medieval dungeon"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "skeleton_bone"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "zombie"
+display_name   = "Zombie"
+directions     = 8
+ai_prompt_base = "shambling undead humanoid, decaying flesh, tattered grey clothing, outstretched arms, sunken eyes, undead, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "zombie_grey"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "ghoul"
+display_name   = "Ghoul"
+directions     = 8
+ai_prompt_base = "ghoul, gaunt undead with elongated claws, grey-green mottled skin, hunched predatory posture, jagged teeth, fantasy medieval dungeon"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "ghoul_mold"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Monstrosities ─────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "owlbear"
+display_name   = "Owlbear"
+directions     = 8
+ai_prompt_base = "owlbear, bear body with large owl head and hooked beak, feathered brown torso, massive claws, fantasy forest"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "owlbear_tawny"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "troll"
+display_name   = "Troll"
+directions     = 8
+ai_prompt_base = "troll, tall lanky humanoid, warty green skin, long claws, hunched posture, regenerating dungeon monster, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "troll_green"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Dungeon vermin ────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "giant_spider"
+display_name   = "Giant Spider"
+directions     = 8
+ai_prompt_base = "giant spider, oversized spider with black body and orange markings, venomous dripping fangs, eight legs, dungeon cave"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "spider_black"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity]]
+id             = "giant_rat"
+display_name   = "Giant Rat"
+directions     = 8
+ai_prompt_base = "giant rat, oversized rat with matted grey fur, red beady eyes, bared yellow teeth, sewer dungeon creature, fantasy medieval"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "rat_grey"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Oozes ─────────────────────────────────────────────────────────────────────
+# SRD 5.1 CC BY 4.0 content (Wizards of the Coast).
+
+[[entity]]
+id             = "gelatinous_cube"
+display_name   = "Gelatinous Cube"
+directions     = 4
+ai_prompt_base = "gelatinous cube, translucent cube-shaped ooze monster, barely visible outline, partially digested bones and equipment visible inside, dungeon"
+ai_style       = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "ooze_clear"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 3
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Giants ────────────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "hill_giant"
+display_name   = "Hill Giant"
+directions     = 4
+ai_prompt_base = "hill giant, massive ogre-like humanoid, crude animal-skin garb, enormous wooden club, dull brutish expression, fantasy mountain"
+ai_style       = "pixel art, 128x128, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "giant_earth"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 10
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+# ── Dragons ───────────────────────────────────────────────────────────────────
+
+[[entity]]
+id             = "red_dragon_young"
+display_name   = "Young Red Dragon"
+directions     = 8
+ai_prompt_base = "young red dragon, crimson scales, smoke curling from nostrils, partially furled wings, fierce predatory stance, fantasy medieval"
+ai_style       = "pixel art, 128x128, isometric sprite, clean outline, soft shading, transparent background"
+palette_seed   = "dragon_crimson"
+
+[[entity.animation]]
+name   = "idle"
+frames = 4
+fps    = 4
+
+[[entity.animation]]
+name   = "walk"
+frames = 8
+fps    = 12
+
+[[entity.animation]]
+name   = "attack"
+frames = 5
+fps    = 10
+
+[[entity.animation]]
+name   = "death"
+frames = 6
+fps    = 8
+
+[[entity.animation]]
+name   = "fly"
+frames = 6
+fps    = 10
