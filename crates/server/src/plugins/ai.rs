@@ -83,6 +83,14 @@ pub struct WarPartyMember {
     pub target_settlement_id: Uuid,
     pub target_x: f32,
     pub target_y: f32,
+    /// Faction that dispatched this war party. Stored so the spawned
+    /// `ActiveBattle` (and downstream `BattleRecord`) has the correct
+    /// attacker — we cannot reliably recover it from `FactionMember` alone
+    /// because `march_war_parties` doesn't query that component.
+    ///
+    /// `FactionId` doesn't derive `Reflect`, so it's skipped during reflection.
+    #[reflect(ignore)]
+    pub attacker_faction: FactionId,
     /// When set, this war party is hunting the given player entity rather than
     /// marching to the settlement.  `target_x`/`target_y` are updated each tick
     /// by `update_war_party_player_targets` to follow the player's position.
@@ -753,6 +761,7 @@ fn check_war_party_formation(
                     target_settlement_id: event.target_settlement_id,
                     target_x: event.target_x,
                     target_y: event.target_y,
+                    attacker_faction: event.attacker_faction.clone(),
                     player_target,
                 });
                 tagged += 1;
@@ -822,6 +831,11 @@ fn march_war_parties(
     mut commands: Commands,
     mut battle_start: MessageWriter<BattleStartMsg>,
 ) {
+    // Dedupe ActiveBattle spawns within a single system run: multiple war-party
+    // members can arrive on the same tick, and the `battles` query doesn't yet
+    // see entities queued on `commands`, so without this set every arriving
+    // member would spawn its own ActiveBattle (and BattleRecord on resolution).
+    let mut spawned_this_tick: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     for (war_member, mut pos) in &mut warriors {
         let zone = effective_zone(&pos, &temp, scheduler.level);
         let speed = zone.speed();
@@ -862,36 +876,17 @@ fn march_war_parties(
 
         // Check if arrived and no battle already active for this settlement.
         if dist <= BATTLE_RADIUS {
-            let already_active = battles.iter().any(|b| b.settlement_id == war_member.target_settlement_id);
+            let already_active = battles.iter().any(|b| b.settlement_id == war_member.target_settlement_id)
+                || spawned_this_tick.contains(&war_member.target_settlement_id);
             if !already_active {
                 // Look up the defender faction from population state.
                 let Some(target_pop) = pop.settlements.get(&war_member.target_settlement_id) else { continue };
                 let defender_faction = target_pop.faction_id.clone();
 
-                // Look up the attacker faction (any WarPartyMember entity gives us the target,
-                // but we need the attacker faction — use the FactionMember below after we query it).
-                // Since we don't have FactionMember in this query, we derive it from the defender's
-                // hostile dispositions: the attacker is a faction hostile to the defender.
-                // The specific faction ID is encoded in the war party member's target; we will use
-                // a separate system for the actual faction lookup. For the battle entity,
-                // we look up who is hostile to the defender.
-                //
-                // Simpler: keep attacker_faction in WarPartyMember. For now use the first
-                // hostile faction we can infer (the pop state only has settlement info).
-                // We'll set attacker_faction = Unknown and fill it via the existing pop data.
-                // Instead, query the attacker's FactionMember below.
-                //
-                // Since this query doesn't include FactionMember, get the attacker faction
-                // from FactionPopulationState: find a settlement NOT matching the defender faction
-                // that has a hostile disposition. This is stored in the registry but not accessible here.
-                // Workaround: store attacker_faction in WarPartyMember itself.
-                // We set it from check_war_party_formation... but the event has it.
-                //
-                // For now, encode a placeholder and fix it below by checking pop.settlements.
-                let attacker_faction = pop.settlements.values()
-                    .find(|s| s.faction_id != defender_faction)
-                    .map(|s| s.faction_id.clone())
-                    .unwrap_or(FactionId("unknown".into()));
+                // Attacker faction is carried directly on the WarPartyMember component,
+                // set either by `check_war_party_formation` or `dm/trigger_war_party`.
+                let attacker_faction = war_member.attacker_faction.clone();
+                spawned_this_tick.insert(war_member.target_settlement_id);
 
                 let battle_entity = commands.spawn(ActiveBattle {
                     settlement_id: war_member.target_settlement_id,

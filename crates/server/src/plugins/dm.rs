@@ -18,6 +18,7 @@
 //! | `dm/trigger_war_party`  | Immediately form a war party for a faction     |
 //! | `dm/set_ecology`        | Override prey / predator counts in a region    |
 //! | `dm/battle_history`     | Read the rolling battle record history         |
+//! | `dm/clear_battle_history` | Drop every queued BattleRecord (test helper) |
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
@@ -214,6 +215,7 @@ pub fn dm_trigger_war_party(In(params): In<Option<Value>>, world: &mut World) ->
             target_settlement_id: target_uuid,
             target_x: tx,
             target_y: ty,
+            attacker_faction: attacker_fid.clone(),
             player_target: None,
         });
     }
@@ -268,4 +270,22 @@ pub fn dm_battle_history(In(params): In<Option<Value>>, world: &mut World) -> Br
     let records: Vec<_> = history.records.iter().rev().take(limit).collect();
     serde_json::to_value(&records)
         .map_err(|e| BrpError::internal(format!("serialize battle history: {e}")))
+}
+
+// ── dm/clear_battle_history ───────────────────────────────────────────────────
+
+/// Drop every queued `BattleRecord` so subsequent `dm/battle_history`
+/// calls return only battles that resolved after the clear.
+///
+/// Useful for end-to-end tests that trigger a war party and want the
+/// first record returned to be the one they just caused, not a pre-sim
+/// battle produced by `--history-warp-ticks`.
+///
+/// Params: `{}`  Returns `{ ok: true, cleared: usize }`.
+pub fn dm_clear_battle_history(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let mut history = world.resource_mut::<BattleHistory>();
+    let cleared = history.records.len();
+    history.records.clear();
+    tracing::info!(cleared, "DM cleared battle history");
+    Ok(json!({ "ok": true, "cleared": cleared }))
 }
