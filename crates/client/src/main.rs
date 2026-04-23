@@ -3,7 +3,10 @@ mod plugins;
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
-use fellytip_server::{plugins::combat::LocalPlayerInput, ServerGamePlugin};
+use fellytip_server::{
+    plugins::{combat::LocalPlayerInput, perf::ClientFrameTimings},
+    ServerGamePlugin,
+};
 use fellytip_shared::{
     PLAYER_SPEED, WORLD_SEED,
     components::{EntityBounds, Experience, WorldPosition},
@@ -55,6 +58,7 @@ fn add_windowed_plugins(app: &mut App) {
             ..default()
         }),
     )
+    .add_systems(Update, track_frame_time)
     .add_plugins(plugins::SceneLightingPlugin)
     .add_plugins(plugins::OrbitCameraPlugin)
     .add_plugins(plugins::SkyboxPlugin)
@@ -162,6 +166,16 @@ fn tag_local_player(
         EntityBounds::PLAYER,
     ));
     tracing::debug!("Tagged local player entity {entity:?}");
+}
+
+// ── Host-mode frame-time monitoring ──────────────────────────────────────────
+
+/// Push each Update delta into the shared `ClientFrameTimings` resource so the
+/// server's `update_throttle_level` can bump the AI throttle when the render
+/// thread is the bottleneck (host mode only — headless runs with `MinimalPlugins`
+/// do not install this system because `add_windowed_plugins` is skipped).
+fn track_frame_time(time: Res<Time>, mut timings: ResMut<ClientFrameTimings>) {
+    timings.push(time.delta_secs());
 }
 
 // ── Position sync ─────────────────────────────────────────────────────────────

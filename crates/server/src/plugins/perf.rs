@@ -14,6 +14,35 @@ use crate::plugins::world_sim::WorldSimSchedule;
 /// Target tick budget for the 1 Hz world-sim schedule (server default).
 pub const AI_TICK_BUDGET_MS: f32 = 50.0;
 
+/// Frame-time floor for the host-mode render thread (seconds).
+/// When the client's rolling-average frame time exceeds this value the host
+/// is considered under pressure and the throttle level is bumped up one step.
+pub const HOST_FRAME_FLOOR_SECS: f32 = 1.0 / 30.0;
+
+/// Rolling window of recent render frame times (seconds), written by the
+/// client in host mode. Read by `update_throttle_level` to apply a one-step
+/// throttle boost when the render thread is overloaded.
+#[derive(Resource, Default)]
+pub struct ClientFrameTimings {
+    samples: VecDeque<f32>,
+    pub under_pressure: bool,
+}
+
+impl ClientFrameTimings {
+    pub fn push(&mut self, delta_secs: f32) {
+        if self.samples.len() >= 60 {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(delta_secs);
+        let avg = self.samples.iter().sum::<f32>() / self.samples.len() as f32;
+        self.under_pressure = avg > HOST_FRAME_FLOOR_SECS;
+    }
+
+    pub fn sample_count(&self) -> usize {
+        self.samples.len()
+    }
+}
+
 #[derive(Resource)]
 pub struct TickStartTime(pub Instant);
 
@@ -127,6 +156,7 @@ impl Plugin for PerfPlugin {
         app.init_resource::<TickStartTime>()
             .init_resource::<TickTimings>()
             .init_resource::<AdaptiveScheduler>()
+            .init_resource::<ClientFrameTimings>()
             .add_systems(
                 WorldSimSchedule,
                 record_tick_start.in_set(PerfRecordStart),
@@ -157,9 +187,13 @@ fn record_tick_end(start: Res<TickStartTime>, mut timings: ResMut<TickTimings>) 
 
 fn update_throttle_level(
     timings: Res<TickTimings>,
+    frame_timings: Res<ClientFrameTimings>,
     mut scheduler: ResMut<AdaptiveScheduler>,
 ) {
-    let derived = derive_level(timings.p95_ms());
+    let mut derived = derive_level(timings.p95_ms());
+    if frame_timings.under_pressure {
+        derived = bump_one(derived);
+    }
     scheduler.level = if derived > scheduler.level {
         derived
     } else if derived < scheduler.level
@@ -169,6 +203,16 @@ fn update_throttle_level(
     } else {
         scheduler.level
     };
+}
+
+/// Escalate exactly one step (Full→Reduced→Minimal→Suspended).
+fn bump_one(level: ThrottleLevel) -> ThrottleLevel {
+    match level {
+        ThrottleLevel::Full => ThrottleLevel::Reduced,
+        ThrottleLevel::Reduced => ThrottleLevel::Minimal,
+        ThrottleLevel::Minimal => ThrottleLevel::Suspended,
+        ThrottleLevel::Suspended => ThrottleLevel::Suspended,
+    }
 }
 
 #[cfg(test)]
@@ -233,7 +277,18 @@ mod tests {
     }
 
     fn run_update(timings: &TickTimings, scheduler: &mut AdaptiveScheduler) {
-        let derived = derive_level(timings.p95_ms());
+        run_update_with_frame(timings, &ClientFrameTimings::default(), scheduler);
+    }
+
+    fn run_update_with_frame(
+        timings: &TickTimings,
+        frame: &ClientFrameTimings,
+        scheduler: &mut AdaptiveScheduler,
+    ) {
+        let mut derived = derive_level(timings.p95_ms());
+        if frame.under_pressure {
+            derived = bump_one(derived);
+        }
         scheduler.level = if derived > scheduler.level {
             derived
         } else if derived < scheduler.level && timings.consecutive_under >= DEESCALATE_AFTER {
@@ -281,5 +336,36 @@ mod tests {
         // Now we've hit both: P95 is below budget AND consecutive_under ≥ 10.
         // One step down (Suspended → Minimal).
         assert_eq!(s.level, ThrottleLevel::Minimal);
+    }
+
+    #[test]
+    fn client_pressure_bumps_one_step() {
+        let mut timings = TickTimings::default();
+        timings.push(1.0);
+        let mut frame = ClientFrameTimings::default();
+        for _ in 0..10 {
+            frame.push(0.1);
+        }
+        assert!(frame.under_pressure);
+
+        let mut s = AdaptiveScheduler::default();
+        run_update_with_frame(&timings, &frame, &mut s);
+        // P95 is under budget (Full), but host is under pressure → bumped to Reduced.
+        assert_eq!(s.level, ThrottleLevel::Reduced);
+    }
+
+    #[test]
+    fn frame_timings_trim_and_detect() {
+        let mut frame = ClientFrameTimings::default();
+        for _ in 0..120 {
+            frame.push(0.001);
+        }
+        assert_eq!(frame.sample_count(), 60);
+        assert!(!frame.under_pressure);
+
+        for _ in 0..60 {
+            frame.push(0.1);
+        }
+        assert!(frame.under_pressure);
     }
 }
