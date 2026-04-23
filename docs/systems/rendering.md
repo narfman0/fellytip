@@ -151,7 +151,14 @@ Outputs per entity (written to `crates/client/assets/sprites/{id}/`):
 
 `BillboardSpritePlugin` reads `assets/bestiary.toml`, loads each entity's atlas PNG from `crates/client/assets/sprites/`, slices it into per-cell Bevy `Image`s + per-cell `StandardMaterial`s (unlit, alpha-blended), and spawns a billboard quad child for every replicated `WorldPosition` entity whose kind has a loaded atlas.
 
-The plugin is **additive** over the PBR `EntityRendererPlugin` — when a sprite atlas is present the billboard renders on top of the existing 3D model. This is intentional so the plugin can land before every bestiary entry has real assets; a follow-up will suppress the PBR mesh when an atlas is available.
+Atlas selection is `EntityKind`-aware. `atlas_id_for_entity(kind, badge, wildlife)` in `billboard_sprite.rs` returns:
+
+- `"hero"` when no `EntityKind` is present (the player).
+- `"{faction_id}_npc"` for `EntityKind::FactionNpc` — composed from the replicated `FactionBadge`.
+- `"bison"` / `"dog"` / `"horse"` for `EntityKind::Wildlife` (keyed on `WildlifeKind`).
+- `None` for `EntityKind::Settlement` (buildings stay on the PBR pipeline).
+
+`EntityRendererPlugin::spawn_entity_visuals` consults the same helper and **skips PBR mesh insertion** when `BillboardSprites` already has an atlas loaded for that entity kind — so billboard and PBR renderers no longer stack on the same entity. Entities whose atlas is missing (e.g. a new bestiary entry without generated art yet) still fall through to the PBR path.
 
 Per frame:
 - `face_camera` rotates each sprite's local transform to `Quat::from_rotation_y(camera.yaw)`.
@@ -175,7 +182,8 @@ Direction math lives in `crates/shared/src/sprite_math.rs` so it's ECS-free and 
 | `bison` | `Wildlife` + `WildlifeKind::Bison` | plains bison |
 | `dog` | `Wildlife` + `WildlifeKind::Dog` | wild dog |
 | `horse` | `Wildlife` + `WildlifeKind::Horse` | chestnut riding horse |
-| `goblin_scout` | _legacy placeholder, removable once the renderer uses EntityKind-aware lookup_ | small green goblin |
+
+In addition to the above, `assets/bestiary.toml` now declares 15 D&D SRD Tier 1 monsters (Goblin, Kobold, Orc, Hobgoblin, Bugbear, Skeleton, Zombie, Ghoul, Owlbear, Troll, Giant Spider, Giant Rat, Gelatinous Cube, Hill Giant, Young Red Dragon) so the atlas is already generated before gameplay code hooks each one up. The old `goblin_scout` placeholder has been removed.
 
 `Settlement` entities stay on the PBR pipeline — static buildings don't need billboard animation.
 

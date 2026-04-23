@@ -23,7 +23,7 @@ Milestones are ordered by dependency. Each one builds on the previous.
 
 ### Milestone 0b
 - `ralph basic_movement` scenario passes against a running headless client (`--headless`).
-- BRP `bevy/query` on `WorldPosition` returns correct data.
+- BRP `world.query` on `WorldPosition` returns correct data. (Bevy 0.18 renamed the built-in BRP methods from `bevy/*` to `world.*`.)
 
 ### Milestone 1
 - `WorldSimSchedule` fires once per real second.
@@ -51,6 +51,8 @@ Milestones are ordered by dependency. Each one builds on the previous.
 - When adult count ≥ 15, a war party of 10 marches toward a hostile-faction settlement.
 - Battles resolve with seeded deterministic dice; `BattleStartMsg` / `BattleEndMsg` broadcast to clients.
 - Client shows pulsing ring at battle sites and a Battle Log egui panel.
+- **War-party pathfinding is complete**: 256×256 `NavGrid` (4:1 downsample of the 1024×1024 world), A* for individual units, BFS/Dijkstra flow fields for parties targeting a shared settlement. See `docs/systems/pathfinding.md`.
+- **Adaptive performance throttling is complete**: rolling tick-time samples derive a `ThrottleLevel` (`Full`/`Reduced`/`Minimal`/`Suspended`) with hysteresis. Host-mode client frame pressure bumps the level one step. See `docs/systems/perf.md`.
 
 ### Milestone 4
 - Three `CharacterClass` variants each have at least one distinct ability in the interrupt stack.

@@ -78,11 +78,13 @@ Aggregate systems (birth counters, ecology, faction goals) always run at full sp
 
 ## BRP observability
 
-The client exposes Bevy Remote Protocol (BRP) on port **15702**:
+The client exposes Bevy Remote Protocol (BRP) on port **15702** (Bevy 0.18 renamed all built-in methods from `bevy/*` to `world.*`):
 
-- `bevy/query` — query entities by component
-- `bevy/get` — read components on a specific entity
-- `bevy/insert` / `bevy/spawn` / `bevy/destroy` — mutate ECS
+- `world.query` — query entities by component
+- `world.get` — read components on a specific entity
+- `world.insert` / `world.spawn` / `world.destroy` — mutate ECS
+
+Custom `dm/*` methods (`dm/spawn_npc`, `dm/kill`, `dm/teleport`, `dm/set_faction`, `dm/trigger_war_party`, `dm/set_ecology`, `dm/battle_history`, `dm/clear_battle_history`) are registered in `crates/client/src/main.rs` for live world manipulation — see `CLAUDE.md` for the parameter list and `crates/server/src/plugins/dm.rs` for handler source.
 
 `ralph` uses these endpoints to assert live game state. Headless mode (`--headless`) skips rendering but keeps BRP active.
 

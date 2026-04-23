@@ -8,19 +8,24 @@ See `docs/` for product documentation:
 - `docs/requirements.md` — what the game must do
 - `docs/architecture.md` — crate layout, design constraints, data flow
 - `docs/milestones.md` — milestone definitions and status
-- `docs/systems/` — one file per major system (world-map, combat, civilization, world-sim, networking, persistence, rendering)
+- `docs/systems/` — one file per major system (world-map, combat, civilization, world-sim, networking, persistence, rendering, pathfinding, perf)
 
 ## Crate map
 
 | Crate | Role |
 |---|---|
 | `crates/shared` | Pure types, protocol, combat rules, world gen — no ECS, no I/O |
-| `crates/server` | Bevy server: lightyear, WorldSimSchedule (1 Hz), AI, persistence, map gen |
-| `crates/client` | Bevy client: lightyear, rendering, egui HUD, input |
+| `crates/server` | Bevy server logic (library): `WorldSimSchedule` (1 Hz), AI, persistence, map gen, nav grid / pathfinding (`plugins/nav.rs`), adaptive performance throttling (`plugins/perf.rs`), DM BRP methods (`plugins/dm.rs`) |
+| `crates/client` | Bevy client binary: rendering, egui HUD, input — also hosts the server plugins in-process today |
 | `tools/combat_sim` | proptest harness — runs combat rules with no ECS |
 | `tools/ralph` | BRP HTTP test driver — asserts live world state via JSON-RPC |
+| `tools/worldwatch` | Async egui dashboard — live world inspector + DM control panel over BRP |
 | `tools/world_gen` | ASCII world preview: `cargo run -p world_gen -- --seed N` |
 | `tools/sprite_gen` | Sprite atlas generator: `cargo run -p sprite_gen -- --all` (mock) or `--backend dalle --api-key sk-...` |
+
+### Bestiary
+
+`assets/bestiary.toml` is the single source of truth for sprite entities. It currently contains **15 D&D SRD Tier 1 monster entries** (Goblin, Kobold, Orc, Hobgoblin, Bugbear, Skeleton, Zombie, Ghoul, Owlbear, Troll, Giant Spider, Giant Rat, Gelatinous Cube, Hill Giant, Young Red Dragon) in addition to the hero, faction NPCs, and wildlife. The old `goblin_scout` placeholder has been removed — the renderer now uses `atlas_id_for_entity()` (in `crates/client/src/plugins/billboard_sprite.rs`) to pick an atlas from `EntityKind` + `FactionBadge` + `WildlifeKind`.
 
 ## Non-negotiable architecture rules
 
@@ -53,15 +58,31 @@ Run `cargo clippy` before considering any task done.
 
 ## Ralph loop (automated feedback)
 
-Server BRP on port **15702**, headless client on **15703**. Launch order:
+`fellytip-client --headless` runs both client and server logic in one process and exposes BRP on port **15702** (see `BRP_PORT` in `crates/client/src/main.rs`). There is no separate `fellytip-server` binary today — `fellytip-server` is a library crate that the client consumes. Launch order:
 
 ```bash
-cargo run -p fellytip-server &
 cargo run -p fellytip-client -- --headless &
 cargo run -p ralph -- --scenario all
 ```
 
 Ralph scenarios are the acceptance criteria for each milestone. A scenario passing = milestone shipped.
+
+### DM BRP methods (live world control)
+
+The headless client registers a set of `dm/*` custom BRP methods (see `crates/server/src/plugins/dm.rs`) used by ralph scenarios and `tools/worldwatch` for live testing:
+
+| Method | Params | Effect |
+|---|---|---|
+| `dm/spawn_npc` | `{ faction, x, y, z, level? }` | Spawn a full-stat faction NPC |
+| `dm/kill` | `{ entity }` | Despawn any entity by id |
+| `dm/teleport` | `{ entity, x, y, z }` | Move an entity to a new position |
+| `dm/set_faction` | `{ faction, food?, gold?, military? }` | Override faction resources |
+| `dm/trigger_war_party` | `{ attacker_faction, target_faction }` | Immediately form a war party targeting the nearest hostile settlement |
+| `dm/set_ecology` | `{ region, prey?, predator? }` | Override prey / predator counts in a macro region |
+| `dm/battle_history` | `{ limit? }` | Read the rolling battle record history, newest-first |
+| `dm/clear_battle_history` | `{}` | Drop every queued `BattleRecord` — test helper so scenarios can isolate their own battle |
+
+Bevy 0.18 renamed the built-in BRP endpoints from `bevy/*` to `world.*` (e.g. `world.query`, `world.get`, `world.spawn`). All new ralph code should call the `world.*` names.
 
 ## Milestones (current target: work top-to-bottom)
 
