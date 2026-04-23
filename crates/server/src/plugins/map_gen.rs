@@ -47,6 +47,7 @@ pub struct MapGenConfig {
 use crate::plugins::{
     ai::{flush_factions_to_db, init_population_state, seed_factions, spawn_faction_npcs},
     ecology::seed_ecology,
+    nav::build_nav_grid,
     persistence::Db,
     world_sim::WorldSimTick,
 };
@@ -63,7 +64,7 @@ impl Plugin for MapGenPlugin {
         // deferred in Bevy and are not flushed until the next apply_deferred.
         app.add_systems(
             Startup,
-            (generate_world, ApplyDeferred, seed_ecology, spawn_faction_npcs, init_population_state, spawn_settlement_markers, history_warp, flush_factions_to_db)
+            (generate_world, ApplyDeferred, build_nav_grid, seed_ecology, spawn_faction_npcs, init_population_state, spawn_settlement_markers, history_warp, flush_factions_to_db)
                 .chain()
                 .after(seed_factions),
         );

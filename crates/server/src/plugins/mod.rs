@@ -6,6 +6,7 @@ pub mod dungeon;
 pub mod ecology;
 pub mod interest;
 pub mod map_gen;
+pub mod nav;
 pub mod party;
 pub mod persistence;
 pub mod story;
