@@ -60,6 +60,53 @@ impl TickTimings {
     }
 }
 
+/// Server-side adaptive AI throttle level.
+///
+/// `Ord` ranks from least-throttled (`Full`) to most-throttled (`Suspended`)
+/// so `max(a, b)` escalates in the "more throttled" direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum ThrottleLevel {
+    #[default]
+    Full,
+    Reduced,
+    Minimal,
+    Suspended,
+}
+
+impl ThrottleLevel {
+    /// Drop exactly one step toward `Full` (used for hysteresis deescalation).
+    pub fn deescalate_one(self) -> Self {
+        match self {
+            ThrottleLevel::Suspended => ThrottleLevel::Minimal,
+            ThrottleLevel::Minimal => ThrottleLevel::Reduced,
+            ThrottleLevel::Reduced => ThrottleLevel::Full,
+            ThrottleLevel::Full => ThrottleLevel::Full,
+        }
+    }
+}
+
+/// Derived throttle level exposed to AI / pathfinding systems.
+#[derive(Resource, Default)]
+pub struct AdaptiveScheduler {
+    pub level: ThrottleLevel,
+}
+
+/// Number of consecutive under-budget ticks required before relaxing one step.
+const DEESCALATE_AFTER: u32 = 10;
+
+/// Map a P95 latency (ms) to the corresponding throttle level.
+fn derive_level(p95_ms: f32) -> ThrottleLevel {
+    if p95_ms > AI_TICK_BUDGET_MS * 1.5 {
+        ThrottleLevel::Suspended
+    } else if p95_ms > AI_TICK_BUDGET_MS {
+        ThrottleLevel::Minimal
+    } else if p95_ms > AI_TICK_BUDGET_MS * 0.75 {
+        ThrottleLevel::Reduced
+    } else {
+        ThrottleLevel::Full
+    }
+}
+
 /// System set that brackets all AI / world-sim systems so timing bookends
 /// can use `.before()` / `.after()` on a stable anchor.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -68,19 +115,33 @@ pub struct PerfRecordStart;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PerfRecordEnd;
 
+/// Runs after `PerfRecordStart` and before all AI systems so downstream
+/// systems see an up-to-date throttle level.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PerfThrottleUpdate;
+
 pub struct PerfPlugin;
 
 impl Plugin for PerfPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TickStartTime>()
             .init_resource::<TickTimings>()
+            .init_resource::<AdaptiveScheduler>()
             .add_systems(
                 WorldSimSchedule,
                 record_tick_start.in_set(PerfRecordStart),
             )
             .add_systems(
                 WorldSimSchedule,
-                record_tick_end.in_set(PerfRecordEnd).after(PerfRecordStart),
+                update_throttle_level
+                    .in_set(PerfThrottleUpdate)
+                    .after(PerfRecordStart),
+            )
+            .add_systems(
+                WorldSimSchedule,
+                record_tick_end
+                    .in_set(PerfRecordEnd)
+                    .after(PerfThrottleUpdate),
             );
     }
 }
@@ -92,6 +153,22 @@ fn record_tick_start(mut start: ResMut<TickStartTime>) {
 fn record_tick_end(start: Res<TickStartTime>, mut timings: ResMut<TickTimings>) {
     let ms = start.0.elapsed().as_secs_f32() * 1000.0;
     timings.push(ms);
+}
+
+fn update_throttle_level(
+    timings: Res<TickTimings>,
+    mut scheduler: ResMut<AdaptiveScheduler>,
+) {
+    let derived = derive_level(timings.p95_ms());
+    scheduler.level = if derived > scheduler.level {
+        derived
+    } else if derived < scheduler.level
+        && timings.consecutive_under >= DEESCALATE_AFTER
+    {
+        scheduler.level.deescalate_one()
+    } else {
+        scheduler.level
+    };
 }
 
 #[cfg(test)]
@@ -133,5 +210,76 @@ mod tests {
         }
         // 20 samples: index = (20 * 0.95) as usize = 19 → value 20.0
         assert_eq!(t.p95_ms(), 20.0);
+    }
+
+    #[test]
+    fn derive_level_thresholds() {
+        assert_eq!(derive_level(0.0), ThrottleLevel::Full);
+        assert_eq!(derive_level(AI_TICK_BUDGET_MS * 0.5), ThrottleLevel::Full);
+        assert_eq!(derive_level(AI_TICK_BUDGET_MS * 0.8), ThrottleLevel::Reduced);
+        assert_eq!(derive_level(AI_TICK_BUDGET_MS * 1.2), ThrottleLevel::Minimal);
+        assert_eq!(derive_level(AI_TICK_BUDGET_MS * 2.0), ThrottleLevel::Suspended);
+    }
+
+    #[test]
+    fn deescalate_one_steps_down() {
+        assert_eq!(
+            ThrottleLevel::Suspended.deescalate_one(),
+            ThrottleLevel::Minimal
+        );
+        assert_eq!(ThrottleLevel::Minimal.deescalate_one(), ThrottleLevel::Reduced);
+        assert_eq!(ThrottleLevel::Reduced.deescalate_one(), ThrottleLevel::Full);
+        assert_eq!(ThrottleLevel::Full.deescalate_one(), ThrottleLevel::Full);
+    }
+
+    fn run_update(timings: &TickTimings, scheduler: &mut AdaptiveScheduler) {
+        let derived = derive_level(timings.p95_ms());
+        scheduler.level = if derived > scheduler.level {
+            derived
+        } else if derived < scheduler.level && timings.consecutive_under >= DEESCALATE_AFTER {
+            scheduler.level.deescalate_one()
+        } else {
+            scheduler.level
+        };
+    }
+
+    #[test]
+    fn escalates_immediately() {
+        let mut timings = TickTimings::default();
+        for _ in 0..5 {
+            timings.push(AI_TICK_BUDGET_MS * 2.0);
+        }
+        let mut s = AdaptiveScheduler::default();
+        run_update(&timings, &mut s);
+        assert_eq!(s.level, ThrottleLevel::Suspended);
+    }
+
+    #[test]
+    fn deescalates_only_after_hysteresis_window() {
+        let mut timings = TickTimings::default();
+        // Prime the scheduler into Suspended via one escalation.
+        timings.push(AI_TICK_BUDGET_MS * 2.0);
+        let mut s = AdaptiveScheduler::default();
+        run_update(&timings, &mut s);
+        assert_eq!(s.level, ThrottleLevel::Suspended);
+
+        // Push enough under-budget samples to drive P95 below the derived threshold.
+        // With a single high sample in the ring buffer, ~20 low samples are enough
+        // to drop the 95th percentile below budget × 0.75.
+        for _ in 0..9 {
+            timings.push(1.0);
+            run_update(&timings, &mut s);
+        }
+        // 9 consecutive under-budget ticks: still below hysteresis threshold.
+        assert_eq!(s.level, ThrottleLevel::Suspended);
+
+        // 10th under-budget tick — and enough prior low samples to push P95 low.
+        for _ in 0..20 {
+            timings.push(1.0);
+        }
+        run_update(&timings, &mut s);
+        // Now we've hit both: P95 is below budget AND consecutive_under ≥ 10.
+        // One step down (Suspended → Minimal).
+        assert_eq!(s.level, ThrottleLevel::Minimal);
     }
 }
