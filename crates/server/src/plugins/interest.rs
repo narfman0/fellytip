@@ -34,6 +34,38 @@ pub const HOT_SPEED:    f32 = 1.0;
 pub const WARM_SPEED:   f32 = 0.25;
 pub const FROZEN_SPEED: f32 = 0.05;
 
+// ── Zone enum ─────────────────────────────────────────────────────────────────
+
+/// Simulation LOD zone for an entity based on proximity to the nearest player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zone {
+    Hot,
+    Warm,
+    Frozen,
+}
+
+impl Zone {
+    pub fn speed(self) -> f32 {
+        match self {
+            Zone::Hot    => HOT_SPEED,
+            Zone::Warm   => WARM_SPEED,
+            Zone::Frozen => FROZEN_SPEED,
+        }
+    }
+}
+
+/// Return the LOD zone for an entity at the given world position.
+pub fn entity_zone(pos: &WorldPosition, chunk_temp: &ChunkTemperature) -> Zone {
+    let chunk = world_to_chunk(pos.x, pos.y);
+    if chunk_temp.hot.contains(&chunk) {
+        Zone::Hot
+    } else if chunk_temp.warm.contains(&chunk) {
+        Zone::Warm
+    } else {
+        Zone::Frozen
+    }
+}
+
 // ── Resource ──────────────────────────────────────────────────────────────────
 
 /// Chunk zone maps rebuilt every WorldSimSchedule tick (1 Hz).

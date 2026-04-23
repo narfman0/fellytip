@@ -1,5 +1,18 @@
 //! NPC AI plugin — re-evaluates faction goals and nudges NPC positions
 //! each WorldSimSchedule tick (1 Hz).
+//!
+//! # Three-tier pathfinding LOD
+//!
+//! All pathfinding is gated on the entity's `Zone` (see `interest::entity_zone`):
+//!
+//! | Zone   | Individual NPCs (wander_npcs)         | War parties (march_war_parties)        | Separation (war_party_separation) |
+//! |--------|---------------------------------------|----------------------------------------|-----------------------------------|
+//! | Hot    | A* replan every 2 ticks, full speed   | Flow-field sampling, full MARCH_SPEED  | Pairwise repulsion                |
+//! | Warm   | A* replan every 8 ticks, 0.25× speed  | Flow-field sampling, 0.25× speed       | Pairwise repulsion                |
+//! | Frozen | Linear march toward home, 0.05× speed | Linear march to target, 0.05× speed   | Fixed centroid-offset formation   |
+//!
+//! Frozen entities always reach their goal (macro-correct behavior) via linear march;
+//! expensive A* and flow-field sampling are skipped entirely for out-of-range chunks.
 
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
@@ -33,6 +46,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
+use crate::plugins::interest::{entity_zone, Zone};
 use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField};
 use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
 
@@ -179,13 +193,11 @@ fn wander_npcs(
     let Some(nav) = nav else { return };
 
     for (entity, mut pos, home, mut nav_path, mut replan_timer) in &mut query {
-        let tile_x = (pos.x + MAP_HALF_WIDTH as f32) as i32;
-        let tile_y = (pos.y + MAP_HALF_HEIGHT as f32) as i32;
-        let chunk = (tile_x.max(0) / CHUNK_TILES as i32, tile_y.max(0) / CHUNK_TILES as i32);
-        let zone_speed = temp.zone_speed(chunk);
+        let zone = entity_zone(&pos, &temp);
+        let zone_speed = zone.speed();
 
         // Frozen: skip A*, linear march toward home position.
-        if zone_speed <= crate::plugins::interest::FROZEN_SPEED + f32::EPSILON {
+        if zone == Zone::Frozen {
             let dx = home.0.x - pos.x;
             let dy = home.0.y - pos.y;
             let dist_sq = dx * dx + dy * dy;
@@ -198,11 +210,7 @@ fn wander_npcs(
         }
 
         // Determine replan cadence from zone.
-        let replan_every = if zone_speed >= crate::plugins::interest::HOT_SPEED - f32::EPSILON {
-            2u32
-        } else {
-            8u32
-        };
+        let replan_every = if zone == Zone::Hot { 2u32 } else { 8u32 };
 
         replan_timer.0 = replan_timer.0.saturating_add(1);
 
@@ -781,14 +789,15 @@ fn march_war_parties(
     mut battle_start: MessageWriter<BattleStartMsg>,
 ) {
     for (war_member, mut pos) in &mut warriors {
-        let speed = temp.speed_at_world(pos.x, pos.y);
+        let zone = entity_zone(&pos, &temp);
+        let speed = zone.speed();
         let dx = war_member.target_x - pos.x;
         let dy = war_member.target_y - pos.y;
         let dist = (dx * dx + dy * dy).sqrt();
 
         if dist > 0.01 {
-            if speed <= crate::plugins::interest::FROZEN_SPEED + f32::EPSILON {
-                // Frozen: linear march (original behavior).
+            if zone == Zone::Frozen {
+                // Frozen: linear march (macro-correct, skips expensive flow-field).
                 let step = (MARCH_SPEED * speed / dist).min(1.0);
                 pos.x += dx * step;
                 pos.y += dy * step;
@@ -1122,14 +1131,15 @@ fn war_party_separation(
     let mut deltas: HashMap<Entity, (f32, f32)> = HashMap::new();
 
     for (_, indices) in &groups {
-        let zone_speed = if indices.is_empty() {
+        let zone = if indices.is_empty() {
             continue;
         } else {
             let (_, _, x, y) = snapshot[indices[0]];
-            temp.speed_at_world(x, y)
+            let dummy_pos = fellytip_shared::components::WorldPosition { x, y, z: 0.0 };
+            entity_zone(&dummy_pos, &temp)
         };
 
-        if zone_speed <= crate::plugins::interest::FROZEN_SPEED + f32::EPSILON {
+        if zone == Zone::Frozen {
             // Frozen: arrange at fixed offsets from centroid.
             let n = indices.len();
             let cx: f32 = indices.iter().map(|&i| snapshot[i].2).sum::<f32>() / n as f32;
