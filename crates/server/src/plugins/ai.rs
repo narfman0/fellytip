@@ -11,7 +11,7 @@ use fellytip_shared::{
         interrupt::InterruptStack,
         types::{CharacterClass, CombatantId, CombatantSnapshot, CombatantState, CombatState, CoreStats, Effect},
     },
-    components::{EntityKind, FactionBadge, GrowthStage, Health, PlayerStandings, WorldPosition},
+    components::{EntityKind, FactionBadge, GrowthStage, Health, NavPath, NavReplanTimer, PlayerStandings, WorldPosition},
     world::{
         civilization::Settlements,
         faction::{
@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
+use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid};
 use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
 
 /// Server-only component: which faction this NPC belongs to.
@@ -155,48 +156,98 @@ fn update_faction_goals(mut registry: ResMut<FactionRegistry>) {
     }
 }
 
-/// Move faction NPCs a small amount per tick using deterministic bounded wandering.
+/// Move faction NPCs each world-sim tick using zone-gated A* pathfinding.
+///
+/// # Three-tier LOD behavior:
+/// - **Hot** (chunks 0–2 from player): replan A* every 2 ticks, follow waypoints at full speed.
+/// - **Warm** (chunks 3–8 from player): replan every 8 ticks, follow at 0.25× speed.
+/// - **Frozen** (>8 chunks from player): skip A*, linear march toward home at 0.05× speed.
+///
 /// War party members are excluded — they march under `march_war_parties` instead.
-/// NPCs in Frozen chunks are skipped to avoid wasting simulation budget.
 #[allow(clippy::type_complexity)]
 fn wander_npcs(
-    mut query: Query<(Entity, &mut WorldPosition, &HomePosition), (With<FactionMember>, Without<WarPartyMember>)>,
+    mut query: Query<
+        (Entity, &mut WorldPosition, &HomePosition, &mut NavPath, &mut NavReplanTimer),
+        (With<FactionMember>, Without<WarPartyMember>),
+    >,
     temp: Res<ChunkTemperature>,
+    nav: Option<Res<NavGrid>>,
     tick: Res<WorldSimTick>,
 ) {
-    for (entity, mut pos, home) in &mut query {
+    let Some(nav) = nav else { return };
+
+    for (entity, mut pos, home, mut nav_path, mut replan_timer) in &mut query {
         let tile_x = (pos.x + MAP_HALF_WIDTH as f32) as i32;
         let tile_y = (pos.y + MAP_HALF_HEIGHT as f32) as i32;
         let chunk = (tile_x.max(0) / CHUNK_TILES as i32, tile_y.max(0) / CHUNK_TILES as i32);
-
-        if !temp.is_active(chunk) {
-            continue; // Frozen — skip simulation
-        }
-
         let zone_speed = temp.zone_speed(chunk);
 
-        // Slowly-rotating deterministic angle, unique per entity.
-        // entity.to_bits() cast to f32 is intentionally lossy — we only need rough variation.
-        #[allow(clippy::cast_precision_loss)]
-        let entity_seed = entity.to_bits() as f32 * 0.000001;
-        #[allow(clippy::cast_precision_loss)]
-        let angle = (entity_seed + tick.0 as f32 * 0.05).sin() * std::f32::consts::TAU;
-        let step = 0.15 * zone_speed;
+        // Frozen: skip A*, linear march toward home position.
+        if zone_speed <= crate::plugins::interest::FROZEN_SPEED + f32::EPSILON {
+            let dx = home.0.x - pos.x;
+            let dy = home.0.y - pos.y;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq > 0.01 {
+                let dist = dist_sq.sqrt();
+                pos.x += (dx / dist) * FROZEN_WANDER_STEP * zone_speed;
+                pos.y += (dy / dist) * FROZEN_WANDER_STEP * zone_speed;
+            }
+            continue;
+        }
 
-        // Townspeople stay within 4 tiles of their home settlement.
-        let home_dx = home.0.x - pos.x;
-        let home_dy = home.0.y - pos.y;
-        let dist_sq = home_dx * home_dx + home_dy * home_dy;
-        if dist_sq > 4.0f32.powi(2) {
-            let dist = dist_sq.sqrt();
-            pos.x += (home_dx / dist) * 0.1 * zone_speed;
-            pos.y += (home_dy / dist) * 0.1 * zone_speed;
+        // Determine replan cadence from zone.
+        let replan_every = if zone_speed >= crate::plugins::interest::HOT_SPEED - f32::EPSILON {
+            2u32
         } else {
-            pos.x += angle.cos() * step;
-            pos.y += angle.sin() * step;
+            8u32
+        };
+
+        replan_timer.0 = replan_timer.0.saturating_add(1);
+
+        // Replan A* when timer expires or path is exhausted.
+        if replan_timer.0 >= replan_every || nav_path.is_complete() {
+            replan_timer.0 = 0;
+
+            // Wander goal: pick a position within 4 tiles of home using entity seed.
+            #[allow(clippy::cast_precision_loss)]
+            let entity_seed = entity.to_bits() as f32 * 0.000_013_7;
+            #[allow(clippy::cast_precision_loss)]
+            let angle = (entity_seed + tick.0 as f32 * 0.07).sin() * std::f32::consts::TAU;
+            let goal_x = home.0.x + angle.cos() * 3.5;
+            let goal_y = home.0.y + angle.sin() * 3.5;
+
+            let start = world_to_nav(pos.x, pos.y);
+            let goal  = world_to_nav(goal_x, goal_y);
+
+            if let Some(waypoints) = nav.astar(start, goal) {
+                *nav_path = NavPath { waypoints, waypoint_index: 0 };
+            }
+        }
+
+        // Follow current path: advance toward next waypoint.
+        if let Some((wx, wy)) = nav_path.next_waypoint() {
+            let (target_x, target_y) = nav_to_world(wx as usize, wy as usize);
+            let dx = target_x - pos.x;
+            let dy = target_y - pos.y;
+            let dist_sq = dx * dx + dy * dy;
+            let step = WANDER_STEP * zone_speed;
+            if dist_sq <= step * step {
+                pos.x = target_x;
+                pos.y = target_y;
+                nav_path.waypoint_index += 1;
+            } else {
+                let dist = dist_sq.sqrt();
+                pos.x += (dx / dist) * step;
+                pos.y += (dy / dist) * step;
+            }
         }
     }
 }
+
+/// Movement speed per tick for wandering NPCs (in world units).
+const WANDER_STEP: f32 = 0.15;
+/// Movement speed per tick for Frozen NPCs linear-marching to home.
+const FROZEN_WANDER_STEP: f32 = 0.5;
 
 /// Spawn guard NPCs for each faction at their nearest settlement.
 /// Count is controlled by `MapGenConfig::npcs_per_faction` (default 3).
@@ -247,6 +298,8 @@ pub fn spawn_faction_npcs(
                 CurrentGoal(None),
                 HomePosition(pos),
                 EntityKind::FactionNpc,
+                NavPath::default(),
+                NavReplanTimer::default(),
             ));
             tracing::debug!(
                 faction = %faction.name,
@@ -533,6 +586,8 @@ fn tick_population_system(
                         HomePosition(pos),
                         EntityKind::FactionNpc,
                         GrowthStage(0.0),
+                        NavPath::default(),
+                        NavReplanTimer::default(),
                     ));
                     tracing::debug!(faction = %next.faction_id.0, "Child NPC spawned");
                 }

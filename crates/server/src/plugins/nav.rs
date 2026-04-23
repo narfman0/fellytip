@@ -109,6 +109,116 @@ pub fn nav_to_world(nx: usize, ny: usize) -> (f32, f32) {
     )
 }
 
+impl NavGrid {
+    /// A* from `start` to `goal` on the 256×256 nav grid.
+    ///
+    /// Returns a list of direction-change waypoints (not every cell).
+    /// Returns `None` if no path exists.
+    pub fn astar(&self, start: (usize, usize), goal: (usize, usize)) -> Option<Vec<(u16, u16)>> {
+        use std::collections::BinaryHeap;
+        use std::cmp::Reverse;
+
+        if start == goal {
+            return Some(vec![(goal.0 as u16, goal.1 as u16)]);
+        }
+
+        let cell_count = NAV_WIDTH * NAV_HEIGHT;
+        let idx = |x: usize, y: usize| x + y * NAV_WIDTH;
+
+        let mut g_score = vec![f32::MAX; cell_count];
+        let mut came_from = vec![usize::MAX; cell_count];
+        let mut open: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::new();
+
+        let start_idx = idx(start.0, start.1);
+        g_score[start_idx] = 0.0;
+        let h = heuristic(start, goal);
+        open.push(Reverse((float_to_ord(h), start_idx)));
+
+        while let Some(Reverse((_, cur_idx))) = open.pop() {
+            let cur_x = cur_idx % NAV_WIDTH;
+            let cur_y = cur_idx / NAV_WIDTH;
+
+            if (cur_x, cur_y) == goal {
+                return Some(reconstruct_path(&came_from, cur_idx, start_idx));
+            }
+
+            let cur_g = g_score[cur_idx];
+
+            for (nx, ny) in neighbors(cur_x, cur_y) {
+                let cell = self.cell(nx, ny);
+                let cost = cell.movement_cost();
+                if cost == f32::MAX {
+                    continue;
+                }
+                let n_idx = idx(nx, ny);
+                let tentative_g = cur_g + cost;
+                if tentative_g < g_score[n_idx] {
+                    g_score[n_idx] = tentative_g;
+                    came_from[n_idx] = cur_idx;
+                    let f = tentative_g + heuristic((nx, ny), goal);
+                    open.push(Reverse((float_to_ord(f), n_idx)));
+                }
+            }
+        }
+
+        None
+    }
+}
+
+fn heuristic(a: (usize, usize), b: (usize, usize)) -> f32 {
+    let dx = (a.0 as i32 - b.0 as i32).abs();
+    let dy = (a.1 as i32 - b.1 as i32).abs();
+    (dx + dy) as f32
+}
+
+fn float_to_ord(f: f32) -> u32 {
+    // Map f32 to a u32 that preserves ordering for non-negative values.
+    f.to_bits()
+}
+
+fn neighbors(x: usize, y: usize) -> impl Iterator<Item = (usize, usize)> {
+    let mut buf = [(0usize, 0usize); 4];
+    let mut n = 0usize;
+    if x + 1 < NAV_WIDTH  { buf[n] = (x + 1, y); n += 1; }
+    if x > 0              { buf[n] = (x - 1, y); n += 1; }
+    if y + 1 < NAV_HEIGHT { buf[n] = (x, y + 1); n += 1; }
+    if y > 0              { buf[n] = (x, y - 1); n += 1; }
+    buf.into_iter().take(n)
+}
+
+/// Reconstruct path from `came_from` table, keeping only direction-change waypoints.
+fn reconstruct_path(came_from: &[usize], mut cur: usize, start: usize) -> Vec<(u16, u16)> {
+    let mut full = Vec::new();
+    while cur != start {
+        full.push(cur);
+        let prev = came_from[cur];
+        if prev == usize::MAX { break; }
+        cur = prev;
+    }
+    full.reverse();
+
+    // Compress: keep waypoints where direction changes.
+    let mut waypoints = Vec::new();
+    let mut prev_dir: Option<(i32, i32)> = None;
+    for &cell_idx in &full {
+        let x = (cell_idx % NAV_WIDTH) as u16;
+        let y = (cell_idx / NAV_WIDTH) as u16;
+        // Compute direction from previous waypoint.
+        if let Some(last) = waypoints.last().copied() {
+            let (lx, ly): (u16, u16) = last;
+            let dir = (x as i32 - lx as i32, y as i32 - ly as i32);
+            if Some(dir) != prev_dir {
+                waypoints.push((x, y));
+                prev_dir = Some(dir);
+            }
+        } else {
+            waypoints.push((x, y));
+            prev_dir = None;
+        }
+    }
+    waypoints
+}
+
 pub struct NavPlugin;
 
 impl Plugin for NavPlugin {

@@ -178,6 +178,30 @@ impl Default for EntityBounds {
     fn default() -> Self { Self::PLAYER }
 }
 
+/// Sequence of nav-grid waypoints for an NPC to follow.
+///
+/// Only direction-change waypoints are stored (not every cell) to keep memory small.
+/// `waypoint_index` is the next unvisited waypoint.
+#[derive(Component, Clone, Debug, Default)]
+pub struct NavPath {
+    pub waypoints: Vec<(u16, u16)>,
+    pub waypoint_index: usize,
+}
+
+impl NavPath {
+    pub fn is_complete(&self) -> bool {
+        self.waypoint_index >= self.waypoints.len()
+    }
+
+    pub fn next_waypoint(&self) -> Option<(u16, u16)> {
+        self.waypoints.get(self.waypoint_index).copied()
+    }
+}
+
+/// Tracks ticks since last A* replan for an NPC.
+#[derive(Component, Clone, Debug, Default)]
+pub struct NavReplanTimer(pub u32);
+
 #[cfg(test)]
 mod tests {
     use super::*;
