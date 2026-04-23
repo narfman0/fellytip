@@ -53,6 +53,7 @@ impl Plugin for ServerGamePlugin {
             })
             .add_plugins(plugins::persistence::PersistencePlugin)
             .add_plugins(plugins::world_sim::WorldSimPlugin)
+            .add_plugins(plugins::perf::PerfPlugin)
             .add_plugins(plugins::story::StoryPlugin)
             .add_plugins(plugins::combat::CombatPlugin)
             .add_plugins(plugins::interest::InterestPlugin)
