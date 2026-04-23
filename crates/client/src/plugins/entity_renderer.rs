@@ -27,6 +27,7 @@ use bevy::prelude::*;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
 
+use super::billboard_sprite::{atlas_id_for_entity, BillboardSprites};
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
 
 pub struct EntityRendererPlugin;
@@ -168,13 +169,22 @@ type SpawnVisualQuery<'w, 's> = Query<
 >;
 
 /// Fires once per entity the first time `WorldPosition` is added by replication.
+/// Skips PBR scene insertion for entities whose billboard atlas is already loaded
+/// — the billboard renderer handles those.
 fn spawn_entity_visuals(
     mut commands:   Commands,
     assets:         Res<EntityVisualAssets>,
     char_assets:    Res<CharacterAssets>,
+    sprites:        Res<BillboardSprites>,
     query:          SpawnVisualQuery,
 ) {
     for (entity, pos, kind, growth, badge, wildlife_kind) in &query {
+        // Skip PBR if a billboard atlas is loaded for this entity kind.
+        if let Some(ref id) = atlas_id_for_entity(kind, badge, wildlife_kind) {
+            if sprites.atlases.contains_key(id.as_str()) {
+                continue;
+            }
+        }
         match kind {
             // ── Settlement ────────────────────────────────────────────────────
             Some(EntityKind::Settlement) => {
