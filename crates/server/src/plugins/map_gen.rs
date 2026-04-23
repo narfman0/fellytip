@@ -27,6 +27,7 @@ use fellytip_shared::{
             generate_settlements, Buildings, Settlements,
         },
         map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
+        nav::{NavCell, NavGrid},
     },
 };
 
@@ -58,6 +59,8 @@ pub struct MapGenPlugin;
 
 impl Plugin for MapGenPlugin {
     fn build(&self, app: &mut App) {
+        app.register_type::<NavCell>()
+            .register_type::<NavGrid>();
         // apply_deferred is inserted between systems that use Commands and systems
         // that read the resources those commands insert, because Commands are
         // deferred in Bevy and are not flushed until the next apply_deferred.
@@ -226,7 +229,10 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
     let buildings = generate_buildings(&settlements, &map, config.seed);
     tracing::info!(count = buildings.len(), "Buildings resource created");
 
+    let nav_grid = NavGrid::build_from(&map);
+    tracing::info!("NavGrid built (256×256)");
     commands.insert_resource(map);
+    commands.insert_resource(nav_grid);
     commands.insert_resource(Settlements(settlements));
     commands.insert_resource(Buildings(buildings));
     tracing::info!("World generation complete");

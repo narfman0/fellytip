@@ -84,6 +84,22 @@ Each walkable surface tile is classified by the Whittaker diagram. Temperature i
 
 Flow direction: the steepest downhill cardinal/diagonal neighbour. Drainage area: accumulated by processing tiles highest-to-lowest. Tiles whose accumulated drainage exceeds `RIVER_THRESHOLD` (see `map.rs`) become non-walkable River tiles.
 
+## Navigation grid
+
+`NavGrid` (in `crates/shared/src/world/nav.rs`) is a 256×256 downsampled view of the 1024×1024 tile map, built once during world-gen and inserted as a Bevy `Resource` immediately after the `WorldMap`.
+
+Each `NavCell` covers a 4×4 tile block (4:1 downsample). The cell value is the worst-case across all 16 tiles — Blocked > Slow > Passable:
+
+| `NavCell` | Tile kinds |
+|---|---|
+| `Blocked` | `Mountain`, `Water`, `River`, `Void`, any non-walkable tile (including buildings) |
+| `Slow` | `Forest`, `TropicalForest`, `TropicalRainforest`, `TemperateForest`, `Taiga` |
+| `Passable` | `Plains`, `Stone`, `Desert`, `Savanna`, `Grassland`, `Tundra`, `PolarDesert`, `Arctic` |
+
+`NavGrid` must be built **after** `apply_building_tiles` so building footprints are baked in as `Blocked`. It is not persisted to disk — it is recomputed from the `WorldMap` on each startup (256×256 downsample is fast).
+
+Query API: `nav_grid.nav_cell_at(world_x, world_y) -> NavCell`. Returns `Blocked` for out-of-bounds coordinates. Accessible from `ai.rs` and future flow-field systems via `Res<NavGrid>`.
+
 ## Map caching
 
 The full `WorldMap` is serialised to `world_{seed}_{width}x{height}.bin` using bincode on first generation. The path is stored in `world_meta` in SQLite. Subsequent server starts load from the file and skip the expensive fBm passes. See `docs/systems/persistence.md` for cache invalidation rules.

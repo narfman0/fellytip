@@ -2,6 +2,7 @@ pub mod civilization;
 pub mod ecology;
 pub mod faction;
 pub mod map;
+pub mod nav;
 pub mod population;
 pub mod schedule;
 pub mod story;
