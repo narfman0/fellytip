@@ -29,7 +29,7 @@ use bevy::{
 };
 use fellytip_shared::{
     bestiary::{load_bestiary, AnimationDef, BestiaryEntry},
-    components::WorldPosition,
+    components::{EntityKind, FactionBadge, WildlifeKind, WorldPosition},
     sprite_math::world_dir_to_sprite_row,
 };
 use smol_str::SmolStr;
@@ -37,6 +37,29 @@ use std::collections::HashMap;
 
 use crate::{LocalPlayer, PredictedPosition};
 use crate::plugins::camera::OrbitCamera;
+
+/// Returns the bestiary atlas id for an entity based on its components, or
+/// `None` for `Settlement` entities (which use PBR only) and cases where a
+/// required component is absent (e.g. `Wildlife` with no `WildlifeKind`).
+pub fn atlas_id_for_entity(
+    kind: Option<&EntityKind>,
+    badge: Option<&FactionBadge>,
+    wildlife: Option<&WildlifeKind>,
+) -> Option<SmolStr> {
+    match kind {
+        None => Some("hero".into()),
+        Some(EntityKind::Settlement) => None,
+        Some(EntityKind::FactionNpc) => {
+            badge.map(|b| format!("{}_npc", b.faction_id).into())
+        }
+        Some(EntityKind::Wildlife) => match wildlife {
+            Some(WildlifeKind::Bison) => Some("bison".into()),
+            Some(WildlifeKind::Dog)   => Some("dog".into()),
+            Some(WildlifeKind::Horse) => Some("horse".into()),
+            None => None,
+        },
+    }
+}
 
 /// World-space edge length of the billboard quad.  Roughly player-sized.
 const BILLBOARD_EDGE: f32 = 2.0;
@@ -266,19 +289,37 @@ fn sprites_dir() -> std::path::PathBuf {
 // ── Spawn ─────────────────────────────────────────────────────────────────────
 
 /// Entities that just received a `WorldPosition` get a billboard sibling if
-/// their bestiary id is loaded.  Today every entity is placeholder-mapped to
-/// the first available atlas — #21 replaces this with an EntityKind match.
+/// their bestiary id is loaded.
+///
+/// Resolution rules (mirrors `bestiary::REQUIRED_BESTIARY_IDS` docs):
+/// - No `EntityKind` → `"hero"` (local player)
+/// - `FactionNpc` + `FactionBadge` → `"{faction_id}_npc"`
+/// - `Wildlife` + `WildlifeKind` → lowercase variant (`"bison"`, `"dog"`, `"horse"`)
+/// - `Settlement` → no billboard
 fn spawn_billboards(
     mut commands: Commands,
     registry: Res<BillboardSprites>,
-    new_entities: Query<(Entity, &WorldPosition), Added<WorldPosition>>,
+    new_entities: Query<
+        (
+            Entity,
+            &WorldPosition,
+            Option<&EntityKind>,
+            Option<&FactionBadge>,
+            Option<&WildlifeKind>,
+        ),
+        Added<WorldPosition>,
+    >,
 ) {
     let Some(quad) = registry.quad.clone() else { return; };
-    let Some((id, atlas)) = registry.atlases.iter().next() else { return; };
 
-    for (entity, pos) in &new_entities {
-        let first_cell = atlas.cell_materials.first().cloned();
-        let Some(mat) = first_cell else { continue; };
+    for (entity, pos, kind, badge, wildlife) in &new_entities {
+        let Some(atlas_id) = atlas_id_for_entity(kind, badge, wildlife) else { continue };
+
+        let Some(atlas) = registry.atlases.get(&atlas_id) else {
+            debug!("billboard: no atlas for `{atlas_id}` — skipping {entity:?}");
+            continue;
+        };
+        let Some(mat) = atlas.cell_materials.first().cloned() else { continue; };
 
         commands.entity(entity).with_children(|children| {
             children.spawn((
@@ -286,7 +327,7 @@ fn spawn_billboards(
                 MeshMaterial3d(mat),
                 Transform::IDENTITY,
                 BillboardSprite {
-                    atlas_id: id.clone(),
+                    atlas_id,
                     animation_index: 0,
                     direction: 0,
                     frame: 0,
