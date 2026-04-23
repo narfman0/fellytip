@@ -42,7 +42,7 @@ use fellytip_shared::{
     },
 };
 use smol_str::SmolStr;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
@@ -110,6 +110,32 @@ pub struct FactionPopulationState {
     pub settlements: HashMap<Uuid, SettlementPopulation>,
 }
 
+/// Persistent record of a resolved battle — appended when one side is eliminated.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BattleRecord {
+    pub winner_faction: String,
+    pub loser_faction: String,
+    pub target_settlement_id: String,
+    pub tick: u64,
+    pub attacker_casualties: u32,
+    pub defender_casualties: u32,
+}
+
+/// Rolling history of resolved battles, capped at 100 entries.
+#[derive(Resource, Default)]
+pub struct BattleHistory {
+    pub records: VecDeque<BattleRecord>,
+}
+
+impl BattleHistory {
+    pub fn push(&mut self, record: BattleRecord) {
+        if self.records.len() >= 100 {
+            self.records.pop_front();
+        }
+        self.records.push_back(record);
+    }
+}
+
 /// Emitted by `tick_population_system` when a faction is ready to dispatch
 /// a war party. Consumed by `check_war_party_formation`.
 #[derive(bevy::ecs::message::Message, Clone, Debug)]
@@ -134,6 +160,7 @@ impl Plugin for AiPlugin {
             .init_resource::<PlayerReputationMap>()
             .init_resource::<FactionPopulationState>()
             .init_resource::<FlowField>()
+            .init_resource::<BattleHistory>()
             .add_message::<FormWarPartyEvent>()
             .register_type::<FactionNpcRank>()
             .add_message::<BattleStartMsg>()
@@ -923,6 +950,7 @@ fn run_battle_rounds(
     mut battle_attack: MessageWriter<BattleAttackMsg>,
     temp: Res<ChunkTemperature>,
     mut story_events: MessageWriter<WriteStoryEvent>,
+    mut history: ResMut<BattleHistory>,
 ) {
     for (battle_entity, mut battle) in &mut battles {
         // Advance the fractional accumulator by this tick's zone speed.
@@ -973,10 +1001,16 @@ fn run_battle_rounds(
 
         // Battle ends when one side is eliminated.
         if attacker_snaps.is_empty() || defender_snaps.is_empty() {
-            let winner = if attacker_snaps.is_empty() {
-                battle.defender_faction.0.as_str().to_owned()
+            let (winner, loser) = if attacker_snaps.is_empty() {
+                (
+                    battle.defender_faction.0.as_str().to_owned(),
+                    battle.attacker_faction.0.as_str().to_owned(),
+                )
             } else {
-                battle.attacker_faction.0.as_str().to_owned()
+                (
+                    battle.attacker_faction.0.as_str().to_owned(),
+                    battle.defender_faction.0.as_str().to_owned(),
+                )
             };
             tracing::info!(
                 winner = %winner,
@@ -986,7 +1020,15 @@ fn run_battle_rounds(
             );
             battle_end.write(BattleEndMsg {
                 settlement_id: battle.settlement_id,
+                winner_faction: winner.clone(),
+                attacker_casualties: battle.attacker_casualties,
+                defender_casualties: battle.defender_casualties,
+            });
+            history.push(BattleRecord {
                 winner_faction: winner,
+                loser_faction: loser,
+                target_settlement_id: battle.settlement_id.to_string(),
+                tick: tick.0,
                 attacker_casualties: battle.attacker_casualties,
                 defender_casualties: battle.defender_casualties,
             });
