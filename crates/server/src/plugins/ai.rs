@@ -75,8 +75,10 @@ pub struct FactionRegistry {
 }
 
 /// Tags an NPC as part of an active war party marching toward a target.
-/// Server-only — never replicated.
-#[derive(Component)]
+/// Server-only — never replicated, but registered for reflection so ralph
+/// scenarios can observe war-party membership via `bevy/query`.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct WarPartyMember {
     pub target_settlement_id: Uuid,
     pub target_x: f32,
@@ -163,6 +165,7 @@ impl Plugin for AiPlugin {
             .init_resource::<BattleHistory>()
             .add_message::<FormWarPartyEvent>()
             .register_type::<FactionNpcRank>()
+            .register_type::<WarPartyMember>()
             .add_message::<BattleStartMsg>()
             .add_message::<BattleEndMsg>()
             .add_message::<BattleAttackMsg>();

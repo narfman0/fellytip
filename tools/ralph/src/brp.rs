@@ -112,4 +112,28 @@ impl BrpClient {
         self.call("dm/teleport", json!({ "entity": entity, "x": x, "y": y, "z": z }))?;
         Ok(())
     }
+
+    /// `dm/trigger_war_party` — force a war party to form immediately.
+    /// Returns the number of warriors tagged.
+    pub fn dm_trigger_war_party(&self, attacker_faction: &str, target_faction: &str) -> Result<u64> {
+        let result = self.call(
+            "dm/trigger_war_party",
+            json!({ "attacker_faction": attacker_faction, "target_faction": target_faction }),
+        )?;
+        Ok(result["warriors_tagged"].as_u64().unwrap_or(0))
+    }
+
+    /// `dm/battle_history` — return up to `limit` newest-first battle records.
+    pub fn dm_battle_history(&self, limit: Option<u32>) -> Result<Vec<Value>> {
+        let params = match limit {
+            Some(n) => json!({ "limit": n }),
+            None    => json!({}),
+        };
+        let result = self.call("dm/battle_history", params)?;
+        match result {
+            Value::Array(arr) => Ok(arr),
+            Value::Null       => Ok(vec![]),
+            other             => bail!("unexpected dm/battle_history result: {other}"),
+        }
+    }
 }
