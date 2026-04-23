@@ -3,7 +3,7 @@
 //!
 //! # Three-tier pathfinding LOD
 //!
-//! All pathfinding is gated on the entity's `Zone` (see `interest::entity_zone`):
+//! All pathfinding is gated on the entity's `Zone` (see `interest::effective_zone`):
 //!
 //! | Zone   | Individual NPCs (wander_npcs)         | War parties (march_war_parties)        | Separation (war_party_separation) |
 //! |--------|---------------------------------------|----------------------------------------|-----------------------------------|
@@ -46,8 +46,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
-use crate::plugins::interest::{entity_zone, Zone};
+use crate::plugins::interest::{effective_zone, Zone};
 use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField};
+use crate::plugins::perf::AdaptiveScheduler;
 use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
 
 /// Server-only component: which faction this NPC belongs to.
@@ -187,13 +188,14 @@ fn wander_npcs(
         (With<FactionMember>, Without<WarPartyMember>),
     >,
     temp: Res<ChunkTemperature>,
+    scheduler: Res<AdaptiveScheduler>,
     nav: Option<Res<NavGrid>>,
     tick: Res<WorldSimTick>,
 ) {
     let Some(nav) = nav else { return };
 
     for (entity, mut pos, home, mut nav_path, mut replan_timer) in &mut query {
-        let zone = entity_zone(&pos, &temp);
+        let zone = effective_zone(&pos, &temp, scheduler.level);
         let zone_speed = zone.speed();
 
         // Frozen: skip A*, linear march toward home position.
@@ -779,17 +781,19 @@ fn sync_player_standings(
 /// - **Hot/Warm**: sample the cached flow field at the entity's nav cell,
 ///   apply direction × MARCH_SPEED × zone_speed.
 /// - **Frozen**: keep existing linear march (unchanged behavior, macro-correct).
+#[allow(clippy::too_many_arguments)]
 fn march_war_parties(
     mut warriors: Query<(&WarPartyMember, &mut WorldPosition)>,
     battles: Query<&ActiveBattle>,
     pop: Res<FactionPopulationState>,
     temp: Res<ChunkTemperature>,
+    scheduler: Res<AdaptiveScheduler>,
     flow_field: Res<FlowField>,
     mut commands: Commands,
     mut battle_start: MessageWriter<BattleStartMsg>,
 ) {
     for (war_member, mut pos) in &mut warriors {
-        let zone = entity_zone(&pos, &temp);
+        let zone = effective_zone(&pos, &temp, scheduler.level);
         let speed = zone.speed();
         let dx = war_member.target_x - pos.x;
         let dy = war_member.target_y - pos.y;
@@ -1110,6 +1114,7 @@ const FROZEN_FORMATION_RADIUS: f32 = 1.5;
 fn war_party_separation(
     mut warriors: Query<(Entity, &WarPartyMember, &mut WorldPosition)>,
     temp: Res<ChunkTemperature>,
+    scheduler: Res<AdaptiveScheduler>,
 ) {
     // Collect (entity, settlement_id, pos) snapshot.
     let snapshot: Vec<(Entity, uuid::Uuid, f32, f32)> = warriors
@@ -1136,7 +1141,7 @@ fn war_party_separation(
         } else {
             let (_, _, x, y) = snapshot[indices[0]];
             let dummy_pos = fellytip_shared::components::WorldPosition { x, y, z: 0.0 };
-            entity_zone(&dummy_pos, &temp)
+            effective_zone(&dummy_pos, &temp, scheduler.level)
         };
 
         if zone == Zone::Frozen {

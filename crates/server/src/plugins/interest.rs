@@ -21,6 +21,7 @@ use fellytip_shared::{
     world::map::{CHUNK_TILES, MAP_HALF_HEIGHT, MAP_HALF_WIDTH},
 };
 
+use crate::plugins::perf::ThrottleLevel;
 use crate::plugins::world_sim::WorldSimSchedule;
 
 // ── Zone radii ────────────────────────────────────────────────────────────────
@@ -63,6 +64,30 @@ pub fn entity_zone(pos: &WorldPosition, chunk_temp: &ChunkTemperature) -> Zone {
         Zone::Warm
     } else {
         Zone::Frozen
+    }
+}
+
+/// Throttle-aware variant of `entity_zone`: downgrades the base zone
+/// according to the current `AdaptiveScheduler` level.
+///
+/// | Base ＼ Throttle | Full | Reduced | Minimal  | Suspended |
+/// |------------------|------|---------|----------|-----------|
+/// | Hot              | Hot  | Warm    | Frozen   | Frozen    |
+/// | Warm             | Warm | Warm    | Frozen   | Frozen    |
+/// | Frozen           | Frozen | Frozen | Frozen | Frozen    |
+pub fn effective_zone(
+    pos: &WorldPosition,
+    chunk_temp: &ChunkTemperature,
+    throttle: ThrottleLevel,
+) -> Zone {
+    let base = entity_zone(pos, chunk_temp);
+    match throttle {
+        ThrottleLevel::Full => base,
+        ThrottleLevel::Reduced => match base {
+            Zone::Hot => Zone::Warm,
+            other => other,
+        },
+        ThrottleLevel::Minimal | ThrottleLevel::Suspended => Zone::Frozen,
     }
 }
 
@@ -145,6 +170,58 @@ fn update_chunk_temperature(
                     temp.warm.insert(coord);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pos_at_origin() -> WorldPosition {
+        WorldPosition { x: 0.0, y: 0.0, z: 0.0 }
+    }
+
+    fn origin_chunk() -> (i32, i32) {
+        world_to_chunk(0.0, 0.0)
+    }
+
+    fn hot_temp() -> ChunkTemperature {
+        let mut t = ChunkTemperature::default();
+        t.hot.insert(origin_chunk());
+        t
+    }
+
+    fn warm_temp() -> ChunkTemperature {
+        let mut t = ChunkTemperature::default();
+        t.warm.insert(origin_chunk());
+        t
+    }
+
+    #[test]
+    fn full_throttle_passes_base_zone() {
+        let p = pos_at_origin();
+        assert_eq!(effective_zone(&p, &hot_temp(), ThrottleLevel::Full), Zone::Hot);
+        assert_eq!(effective_zone(&p, &warm_temp(), ThrottleLevel::Full), Zone::Warm);
+        assert_eq!(
+            effective_zone(&p, &ChunkTemperature::default(), ThrottleLevel::Full),
+            Zone::Frozen
+        );
+    }
+
+    #[test]
+    fn reduced_demotes_hot_to_warm() {
+        let p = pos_at_origin();
+        assert_eq!(effective_zone(&p, &hot_temp(), ThrottleLevel::Reduced), Zone::Warm);
+        assert_eq!(effective_zone(&p, &warm_temp(), ThrottleLevel::Reduced), Zone::Warm);
+    }
+
+    #[test]
+    fn minimal_and_suspended_force_frozen() {
+        let p = pos_at_origin();
+        for level in [ThrottleLevel::Minimal, ThrottleLevel::Suspended] {
+            assert_eq!(effective_zone(&p, &hot_temp(), level), Zone::Frozen);
+            assert_eq!(effective_zone(&p, &warm_temp(), level), Zone::Frozen);
         }
     }
 }
