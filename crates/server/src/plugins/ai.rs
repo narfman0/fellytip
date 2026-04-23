@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
-use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid};
+use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField};
 use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
 
 /// Server-only component: which faction this NPC belongs to.
@@ -118,6 +118,7 @@ impl Plugin for AiPlugin {
         app.init_resource::<FactionRegistry>()
             .init_resource::<PlayerReputationMap>()
             .init_resource::<FactionPopulationState>()
+            .init_resource::<FlowField>()
             .add_message::<FormWarPartyEvent>()
             .register_type::<FactionNpcRank>()
             .add_message::<BattleStartMsg>()
@@ -640,6 +641,8 @@ fn check_war_party_formation(
     registry: Res<FactionRegistry>,
     pop: Res<FactionPopulationState>,
     tick: Res<WorldSimTick>,
+    nav: Option<Res<NavGrid>>,
+    mut flow_field: ResMut<FlowField>,
     mut story_events: MessageWriter<WriteStoryEvent>,
     mut commands: Commands,
 ) {
@@ -721,6 +724,11 @@ fn check_war_party_formation(
                 target = %event.target_settlement_id,
                 "War party formed"
             );
+
+            // Pre-compute flow field for this target settlement.
+            if let Some(ref nav_res) = nav {
+                flow_field.get_or_compute(nav_res, event.target_x, event.target_y);
+            }
         }
     }
 }
@@ -755,15 +763,19 @@ fn sync_player_standings(
     }
 }
 
-/// Move war-party NPCs toward their target. Spawn `ActiveBattle` when they arrive.
+/// Move war-party NPCs toward their target using flow-field pathfinding (Hot/Warm)
+/// or linear march (Frozen). Spawn `ActiveBattle` when they arrive.
 ///
-/// Movement is scaled by zone speed: warriors march at full [`MARCH_SPEED`] near
-/// a player, quarter-speed in the Warm zone, and 5 % speed in Frozen areas.
+/// # Zone behavior:
+/// - **Hot/Warm**: sample the cached flow field at the entity's nav cell,
+///   apply direction × MARCH_SPEED × zone_speed.
+/// - **Frozen**: keep existing linear march (unchanged behavior, macro-correct).
 fn march_war_parties(
     mut warriors: Query<(&WarPartyMember, &mut WorldPosition)>,
     battles: Query<&ActiveBattle>,
     pop: Res<FactionPopulationState>,
     temp: Res<ChunkTemperature>,
+    flow_field: Res<FlowField>,
     mut commands: Commands,
     mut battle_start: MessageWriter<BattleStartMsg>,
 ) {
@@ -772,10 +784,36 @@ fn march_war_parties(
         let dx = war_member.target_x - pos.x;
         let dy = war_member.target_y - pos.y;
         let dist = (dx * dx + dy * dy).sqrt();
+
         if dist > 0.01 {
-            let step = (MARCH_SPEED * speed / dist).min(1.0);
-            pos.x += dx * step;
-            pos.y += dy * step;
+            if speed <= crate::plugins::interest::FROZEN_SPEED + f32::EPSILON {
+                // Frozen: linear march (original behavior).
+                let step = (MARCH_SPEED * speed / dist).min(1.0);
+                pos.x += dx * step;
+                pos.y += dy * step;
+            } else {
+                // Hot/Warm: use flow field direction vector.
+                let (nx, ny) = world_to_nav(pos.x, pos.y);
+                let dir = flow_field
+                    .get(war_member.target_x, war_member.target_y)
+                    .map(|ff| ff.dir_at(nx, ny))
+                    .unwrap_or((0, 0));
+
+                if dir != (0, 0) {
+                    let move_x = dir.0 as f32 * MARCH_SPEED * speed;
+                    let move_y = dir.1 as f32 * MARCH_SPEED * speed;
+                    // Clamp so we don't overshoot the target.
+                    let would_overshoot_x = move_x.abs() > dx.abs();
+                    let would_overshoot_y = move_y.abs() > dy.abs();
+                    pos.x += if would_overshoot_x { dx } else { move_x };
+                    pos.y += if would_overshoot_y { dy } else { move_y };
+                } else {
+                    // No flow field entry (at target or unreachable): linear fallback.
+                    let step = (MARCH_SPEED * speed / dist).min(1.0);
+                    pos.x += dx * step;
+                    pos.y += dy * step;
+                }
+            }
         }
 
         // Check if arrived and no battle already active for this settlement.

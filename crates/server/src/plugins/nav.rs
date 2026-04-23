@@ -227,6 +227,88 @@ impl Plugin for NavPlugin {
     }
 }
 
+// ── Flow field ────────────────────────────────────────────────────────────────
+
+/// Pre-computed Dijkstra/BFS flow field from a target settlement outward.
+///
+/// Each cell holds an `(i8, i8)` direction vector pointing toward the target.
+pub struct FlowFieldData {
+    /// Flat row-major array of direction vectors, indexed `[nx + ny * NAV_WIDTH]`.
+    pub dirs: Vec<(i8, i8)>,
+}
+
+impl FlowFieldData {
+    /// Compute a flow field by BFS from the target nav-grid cell outward.
+    pub fn compute(nav: &NavGrid, target: (usize, usize)) -> Self {
+        use std::collections::VecDeque;
+
+        let n = NAV_WIDTH * NAV_HEIGHT;
+        let mut dirs: Vec<(i8, i8)> = vec![(0, 0); n];
+        let mut visited = vec![false; n];
+
+        let idx = |x: usize, y: usize| x + y * NAV_WIDTH;
+        let mut queue = VecDeque::new();
+
+        let start_idx = idx(target.0, target.1);
+        visited[start_idx] = true;
+        queue.push_back((target.0, target.1));
+
+        while let Some((cx, cy)) = queue.pop_front() {
+            for (nx, ny) in neighbors(cx, cy) {
+                if nav.cell(nx, ny).movement_cost() == f32::MAX {
+                    continue; // Blocked
+                }
+                let ni = idx(nx, ny);
+                if !visited[ni] {
+                    visited[ni] = true;
+                    // Direction from (nx,ny) toward (cx,cy) (i.e., toward the target).
+                    #[allow(clippy::cast_possible_truncation)]
+                    let dir = (
+                        (cx as i32 - nx as i32).clamp(-1, 1) as i8,
+                        (cy as i32 - ny as i32).clamp(-1, 1) as i8,
+                    );
+                    dirs[ni] = dir;
+                    queue.push_back((nx, ny));
+                }
+            }
+        }
+
+        FlowFieldData { dirs }
+    }
+
+    /// Sample the direction vector at nav-grid cell `(nx, ny)`.
+    #[inline]
+    pub fn dir_at(&self, nx: usize, ny: usize) -> (i8, i8) {
+        if nx >= NAV_WIDTH || ny >= NAV_HEIGHT {
+            return (0, 0);
+        }
+        self.dirs[nx + ny * NAV_WIDTH]
+    }
+}
+
+/// Cached flow fields keyed by target settlement chunk coordinates (u32, u32).
+///
+/// Multiple war parties targeting the same settlement reuse the same field.
+#[derive(Resource, Default)]
+pub struct FlowField {
+    pub fields: std::collections::HashMap<(u32, u32), FlowFieldData>,
+}
+
+impl FlowField {
+    /// Get or compute the flow field for a settlement at world position `(wx, wy)`.
+    pub fn get_or_compute(&mut self, nav: &NavGrid, wx: f32, wy: f32) -> &FlowFieldData {
+        let (nx, ny) = world_to_nav(wx, wy);
+        // Key by nav-grid cell as settlement chunk coords.
+        let key = (nx as u32, ny as u32);
+        self.fields.entry(key).or_insert_with(|| FlowFieldData::compute(nav, (nx, ny)))
+    }
+
+    pub fn get(&self, wx: f32, wy: f32) -> Option<&FlowFieldData> {
+        let (nx, ny) = world_to_nav(wx, wy);
+        self.fields.get(&(nx as u32, ny as u32))
+    }
+}
+
 /// Build the NavGrid from the WorldMap and insert it as a resource.
 /// Must run after generate_world inserts the WorldMap.
 pub fn build_nav_grid(map: Res<WorldMap>, mut commands: Commands) {
