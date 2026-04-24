@@ -35,39 +35,39 @@ pub const HOT_SPEED:    f32 = 1.0;
 pub const WARM_SPEED:   f32 = 0.25;
 pub const FROZEN_SPEED: f32 = 0.05;
 
-// ── Zone enum ─────────────────────────────────────────────────────────────────
+// ── SimTier enum ──────────────────────────────────────────────────────────────
 
-/// Simulation LOD zone for an entity based on proximity to the nearest player.
+/// Simulation LOD tier for an entity based on proximity to the nearest player.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Zone {
+pub enum SimTier {
     Hot,
     Warm,
     Frozen,
 }
 
-impl Zone {
+impl SimTier {
     pub fn speed(self) -> f32 {
         match self {
-            Zone::Hot    => HOT_SPEED,
-            Zone::Warm   => WARM_SPEED,
-            Zone::Frozen => FROZEN_SPEED,
+            SimTier::Hot    => HOT_SPEED,
+            SimTier::Warm   => WARM_SPEED,
+            SimTier::Frozen => FROZEN_SPEED,
         }
     }
 }
 
-/// Return the LOD zone for an entity at the given world position.
-pub fn entity_zone(pos: &WorldPosition, chunk_temp: &ChunkTemperature) -> Zone {
+/// Return the LOD tier for an entity at the given world position.
+pub fn entity_zone(pos: &WorldPosition, chunk_temp: &ChunkTemperature) -> SimTier {
     let chunk = world_to_chunk(pos.x, pos.y);
     if chunk_temp.hot.contains(&chunk) {
-        Zone::Hot
+        SimTier::Hot
     } else if chunk_temp.warm.contains(&chunk) {
-        Zone::Warm
+        SimTier::Warm
     } else {
-        Zone::Frozen
+        SimTier::Frozen
     }
 }
 
-/// Throttle-aware variant of `entity_zone`: downgrades the base zone
+/// Throttle-aware variant of `entity_zone`: downgrades the base tier
 /// according to the current `AdaptiveScheduler` level.
 ///
 /// | Base ＼ Throttle | Full | Reduced | Minimal  | Suspended |
@@ -79,15 +79,15 @@ pub fn effective_zone(
     pos: &WorldPosition,
     chunk_temp: &ChunkTemperature,
     throttle: ThrottleLevel,
-) -> Zone {
+) -> SimTier {
     let base = entity_zone(pos, chunk_temp);
     match throttle {
         ThrottleLevel::Full => base,
         ThrottleLevel::Reduced => match base {
-            Zone::Hot => Zone::Warm,
+            SimTier::Hot => SimTier::Warm,
             other => other,
         },
-        ThrottleLevel::Minimal | ThrottleLevel::Suspended => Zone::Frozen,
+        ThrottleLevel::Minimal | ThrottleLevel::Suspended => SimTier::Frozen,
     }
 }
 
@@ -201,27 +201,27 @@ mod tests {
     #[test]
     fn full_throttle_passes_base_zone() {
         let p = pos_at_origin();
-        assert_eq!(effective_zone(&p, &hot_temp(), ThrottleLevel::Full), Zone::Hot);
-        assert_eq!(effective_zone(&p, &warm_temp(), ThrottleLevel::Full), Zone::Warm);
+        assert_eq!(effective_zone(&p, &hot_temp(), ThrottleLevel::Full), SimTier::Hot);
+        assert_eq!(effective_zone(&p, &warm_temp(), ThrottleLevel::Full), SimTier::Warm);
         assert_eq!(
             effective_zone(&p, &ChunkTemperature::default(), ThrottleLevel::Full),
-            Zone::Frozen
+            SimTier::Frozen
         );
     }
 
     #[test]
     fn reduced_demotes_hot_to_warm() {
         let p = pos_at_origin();
-        assert_eq!(effective_zone(&p, &hot_temp(), ThrottleLevel::Reduced), Zone::Warm);
-        assert_eq!(effective_zone(&p, &warm_temp(), ThrottleLevel::Reduced), Zone::Warm);
+        assert_eq!(effective_zone(&p, &hot_temp(), ThrottleLevel::Reduced), SimTier::Warm);
+        assert_eq!(effective_zone(&p, &warm_temp(), ThrottleLevel::Reduced), SimTier::Warm);
     }
 
     #[test]
     fn minimal_and_suspended_force_frozen() {
         let p = pos_at_origin();
         for level in [ThrottleLevel::Minimal, ThrottleLevel::Suspended] {
-            assert_eq!(effective_zone(&p, &hot_temp(), level), Zone::Frozen);
-            assert_eq!(effective_zone(&p, &warm_temp(), level), Zone::Frozen);
+            assert_eq!(effective_zone(&p, &hot_temp(), level), SimTier::Frozen);
+            assert_eq!(effective_zone(&p, &warm_temp(), level), SimTier::Frozen);
         }
     }
 }

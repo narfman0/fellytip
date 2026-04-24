@@ -296,6 +296,7 @@ fn sprites_dir() -> std::path::PathBuf {
 /// - `FactionNpc` + `FactionBadge` → `"{faction_id}_npc"`
 /// - `Wildlife` + `WildlifeKind` → lowercase variant (`"bison"`, `"dog"`, `"horse"`)
 /// - `Settlement` → no billboard
+#[allow(clippy::type_complexity)]
 fn spawn_billboards(
     mut commands: Commands,
     registry: Res<BillboardSprites>,

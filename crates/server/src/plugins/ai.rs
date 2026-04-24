@@ -3,9 +3,9 @@
 //!
 //! # Three-tier pathfinding LOD
 //!
-//! All pathfinding is gated on the entity's `Zone` (see `interest::effective_zone`):
+//! All pathfinding is gated on the entity's `SimTier` (see `interest::effective_zone`):
 //!
-//! | Zone   | Individual NPCs (wander_npcs)         | War parties (march_war_parties)        | Separation (war_party_separation) |
+//! | Tier   | Individual NPCs (wander_npcs)         | War parties (march_war_parties)        | Separation (war_party_separation) |
 //! |--------|---------------------------------------|----------------------------------------|-----------------------------------|
 //! | Hot    | A* replan every 2 ticks, full speed   | Flow-field sampling, full MARCH_SPEED  | Pairwise repulsion                |
 //! | Warm   | A* replan every 8 ticks, 0.25× speed  | Flow-field sampling, 0.25× speed       | Pairwise repulsion                |
@@ -32,7 +32,7 @@ use fellytip_shared::{
             PlayerReputationMap, standing_tier, STANDING_NEUTRAL, STANDING_HOSTILE, pick_goal,
         },
         ecology::RegionId,
-        map::{CHUNK_TILES, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
+        map::{MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
         population::{
             tick_population, PopulationEffect, SettlementPopulation,
             BATTLE_RADIUS, MARCH_SPEED, WAR_PARTY_SIZE,
@@ -46,7 +46,7 @@ use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
-use crate::plugins::interest::{effective_zone, Zone};
+use crate::plugins::interest::{effective_zone, SimTier};
 use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField};
 use crate::plugins::perf::AdaptiveScheduler;
 use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
@@ -237,7 +237,7 @@ fn wander_npcs(
         let zone_speed = zone.speed();
 
         // Frozen: skip A*, linear march toward home position.
-        if zone == Zone::Frozen {
+        if zone == SimTier::Frozen {
             let dx = home.0.x - pos.x;
             let dy = home.0.y - pos.y;
             let dist_sq = dx * dx + dy * dy;
@@ -250,7 +250,7 @@ fn wander_npcs(
         }
 
         // Determine replan cadence from zone.
-        let replan_every = if zone == Zone::Hot { 2u32 } else { 8u32 };
+        let replan_every = if zone == SimTier::Hot { 2u32 } else { 8u32 };
 
         replan_timer.0 = replan_timer.0.saturating_add(1);
 
@@ -844,7 +844,7 @@ fn march_war_parties(
         let dist = (dx * dx + dy * dy).sqrt();
 
         if dist > 0.01 {
-            if zone == Zone::Frozen {
+            if zone == SimTier::Frozen {
                 // Frozen: linear march (macro-correct, skips expensive flow-field).
                 let step = (MARCH_SPEED * speed / dist).min(1.0);
                 pos.x += dx * step;
@@ -1175,7 +1175,7 @@ fn war_party_separation(
     // Accumulate delta per entity.
     let mut deltas: HashMap<Entity, (f32, f32)> = HashMap::new();
 
-    for (_, indices) in &groups {
+    for indices in groups.values() {
         let zone = if indices.is_empty() {
             continue;
         } else {
@@ -1184,7 +1184,7 @@ fn war_party_separation(
             effective_zone(&dummy_pos, &temp, scheduler.level)
         };
 
-        if zone == Zone::Frozen {
+        if zone == SimTier::Frozen {
             // Frozen: arrange at fixed offsets from centroid.
             let n = indices.len();
             let cx: f32 = indices.iter().map(|&i| snapshot[i].2).sum::<f32>() / n as f32;
