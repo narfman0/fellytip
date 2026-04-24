@@ -3019,10 +3019,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "glam",
  "rand 0.10.0",
  "rand_chacha 0.10.0",
  "serde",
  "serde_json",
+ "smallvec",
  "smol_str 0.3.6",
  "thiserror 2.0.18",
  "toml",

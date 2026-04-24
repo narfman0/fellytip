@@ -64,6 +64,10 @@ pub enum BuildingKind {
     StallRed,       // town/stall-red.glb               — capital market
     Fountain,       // town/fountain-round.glb          — capital center
     Lantern,        // town/lantern.glb                 — capital street lighting
+    Tavern,         // 2-floor interior zone (taproom + rooms)
+    Barracks,       // 2-floor interior zone (hall + bunks)
+    Tower,          // 4-floor interior zone (3 interior + battlements)
+    Keep,           // 3-floor interior zone + 10×10 battlements floor
 }
 
 /// A single procedurally-placed building belonging to a settlement.

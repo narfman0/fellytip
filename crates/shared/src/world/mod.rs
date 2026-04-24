@@ -6,3 +6,4 @@ pub mod population;
 pub mod schedule;
 pub mod story;
 pub mod war;
+pub mod zone;

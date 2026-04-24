@@ -124,6 +124,12 @@ impl BuildingAssets {
             BuildingKind::StallRed       => self.stall_red.clone(),
             BuildingKind::Fountain       => self.fountain.clone(),
             BuildingKind::Lantern        => self.lantern.clone(),
+            // Multi-story interior building kinds have no GLB scene yet —
+            // they are purely zone-graph metadata. Fall back to a generic asset.
+            BuildingKind::Tavern
+            | BuildingKind::Barracks
+            | BuildingKind::Tower
+            | BuildingKind::Keep         => self.tent_detailed.clone(),
         }
     }
 }
