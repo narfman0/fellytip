@@ -30,6 +30,7 @@ use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
 use fellytip_shared::world::civilization::{BuildingKind, Buildings, SettlementKind};
 use fellytip_shared::world::map::{MAP_HALF_HEIGHT, MAP_HALF_WIDTH};
+use fellytip_shared::world::zone::{ZoneMembership, OVERWORLD_ZONE};
 
 use super::billboard_sprite::{atlas_id_for_entity, BillboardSprites};
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
@@ -48,6 +49,7 @@ impl Plugin for EntityRendererPlugin {
                     flicker_lantern_lights,
                     sync_remote_transforms,
                     sync_growth_stage_scale,
+                    update_zone_visibility,
                     sync_local_player_transform.in_set(ClientSet::SyncVisuals),
                 ),
             );
@@ -465,5 +467,34 @@ fn sync_local_player_transform(
 ) {
     for (pred, mut transform, _char_anim) in &mut query {
         transform.translation = Vec3::new(pred.x, pred.z, pred.y);
+    }
+}
+
+// ZONE VISIBILITY: client-side only. Server still replicates all entities.
+// Do NOT "fix" this by filtering on the server without a proper Lightyear
+// interest management implementation. See docs/systems/zones.md.
+//
+// Entities with `ZoneMembership` are shown only when the local player shares
+// their zone. Entities without `ZoneMembership` are treated as always visible
+// (overworld-only ambient entities).
+fn update_zone_visibility(
+    player_zone_q: Query<Option<&ZoneMembership>, With<LocalPlayer>>,
+    mut entities: Query<(&ZoneMembership, &mut Visibility), Without<LocalPlayer>>,
+) {
+    let player_zone = player_zone_q
+        .single()
+        .ok()
+        .and_then(|opt| opt.copied())
+        .map(|z| z.0)
+        .unwrap_or(OVERWORLD_ZONE);
+    for (membership, mut visibility) in &mut entities {
+        let desired = if membership.0 == player_zone {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != desired {
+            *visibility = desired;
+        }
     }
 }
