@@ -244,7 +244,10 @@ pub fn generate_zones(
     let mut topology = ZoneTopology::default();
     let mut next_portal_id: u32 = 0;
 
-    // Zone 0 — overworld.
+    // Zone 0 — overworld. Width/height reflect the world tile dimensions
+    // (1024×1024) so clients can reason about the surface bounds. The tile
+    // array is intentionally empty: the overworld's tiles live in `WorldMap`,
+    // not in the zone template.
     let overworld_id = registry.alloc_id();
     debug_assert_eq!(overworld_id, OVERWORLD_ZONE);
     let overworld_template = ZoneTemplate {
@@ -258,8 +261,8 @@ pub fn generate_zones(
         id: overworld_id,
         kind: ZoneKind::Overworld,
         parent: ZoneParent::Overworld,
-        width: 0,
-        height: 0,
+        width: 1024,
+        height: 1024,
         template_id: overworld_template.id,
         anchors: Vec::new(),
     };

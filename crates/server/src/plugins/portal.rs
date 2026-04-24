@@ -48,7 +48,9 @@ impl Plugin for PortalPlugin {
             .add_message::<ZoneTileMessage>()
             .add_systems(
                 Startup,
-                (build_zone_nav_grids, setup_portal_triggers).chain(),
+                (build_zone_nav_grids, setup_portal_triggers)
+                    .chain()
+                    .after(crate::plugins::map_gen::populate_zones),
             )
             .add_systems(
                 FixedUpdate,
@@ -61,20 +63,35 @@ impl Plugin for PortalPlugin {
 
 /// Spawn one `PortalTrigger` entity per Portal.
 ///
-/// TODO: replace `Vec2::ZERO` anchor positions once building world-space
-/// coords are propagated into the zone graph (anchor.pos is currently
-/// zone-local tile coordinates).
-fn setup_portal_triggers(mut commands: Commands, topology: Option<Res<ZoneTopology>>) {
+/// For overworld-facing portals (e.g. building entrance doors) the
+/// from-anchor's world-space position is looked up from `ZoneRegistry` and
+/// used directly. For intra-zone portals (e.g. staircases inside a building)
+/// the anchor still lives in zone-local tile coordinates; those triggers are
+/// placed at the local coords for now — proximity checks against entities in
+/// the same zone only become meaningful once in-zone entities track their
+/// zone-local positions separately.
+fn setup_portal_triggers(
+    mut commands: Commands,
+    topology: Option<Res<ZoneTopology>>,
+    registry: Option<Res<ZoneRegistry>>,
+) {
     let Some(topology) = topology else { return };
+    let Some(registry) = registry else { return };
 
     for portal in &topology.portals {
-        // TODO: compute the world-space position of `portal.from_anchor`
-        // inside `portal.from_zone`. For now, all portal triggers live at
-        // world origin — zone transitions will still work because the
-        // check system also needs world positions to be correct first.
+        let world_pos = registry
+            .get(portal.from_zone)
+            .and_then(|zone| {
+                zone.anchors
+                    .iter()
+                    .find(|a| a.name == portal.from_anchor)
+                    .map(|a| (a.pos.x, a.pos.y))
+            })
+            .unwrap_or((0.0, 0.0));
+
         commands.spawn((
             PortalTrigger { portal_id: portal.id },
-            WorldPosition { x: 0.0, y: 0.0, z: 0.0 },
+            WorldPosition { x: world_pos.0, y: world_pos.1, z: 0.0 },
             ZoneMembership(portal.from_zone),
         ));
     }
@@ -116,16 +133,15 @@ fn check_portal_triggers(
 }
 
 /// Apply queued zone transitions: update `ZoneMembership` and move the
-/// entity to the destination anchor.
-///
-/// TODO: replace `Vec2::ZERO` destination position with the world-space
-/// position of `portal.to_anchor` inside `portal.to_zone`.
+/// entity to the destination anchor (as stored in `ZoneRegistry`).
 fn apply_zone_transitions(
     mut events: MessageReader<PlayerZoneTransition>,
     topology: Option<Res<ZoneTopology>>,
+    registry: Option<Res<ZoneRegistry>>,
     mut q: Query<(&mut WorldPosition, &mut ZoneMembership)>,
 ) {
     let Some(topology) = topology else { return };
+    let Some(registry) = registry else { return };
 
     for ev in events.read() {
         let Some(portal) = topology.portals.iter().find(|p| p.id == ev.portal_id) else {
@@ -141,9 +157,22 @@ fn apply_zone_transitions(
         }
 
         zone.0 = portal.to_zone;
-        // TODO: move to actual to_anchor world position; for now just zero.
-        pos.x = 0.0;
-        pos.y = 0.0;
+
+        // Move to the destination anchor's stored position. For overworld
+        // anchors this is already world-space; for intra-zone anchors it's
+        // zone-local tile coordinates (kept for now).
+        if let Some(anchor_pos) = registry.get(portal.to_zone).and_then(|zone| {
+            zone.anchors
+                .iter()
+                .find(|a| a.name == portal.to_anchor)
+                .map(|a| (a.pos.x, a.pos.y))
+        }) {
+            pos.x = anchor_pos.0;
+            pos.y = anchor_pos.1;
+        } else {
+            pos.x = 0.0;
+            pos.y = 0.0;
+        }
     }
 }
 

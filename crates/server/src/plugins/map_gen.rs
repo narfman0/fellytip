@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use fellytip_shared::{
+    WORLD_SEED,
     components::{EntityKind, WorldPosition},
     world::{
         civilization::{
@@ -27,6 +28,7 @@ use fellytip_shared::{
             generate_settlements, Buildings, Settlements,
         },
         map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
+        zone::{generate_zones, Zone, ZoneKind, ZoneParent, OVERWORLD_ZONE},
     },
 };
 
@@ -64,7 +66,7 @@ impl Plugin for MapGenPlugin {
         // deferred in Bevy and are not flushed until the next apply_deferred.
         app.add_systems(
             Startup,
-            (generate_world, ApplyDeferred, build_nav_grid, seed_ecology, spawn_faction_npcs, init_population_state, spawn_settlement_markers, history_warp, flush_factions_to_db)
+            (generate_world, ApplyDeferred, build_nav_grid, populate_zones, ApplyDeferred, seed_ecology, spawn_faction_npcs, init_population_state, spawn_settlement_markers, history_warp, flush_factions_to_db)
                 .chain()
                 .after(seed_factions),
         );
@@ -252,6 +254,82 @@ fn spawn_settlement_markers(settlements: Res<Settlements>, mut commands: Command
         tracing::debug!(name = %settlement.name, "Settlement marker spawned");
     }
     tracing::info!(count = settlements.0.len(), "Settlement markers spawned");
+}
+
+/// Generate the zone graph from the current `Buildings` resource and insert
+/// `ZoneRegistry` + `ZoneTopology` as resources. Also propagates each building's
+/// world-space position into its `BuildingFloor` "entrance" anchor so portal
+/// triggers can be spawned at the correct location.
+///
+/// Must run after `generate_world` inserts the `Buildings` resource.
+pub fn populate_zones(
+    mut commands: Commands,
+    buildings: Option<Res<Buildings>>,
+) {
+    use fellytip_shared::world::civilization::{Building, BuildingKind};
+    use fellytip_shared::world::zone::ZoneId;
+
+    // `combat_test` mode skips map generation and has no Buildings resource.
+    // Initialise an empty registry with just the overworld so downstream
+    // systems still have the resources they expect.
+    let empty_buildings: Vec<Building> = Vec::new();
+    let buildings_slice: &[Building] = match &buildings {
+        Some(b) => &b.0,
+        None => &empty_buildings,
+    };
+
+    let (mut registry, topology) = generate_zones(buildings_slice, WORLD_SEED);
+
+    // Recreate the zone-allocation ordering used by generate_zones so we can
+    // deterministically map each multi-story building to its floor-0 ZoneId.
+    // Overworld is id 0; then for each multi-floor building, floor_count ids.
+    let mut next_id: u32 = 1;
+    for building in buildings_slice {
+        let floor_count = match building.kind {
+            BuildingKind::Tavern | BuildingKind::Barracks => 2,
+            BuildingKind::Tower => 4,
+            BuildingKind::Keep => 3,
+            _ => 0u8,
+        };
+        if floor_count < 2 {
+            continue;
+        }
+        let floor_0_id = ZoneId(next_id);
+        next_id += floor_count as u32;
+
+        let world_x = building.tx as f32 - MAP_HALF_WIDTH as f32 + 0.5;
+        let world_y = building.ty as f32 - MAP_HALF_HEIGHT as f32 + 0.5;
+
+        if let Some(zone) = registry.zones.get_mut(&floor_0_id) {
+            for anchor in &mut zone.anchors {
+                if anchor.name == "entrance" {
+                    anchor.pos = Vec2::new(world_x, world_y);
+                }
+            }
+        }
+    }
+
+    // Sanity: ensure the overworld is registered (generate_zones does this, but
+    // we add a fallback for clarity — downstream code relies on zone id 0).
+    debug_assert!(registry.zones.contains_key(&OVERWORLD_ZONE));
+    registry.zones.entry(OVERWORLD_ZONE).or_insert_with(|| Zone {
+        id: OVERWORLD_ZONE,
+        kind: ZoneKind::Overworld,
+        parent: ZoneParent::Overworld,
+        width: 1024,
+        height: 1024,
+        template_id: 0,
+        anchors: Vec::new(),
+    });
+
+    tracing::info!(
+        zones = registry.zones.len(),
+        portals = topology.portals.len(),
+        "Zone graph generated"
+    );
+
+    commands.insert_resource(registry);
+    commands.insert_resource(topology);
 }
 
 /// Run `WorldSimSchedule` `config.history_warp_ticks` times synchronously before
