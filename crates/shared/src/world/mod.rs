@@ -1,6 +1,7 @@
 pub mod civilization;
 pub mod ecology;
 pub mod faction;
+pub mod grid;
 pub mod map;
 pub mod population;
 pub mod schedule;

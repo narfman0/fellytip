@@ -4,15 +4,19 @@
 //! Each cell stores a `NavCell` passability class used by A* and flow-field systems.
 
 use bevy::prelude::*;
-use fellytip_shared::world::map::{TileKind, WorldMap, MAP_HALF_HEIGHT, MAP_HALF_WIDTH};
+use fellytip_shared::world::{
+    grid::Grid,
+    map::{TileKind, WorldMap, MAP_HALF_HEIGHT, MAP_HALF_WIDTH},
+};
 
 pub const NAV_WIDTH: usize = 256;
 pub const NAV_HEIGHT: usize = 256;
 /// Downsample factor: 1024 / 256 = 4
 const DOWNSAMPLE: usize = 4;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NavCell {
+    #[default]
     Passable,
     Slow,
     Blocked,
@@ -39,7 +43,7 @@ fn tile_kind_to_nav_cell(kind: TileKind) -> NavCell {
 /// 256×256 navigation grid built from the world tile map.
 #[derive(Resource)]
 pub struct NavGrid {
-    pub cells: Vec<NavCell>,
+    pub grid: Grid<NavCell>,
 }
 
 impl NavGrid {
@@ -65,7 +69,15 @@ impl NavGrid {
                 cells.push(cell);
             }
         }
-        NavGrid { cells }
+        NavGrid {
+            grid: Grid::from_cells(NAV_WIDTH, NAV_HEIGHT, cells),
+        }
+    }
+
+    /// Back-compat view of the underlying cell slice.
+    #[inline]
+    pub fn cells(&self) -> &[NavCell] {
+        &self.grid.cells
     }
 
     #[inline]
@@ -81,10 +93,10 @@ impl NavGrid {
 
     #[inline]
     pub fn cell(&self, nx: usize, ny: usize) -> NavCell {
-        if nx >= NAV_WIDTH || ny >= NAV_HEIGHT {
+        if nx >= self.grid.w || ny >= self.grid.h {
             return NavCell::Blocked;
         }
-        self.cells[nx + ny * NAV_WIDTH]
+        *self.grid.get(nx, ny)
     }
 }
 
@@ -110,7 +122,7 @@ pub fn nav_to_world(nx: usize, ny: usize) -> (f32, f32) {
 }
 
 impl NavGrid {
-    /// A* from `start` to `goal` on the 256×256 nav grid.
+    /// A* from `start` to `goal` on the nav grid.
     ///
     /// Returns a list of direction-change waypoints (not every cell).
     /// Returns `None` if no path exists.
@@ -122,8 +134,10 @@ impl NavGrid {
             return Some(vec![(goal.0 as u16, goal.1 as u16)]);
         }
 
-        let cell_count = NAV_WIDTH * NAV_HEIGHT;
-        let idx = |x: usize, y: usize| x + y * NAV_WIDTH;
+        let w = self.grid.w;
+        let h = self.grid.h;
+        let cell_count = w * h;
+        let idx = |x: usize, y: usize| x + y * w;
 
         let mut g_score = vec![f32::MAX; cell_count];
         let mut came_from = vec![usize::MAX; cell_count];
@@ -131,21 +145,21 @@ impl NavGrid {
 
         let start_idx = idx(start.0, start.1);
         g_score[start_idx] = 0.0;
-        let h = heuristic(start, goal);
-        open.push(Reverse((float_to_ord(h), start_idx)));
+        let h_score = heuristic(start, goal);
+        open.push(Reverse((float_to_ord(h_score), start_idx)));
 
         while let Some(Reverse((_, cur_idx))) = open.pop() {
-            let cur_x = cur_idx % NAV_WIDTH;
-            let cur_y = cur_idx / NAV_WIDTH;
+            let cur_x = cur_idx % w;
+            let cur_y = cur_idx / w;
 
             if (cur_x, cur_y) == goal {
-                return Some(reconstruct_path(&came_from, cur_idx, start_idx));
+                return Some(reconstruct_path(&came_from, cur_idx, start_idx, w));
             }
 
             let cur_g = g_score[cur_idx];
 
-            for (nx, ny) in neighbors(cur_x, cur_y) {
-                let cell = self.cell(nx, ny);
+            for (nx, ny) in self.grid.neighbors_4(cur_x, cur_y) {
+                let cell = *self.grid.get(nx, ny);
                 let cost = cell.movement_cost();
                 if cost == f32::MAX {
                     continue;
@@ -159,6 +173,8 @@ impl NavGrid {
                     open.push(Reverse((float_to_ord(f), n_idx)));
                 }
             }
+            // Suppress unused-bound warning when h == 0.
+            let _ = h;
         }
 
         None
@@ -176,18 +192,8 @@ fn float_to_ord(f: f32) -> u32 {
     f.to_bits()
 }
 
-fn neighbors(x: usize, y: usize) -> impl Iterator<Item = (usize, usize)> {
-    let mut buf = [(0usize, 0usize); 4];
-    let mut n = 0usize;
-    if x + 1 < NAV_WIDTH  { buf[n] = (x + 1, y); n += 1; }
-    if x > 0              { buf[n] = (x - 1, y); n += 1; }
-    if y + 1 < NAV_HEIGHT { buf[n] = (x, y + 1); n += 1; }
-    if y > 0              { buf[n] = (x, y - 1); n += 1; }
-    buf.into_iter().take(n)
-}
-
 /// Reconstruct path from `came_from` table, keeping only direction-change waypoints.
-fn reconstruct_path(came_from: &[usize], mut cur: usize, start: usize) -> Vec<(u16, u16)> {
+fn reconstruct_path(came_from: &[usize], mut cur: usize, start: usize, w: usize) -> Vec<(u16, u16)> {
     let mut full = Vec::new();
     while cur != start {
         full.push(cur);
@@ -201,8 +207,8 @@ fn reconstruct_path(came_from: &[usize], mut cur: usize, start: usize) -> Vec<(u
     let mut waypoints = Vec::new();
     let mut prev_dir: Option<(i32, i32)> = None;
     for &cell_idx in &full {
-        let x = (cell_idx % NAV_WIDTH) as u16;
-        let y = (cell_idx / NAV_WIDTH) as u16;
+        let x = (cell_idx % w) as u16;
+        let y = (cell_idx / w) as u16;
         // Compute direction from previous waypoint.
         if let Some(last) = waypoints.last().copied() {
             let (lx, ly): (u16, u16) = last;
@@ -233,8 +239,10 @@ impl Plugin for NavPlugin {
 ///
 /// Each cell holds an `(i8, i8)` direction vector pointing toward the target.
 pub struct FlowFieldData {
-    /// Flat row-major array of direction vectors, indexed `[nx + ny * NAV_WIDTH]`.
+    /// Flat row-major array of direction vectors, indexed `[nx + ny * w]`.
     pub dirs: Vec<(i8, i8)>,
+    pub w: usize,
+    pub h: usize,
 }
 
 impl FlowFieldData {
@@ -242,11 +250,13 @@ impl FlowFieldData {
     pub fn compute(nav: &NavGrid, target: (usize, usize)) -> Self {
         use std::collections::VecDeque;
 
-        let n = NAV_WIDTH * NAV_HEIGHT;
+        let w = nav.grid.w;
+        let h = nav.grid.h;
+        let n = w * h;
         let mut dirs: Vec<(i8, i8)> = vec![(0, 0); n];
         let mut visited = vec![false; n];
 
-        let idx = |x: usize, y: usize| x + y * NAV_WIDTH;
+        let idx = |x: usize, y: usize| x + y * w;
         let mut queue = VecDeque::new();
 
         let start_idx = idx(target.0, target.1);
@@ -254,7 +264,7 @@ impl FlowFieldData {
         queue.push_back((target.0, target.1));
 
         while let Some((cx, cy)) = queue.pop_front() {
-            for (nx, ny) in neighbors(cx, cy) {
+            for (nx, ny) in nav.grid.neighbors_4(cx, cy) {
                 if nav.cell(nx, ny).movement_cost() == f32::MAX {
                     continue; // Blocked
                 }
@@ -273,16 +283,16 @@ impl FlowFieldData {
             }
         }
 
-        FlowFieldData { dirs }
+        FlowFieldData { dirs, w, h }
     }
 
     /// Sample the direction vector at nav-grid cell `(nx, ny)`.
     #[inline]
     pub fn dir_at(&self, nx: usize, ny: usize) -> (i8, i8) {
-        if nx >= NAV_WIDTH || ny >= NAV_HEIGHT {
+        if nx >= self.w || ny >= self.h {
             return (0, 0);
         }
-        self.dirs[nx + ny * NAV_WIDTH]
+        self.dirs[nx + ny * self.w]
     }
 }
 
@@ -314,10 +324,61 @@ impl FlowField {
 pub fn build_nav_grid(map: Res<WorldMap>, mut commands: Commands) {
     let nav = NavGrid::build(&map);
     tracing::info!(
-        cells = nav.cells.len(),
-        blocked = nav.cells.iter().filter(|&&c| c == NavCell::Blocked).count(),
-        slow = nav.cells.iter().filter(|&&c| c == NavCell::Slow).count(),
+        cells = nav.grid.cells.len(),
+        blocked = nav.grid.cells.iter().filter(|&&c| c == NavCell::Blocked).count(),
+        slow = nav.grid.cells.iter().filter(|&&c| c == NavCell::Slow).count(),
         "NavGrid built"
     );
     commands.insert_resource(nav);
+}
+
+// ── ZoneNavGrids ──────────────────────────────────────────────────────────────
+
+use fellytip_shared::world::zone::{InteriorTile, ZoneId, ZoneRegistry};
+use std::collections::HashMap;
+
+/// Per-zone navigation grids, one `Grid<NavCell>` per known zone.
+///
+/// Built at startup from `ZoneRegistry`; consumed by zone-aware path planners
+/// (implementation pending — this is just the data container for now).
+#[derive(Resource, Default)]
+pub struct ZoneNavGrids(pub HashMap<ZoneId, Grid<NavCell>>);
+
+impl ZoneNavGrids {
+    pub fn get(&self, zone: ZoneId) -> Option<&Grid<NavCell>> {
+        self.0.get(&zone)
+    }
+
+    pub fn insert(&mut self, zone: ZoneId, grid: Grid<NavCell>) {
+        self.0.insert(zone, grid);
+    }
+}
+
+/// Convert an `InteriorTile` to its navigation cost class.
+pub fn interior_tile_to_nav_cell(tile: InteriorTile) -> NavCell {
+    match tile {
+        InteriorTile::Floor | InteriorTile::Stair | InteriorTile::Balcony => NavCell::Passable,
+        InteriorTile::Window | InteriorTile::Roof => NavCell::Slow,
+        InteriorTile::Wall | InteriorTile::Void | InteriorTile::Water | InteriorTile::Pit => {
+            NavCell::Blocked
+        }
+    }
+}
+
+/// Startup system: populate `ZoneNavGrids` from all zones in `ZoneRegistry`.
+pub fn build_zone_nav_grids(
+    registry: Option<Res<ZoneRegistry>>,
+    mut zone_grids: ResMut<ZoneNavGrids>,
+) {
+    let Some(registry) = registry else { return };
+    for zone in registry.zones.values() {
+        let Some(tiles) = registry.tiles(zone) else { continue };
+        if tiles.is_empty() {
+            continue;
+        }
+        let cells: Vec<NavCell> = tiles.iter().copied().map(interior_tile_to_nav_cell).collect();
+        let grid = Grid::from_cells(zone.width as usize, zone.height as usize, cells);
+        zone_grids.insert(zone.id, grid);
+    }
+    tracing::info!(count = zone_grids.0.len(), "ZoneNavGrids built");
 }

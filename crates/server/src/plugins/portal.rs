@@ -10,8 +10,10 @@ use bevy::prelude::*;
 
 use fellytip_shared::{
     components::WorldPosition,
-    world::zone::{ZoneMembership, ZoneTopology},
+    world::zone::{ZoneMembership, ZoneRegistry, ZoneTopology},
 };
+
+use crate::plugins::nav::{build_zone_nav_grids, ZoneNavGrids};
 
 // ── Components ────────────────────────────────────────────────────────────────
 
@@ -38,8 +40,14 @@ pub struct PortalPlugin;
 
 impl Plugin for PortalPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<PlayerZoneTransition>()
-            .add_systems(Startup, setup_portal_triggers)
+        app.init_resource::<ZoneRegistry>()
+            .init_resource::<ZoneTopology>()
+            .init_resource::<ZoneNavGrids>()
+            .add_message::<PlayerZoneTransition>()
+            .add_systems(
+                Startup,
+                (build_zone_nav_grids, setup_portal_triggers).chain(),
+            )
             .add_systems(
                 FixedUpdate,
                 (check_portal_triggers, apply_zone_transitions).chain(),
