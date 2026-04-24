@@ -10,6 +10,7 @@ use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use crate::components::{EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
+use crate::world::zone::{InteriorTile, ZoneAnchor, ZoneId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -55,6 +56,19 @@ pub struct BattleAttackMsg {
     pub target_combatant_id: Uuid,
     pub damage: i32,
     pub is_kill: bool,
+}
+
+/// Server → client message carrying a single zone's tile map + anchors.
+///
+/// In single-player mode this flows via Bevy's Message system; MULTIPLAYER
+/// will register it with `MessageRegistry` and route it across the network.
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+pub struct ZoneTileMessage {
+    pub zone_id: ZoneId,
+    pub width: u16,
+    pub height: u16,
+    pub tiles: Vec<InteriorTile>,
+    pub anchors: Vec<ZoneAnchor>,
 }
 
 // ── Plugin ───────────────────────────────────────────────────────────────────

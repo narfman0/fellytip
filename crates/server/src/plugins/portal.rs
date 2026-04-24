@@ -10,7 +10,8 @@ use bevy::prelude::*;
 
 use fellytip_shared::{
     components::WorldPosition,
-    world::zone::{ZoneMembership, ZoneRegistry, ZoneTopology},
+    protocol::ZoneTileMessage,
+    world::zone::{ZoneId, ZoneMembership, ZoneRegistry, ZoneTopology},
 };
 
 use crate::plugins::nav::{build_zone_nav_grids, ZoneNavGrids};
@@ -44,13 +45,14 @@ impl Plugin for PortalPlugin {
             .init_resource::<ZoneTopology>()
             .init_resource::<ZoneNavGrids>()
             .add_message::<PlayerZoneTransition>()
+            .add_message::<ZoneTileMessage>()
             .add_systems(
                 Startup,
                 (build_zone_nav_grids, setup_portal_triggers).chain(),
             )
             .add_systems(
                 FixedUpdate,
-                (check_portal_triggers, apply_zone_transitions).chain(),
+                (check_portal_triggers, apply_zone_transitions, send_zone_tiles).chain(),
             );
     }
 }
@@ -142,5 +144,48 @@ fn apply_zone_transitions(
         // TODO: move to actual to_anchor world position; for now just zero.
         pos.x = 0.0;
         pos.y = 0.0;
+    }
+}
+
+/// Broadcast the destination zone + all 1-hop neighbor zones to clients for
+/// each `PlayerZoneTransition`. In single-player this simply writes to the
+/// local `ZoneTileMessage` event stream; MULTIPLAYER will filter per-client.
+fn send_zone_tiles(
+    mut events: MessageReader<PlayerZoneTransition>,
+    topology: Option<Res<ZoneTopology>>,
+    registry: Option<Res<ZoneRegistry>>,
+    mut writer: MessageWriter<ZoneTileMessage>,
+) {
+    let (Some(topology), Some(registry)) = (topology, registry) else {
+        return;
+    };
+
+    let mut seen: std::collections::HashSet<ZoneId> = std::collections::HashSet::new();
+    for ev in events.read() {
+        let Some(portal) = topology.portals.iter().find(|p| p.id == ev.portal_id) else {
+            continue;
+        };
+        let target = portal.to_zone;
+
+        // Destination zone + all 1-hop neighbors.
+        let mut zones_to_send: Vec<ZoneId> = vec![target];
+        for neighbor in topology.neighbors(target) {
+            zones_to_send.push(neighbor);
+        }
+
+        for zid in zones_to_send {
+            if !seen.insert(zid) {
+                continue;
+            }
+            let Some(zone) = registry.get(zid) else { continue };
+            let Some(tiles) = registry.tiles(zone) else { continue };
+            writer.write(ZoneTileMessage {
+                zone_id: zid,
+                width: zone.width,
+                height: zone.height,
+                tiles: tiles.to_vec(),
+                anchors: zone.anchors.clone(),
+            });
+        }
     }
 }
