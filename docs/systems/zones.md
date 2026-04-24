@@ -4,224 +4,262 @@
 
 The zone graph is the substrate for all interior traversal (buildings, dungeons) and the Underdark simulation. The overworld is zone 0; every interior space is a named child zone. Zones are nodes; portals are directed edges. The client prefetches 1-hop neighbors so transitions are effectively seamless.
 
-Single-story village buildings use a cheaper **roof-cutaway** shortcut: the interior is still on zone 0, and the client just fades the roof mesh when the player walks under the building's AABB. A real child zone is only created when the space needs its own nav grid — multi-floor buildings, dungeons, and everything underground.
+Single-story village buildings use a cheaper **roof-cutaway** shortcut: the interior is still on zone 0, and the client just fades the roof mesh when the player walks under the building's AABB. A real child zone is only created when the space needs its own nav grid — multi-floor buildings (`Tavern`, `Barracks`, `Tower`, `Keep`), dungeons, and everything underground.
 
 ---
 
-## Data Model (Rust sketch)
+## Implementation Status
 
-> Lives in `crates/shared/src/world/zone.rs`. No ECS here — pure types.
+| Component | Location | Status | Gaps / TODOs |
+|---|---|---|---|
+| Zone data types (`Zone`, `ZoneKind`, `ZoneParent`, `InteriorTile`, `ZoneAnchor`, `Portal`, `PortalKind`) | `crates/shared/src/world/zone.rs` | ✅ Done | — |
+| `ZoneTemplate` + content-hash dedupe (`ZoneTemplateId = u64`) | `crates/shared/src/world/zone.rs` | ✅ Done | — |
+| `ZoneRegistry` + `ZoneTopology` resources | `crates/shared/src/world/zone.rs` | ✅ Done | — |
+| `ZoneMembership` component | `crates/shared/src/world/zone.rs` | ✅ Done | — |
+| `ZoneTopology::hop_distance` (BFS) | `crates/shared/src/world/zone.rs` | ✅ Done | `shortest_path` helper currently lives in `ai.rs` (`shortest_zone_path`); should move to `ZoneTopology` impl |
+| `generate_zones(&buildings, seed)` pure fn | `crates/shared/src/world/zone.rs` | ✅ Done | Only multi-floor `BuildingKind`s produce zones; single-story buildings stay on overworld. Underdark chain is currently a hard-coded 3 depths for testing. |
+| `PortalPlugin` — spawns `PortalTrigger` entities, handles `PlayerZoneTransition` events | `crates/server/src/plugins/portal.rs` | ✅ Done | Anchor world positions are `(0,0)` placeholder — need building world-coord propagation so intra-zone triggers are placed correctly. |
+| `ZoneNavGrids` resource + `build_zone_nav_grids` startup system | `crates/server/src/plugins/nav.rs` | ✅ Done (data container) | Zone-aware pathfinder consumption is pending; `nav.rs` still uses the flat 256×256 overworld `NavGrid` for AI. |
+| `UnderDarkSimSchedule` (0.1 Hz) + `UnderDarkPressure` resource | `crates/server/src/plugins/world_sim.rs`, `plugins/ai.rs` | ✅ Done | See `docs/systems/underdark.md`. |
+| `advance_zone_parties` — zone-hopping for war-party members | `crates/server/src/plugins/ai.rs` | ✅ Done | Trigger-radius check compares to world origin until anchor world positions are wired. |
+| `spawn_underdark_raid` — pressure→raid party conversion | `crates/server/src/plugins/ai.rs` | ✅ Done | — |
+| `dm/underdark_pressure`, `dm/force_underdark_pressure` BRP methods | `crates/server/src/plugins/dm.rs`, registered in `crates/client/src/main.rs` | ✅ Done | — |
+| `ZoneTileMessage` server→client protocol + `ZoneCache` resource | `crates/shared/src/protocol.rs`, `crates/client/src/plugins/zone_cache.rs` | ✅ Done | Message should carry an explicit `ZoneKind` field instead of the client-side tile-shape heuristic in `zone_renderer::classify_zone`. |
+| `ZoneRendererPlugin` — interior mesh spawn/despawn | `crates/client/src/plugins/zone_renderer.rs` | ✅ Done (scaffold) | One unlit quad per tile; no instancing, atlas, or lighting pass yet. Roof cutaway shader for zone-0 single-story buildings is **not** implemented. |
+| `update_zone_visibility` — client-side per-zone entity culling | `crates/client/src/plugins/entity_renderer.rs` | ✅ Done (scaffold) | Lightyear interest management per-zone is **not** yet wired; this is local visibility only. |
+| `underdark_e2e` ralph scenario | `tools/ralph/src/scenarios/underdark_e2e.rs` | ✅ Done | Best-effort battle assertion; would sharpen once `dm/story_events_by_tag` is added. |
+
+### Follow-ups (known, documented, non-blocking)
+
+1. Portal anchor world positions use `(0, 0)` as placeholder — building world-coords not yet propagated into the zone graph. `advance_zone_parties` and `setup_portal_triggers` both work around this today.
+2. `ZoneTopology::shortest_path` should move from `plugins/ai.rs::shortest_zone_path` onto the impl itself.
+3. `ZoneTileMessage` should carry an explicit `ZoneKind` instead of the client heuristics in `zone_renderer::classify_zone`.
+4. `dm/story_events_by_tag` would let `underdark_e2e` assert precisely on `UnderDarkThreat` emission instead of polling raid spawns indirectly.
+5. Lightyear interest management per zone group — the server-side infrastructure (one interest group per zone, subscribe to current + 1-hop neighbours) is not yet implemented. Client-side `update_zone_visibility` hides mismatched entities; this will be replaced when the lightyear side is wired.
+
+---
+
+## Data Model (actual shapes as implemented)
+
+> Lives in `crates/shared/src/world/zone.rs`. No ECS here — pure types except for `Resource` / `Component` derives for Bevy wiring.
 
 ```rust
-pub type ZoneId = Uuid;
+pub const OVERWORLD_ZONE: ZoneId = ZoneId(0);
 
-/// Structural kind — drives generation, rendering, and simulation rules.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
+pub struct ZoneId(pub u32);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ZoneKind {
-    /// Zone 0: the existing 1024×1024 world map.
     Overworld,
-    /// Any floor of an above-ground settlement building.
-    BuildingFloor { settlement_id: Uuid, building_index: u16, floor: u8 },
-    /// Sub-surface lit dungeon (caves, crypts, mine shafts).
+    BuildingFloor { floor: u8 },
     Dungeon { depth: u8 },
-    /// True underdark — permanently dark, hostile faction home territory.
     Underdark { depth: u8 },
 }
 
-/// A traversable region — the graph node.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Zone {
-    pub id: ZoneId,
-    pub kind: ZoneKind,
-    pub width: u16,
-    pub height: u16,
-    /// Flat tile grid, row-major: index = y * width + x.
-    pub tiles: Vec<InteriorTile>,
-    /// Named arrival/departure points referenced by portals.
-    pub anchors: Vec<ZoneAnchor>,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ZoneParent {
+    Overworld,
+    Settlement(Uuid),
+    Dungeon,
+    Underdark,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InteriorTile {
     Floor,
     Wall,
-    Void,   // outside room boundary — impassable
-    Stair,  // visual marker only; traversal is on the Portal
+    Void,
+    Stair,
     Water,
     Pit,
+    Balcony,   // sightline down; entities visible from floor below
+    Window,    // jump-out portal visual marker
+    Roof,      // exterior-facing, ambush spawn point
 }
 
-/// Named point inside a zone — portals reference these by name.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ZoneAnchor {
-    pub name: SmolStr, // e.g. "entrance", "upper_stair_top", "cellar_hatch"
-    pub pos: Vec2,     // local tile coords (0,0 = top-left)
+pub type ZoneTemplateId = u64; // content-hash of the tile array
+
+pub struct ZoneTemplate {
+    pub id: ZoneTemplateId,
+    pub width: u16,
+    pub height: u16,
+    pub tiles: Vec<InteriorTile>,
+    pub anchors: Vec<ZoneAnchor>,
 }
 
-/// Directed edge connecting two zones.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Runtime zone record — lightweight metadata + reference to a shared template.
+pub struct Zone {
+    pub id: ZoneId,
+    pub kind: ZoneKind,
+    pub parent: ZoneParent,
+    pub width: u16,
+    pub height: u16,
+    pub template_id: ZoneTemplateId,
+    pub anchors: Vec<ZoneAnchor>,
+}
+
 pub struct Portal {
-    pub id: Uuid,
+    pub id: u32,
     pub kind: PortalKind,
     pub from_zone: ZoneId,
-    pub from_anchor: SmolStr, // trigger point in from_zone
+    pub from_anchor: SmolStr,
     pub trigger_radius: f32,
+    pub traversal_cost: f32,
+    pub faction_permeable: bool,
+    pub one_way: bool,
     pub to_zone: ZoneId,
-    pub to_anchor: SmolStr, // arrival point in to_zone
+    pub to_anchor: SmolStr,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PortalKind {
-    Door,
-    Staircase,
-    Ladder,
-    Trapdoor,
-    CaveEntrance,
-    UnderDarkRift, // ancient/magical passage to the deep
-}
+pub enum PortalKind { Door, Staircase, Ladder, Trapdoor, CaveEntrance, UnderDarkRift }
 
-/// The full zone graph — one `Resource` on the server, replicated as needed.
-#[derive(Resource, Default, Debug, Serialize, Deserialize)]
-pub struct ZoneGraph {
+#[derive(Resource, Default, Clone, Debug)]
+pub struct ZoneRegistry {
     pub zones: HashMap<ZoneId, Zone>,
+    pub templates: HashMap<ZoneTemplateId, ZoneTemplate>,
+    pub next_id: u32,
+}
+
+#[derive(Resource, Default, Clone, Debug)]
+pub struct ZoneTopology {
     pub portals: Vec<Portal>,
+    pub adjacency: HashMap<ZoneId, SmallVec<[u32; 4]>>,
 }
 
-impl ZoneGraph {
-    pub fn exits_from(&self, zone: ZoneId) -> impl Iterator<Item = &Portal> {
-        self.portals.iter().filter(move |p| p.from_zone == zone)
-    }
-
-    pub fn neighbors(&self, zone: ZoneId) -> impl Iterator<Item = ZoneId> + '_ {
-        self.exits_from(zone).map(|p| p.to_zone)
-    }
-
-    /// Dijkstra over hop-count — used by raid-party routing.
-    pub fn shortest_path(&self, from: ZoneId, to: ZoneId) -> Option<Vec<ZoneId>>;
-
-    /// Hop count between zones — used for the "looming threat" threshold.
+impl ZoneTopology {
+    pub fn exits_from(&self, zone: ZoneId) -> impl Iterator<Item = &Portal>;
+    pub fn neighbors(&self, zone: ZoneId) -> impl Iterator<Item = ZoneId>;
     pub fn hop_distance(&self, from: ZoneId, to: ZoneId) -> Option<usize>;
+    // shortest_path currently lives in ai.rs as `shortest_zone_path` — see TODO above.
 }
+
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
+pub struct ZoneMembership(pub ZoneId);
 ```
+
+Templates are **content-hashed** (`ZoneTemplate::compute_id(tiles)`) and deduped in the registry, so identical layouts (e.g. every level of the 3-floor Underdark chain) share storage.
 
 ---
 
-## Zone Graph Topology
+## Zone Graph Topology (what `generate_zones` currently builds)
 
 ```
-Overworld (zone 0, id = derive(WORLD_SEED))
-├── [Door] → TavernGroundFloor
-│              └── [Staircase] → TavernUpperFloor
-├── [Door] → BlacksmithGroundFloor
-├── [CaveEntrance] → Dungeon:depth=1
-│                     └── [CaveEntrance] → Dungeon:depth=2
-│                                           └── [UnderDarkRift] → Underdark:depth=1
-│                                                                   └── ... depth N
-└── (roof-cutaway buildings: no child zone, interior stays on zone 0)
+Overworld (ZoneId(0))
+├── [Staircase pair] Tavern floor 0 ↔ floor 1            (per Tavern building)
+├── [Staircase pair] Barracks floor 0 ↔ floor 1           (per Barracks building)
+├── [Staircase pairs] Tower floors 0↔1, 1↔2, 2↔3          (per Tower building; floor 3 = 6×6 roof battlements)
+├── [Staircase pairs] Keep floors 0↔1, 1↔2                (per Keep building; floor 2 = 10×10 battlements)
+└── [CaveEntrance pair] → Underdark depth 1
+                          ├── [UnderDarkRift pair] → Underdark depth 2
+                          └── ... → Underdark depth 3
 ```
 
-Portals are **bidirectional by default** — one `Portal` record per direction. The server generates the reverse portal automatically during zone construction.
+Portals are **bidirectional by default** — `generate_zones()` emits one `Portal` record per direction. `Portal.one_way = true` if you want a one-way portal (e.g. trapdoor); `apply_zone_transitions` honours it.
+
+Building floor layouts (per `zone.rs`):
+
+- **Tavern**: 8×8 floors of `Floor` with a `Stair` at (3,3). Upper floor adds a `Balcony` at (5,5).
+- **Barracks**: 8×8 floors. Upper floor's west wall replaced with `Window` tiles.
+- **Tower**: 6×6 interior floors 0–2 with a `Stair` at (2,2); floor 3 = 6×6 roof battlements (perimeter `Roof` tiles).
+- **Keep**: 6×6 interior floors 0–1; floor 2 = 10×10 battlements. (Entrance anchor on floor 0.)
 
 ---
 
 ## Client Prefetch (Seamless Transitions)
 
-When a player's current zone changes:
+When a player's `ZoneMembership` changes:
 
-1. Server sends the new zone's `Zone` data + entity snapshot (existing replication).
-2. Client immediately requests all 1-hop neighbor zones (by `ZoneId` list from the graph).
-3. Neighbor zones are small (≤ 64×64 tiles), so they arrive in the same frame or next.
-4. By the time the player reaches a portal trigger radius, the destination zone is already in memory → transition is instant (no loading screen).
+1. `PortalPlugin::send_zone_tiles` emits one `ZoneTileMessage` for the destination zone and one for each 1-hop neighbour.
+2. Client stores them in `ZoneCache` (see `crates/client/src/plugins/zone_cache.rs`).
+3. `ZoneRendererPlugin::spawn_zone_meshes` wakes on the player's new zone and spawns interior meshes from the cached tiles; `despawn_stale_zone_meshes` clears previous zones.
+4. By the time the player reaches a portal trigger radius, the destination zone's tiles are already in `ZoneCache` → transition is instant.
 
-**Size budget:** BuildingFloor zones target 16×16–64×64 tiles. Dungeon floors 64×128. Underdark caverns 128×256. These are tiny compared to the 1024×1024 overworld, so prefetching is cheap.
+**Size budget:** BuildingFloor zones target 6×6–8×8 (Tavern/Barracks/Tower) or up to 10×10 (Keep battlements). Underdark caverns are 16×16 in the current scaffold. These are tiny compared to the 1024×1024 overworld, so prefetching is cheap.
 
 ---
 
-## Roof Cutaway (Single-Story Shortcut)
+## Roof Cutaway (Single-Story Shortcut) — designed, not yet implemented
 
-Buildings that never need stairs or a basement use a visual shortcut instead of a portal:
+Buildings that never need stairs or a basement should use a visual shortcut instead of a portal:
 
 - Interior stays on zone 0 — entities inside are overworld entities.
-- A `BuildingRoof` entity (PBR mesh) has a material shader that reads from a `PlayerProximity` buffer.
-- When any local player's position is inside the building's AABB (world-space footprint + small margin), the roof's opacity lerps to 0.
+- A `BuildingRoof` entity (PBR mesh) with a shader that reads a `PlayerProximity` buffer.
+- When any local player's position is inside the building's AABB (world-space footprint + margin), the roof's opacity lerps to 0.
 - No zone transition occurs; nav grid, interest management, and replication are unchanged.
-- Upgrade path: if a building later needs a basement, create a child zone and add a trapdoor portal — no other systems change.
+- Upgrade path: if a building later needs a basement, convert to a multi-floor `BuildingKind` — `generate_zones()` will emit child zones and portals automatically.
+
+As of this milestone, `generate_zones()` already honours this by skipping single-story `BuildingKind`s (`TentDetailed`, `Fountain`, stalls, etc.). The shader/fade system is still TODO — no `BuildingRoof` component exists yet.
 
 ---
 
 ## Nav Grid Per Zone
 
-Each `Zone` gets a `ZoneNavGrid` computed from `InteriorTile`:
+Each `Zone` with non-empty tiles gets a `Grid<NavCell>` built by `build_zone_nav_grids` at startup and stored in the `ZoneNavGrids` resource (`HashMap<ZoneId, Grid<NavCell>>`).
+
+Mapping is in `plugins/nav.rs::interior_tile_to_nav_cell`:
 
 | Tile | NavCell |
 |------|---------|
-| Floor, Stair | Passable |
-| Water | Slow |
+| Floor, Stair, Balcony | Passable |
+| Water, Roof, Window | Slow |
 | Wall, Void, Pit | Blocked |
 
-Algorithm is identical to `nav.rs` (A* for individuals, Dijkstra flow fields for groups). Zone nav grids are lazily computed on first use and cached in `ZoneGraph`.
+The overworld `NavGrid` still uses the existing 256×256 downsampled tile grid — zone-aware A* / flow-field consumption of `ZoneNavGrids` is a follow-up. The container is in place so the algorithms can land next without a data migration.
 
-War-party routing across zones: parties path to the exit portal anchor within their current zone, then hop to the next zone via the portal. `WorldSimSchedule` advances one zone-hop per 1 Hz tick.
+War-party routing across zones: `advance_zone_parties` (WorldSimSchedule, 1 Hz) advances members one zone per tick based on their precomputed `zone_route: Vec<ZoneId>`. Intra-zone movement stays on `FixedUpdate` via `march_war_parties` once the party reaches the overworld.
 
 ---
 
 ## Simulation: Underdark Raid Parties
 
-```
-Underdark:depth=N  →  ... → Dungeon:depth=1 → Overworld
-```
+See `docs/systems/underdark.md` for the full loop. Short version:
 
-Each raid party carries:
-- `current_zone: ZoneId`
-- `within_zone_pos: Vec2`
-- `route: Vec<ZoneId>` — precomputed by `ZoneGraph::shortest_path` to target settlement
-
-`advance_raid_parties` (WorldSimSchedule, 1 Hz):
-1. Move party toward exit portal anchor using zone's flow field.
-2. When within `trigger_radius`, hop: set `current_zone` to next zone in route.
-3. Emit `StoryEvent::UnderDarkThreat { hops_to_surface }` whenever `hop_distance(current_zone, overworld_id) ≤ 3`.
-4. When party reaches zone 0, convert to a surface `WarParty` using existing `trigger_war_party` logic.
-
-Players intercept by being in a zone the route passes through — they'll see the raid party entities via interest management.
+1. `UnderDarkPressure.score` accumulates on `UnderDarkSimSchedule` (0.1 Hz).
+2. At score ≥ 0.4 → distant `StoryEvent::UnderDarkThreat` with `hops_to_surface = 99` (latched).
+3. At score ≥ 0.7 → imminent `StoryEvent::UnderDarkThreat` with `hops_to_surface = 2` (latched).
+4. At score ≥ 0.8 → `spawn_underdark_raid` spawns `UNDERDARK_RAID_PARTY_SIZE` (3) WarPartyMembers in the deepest Underdark zone, routed BFS → `OVERWORLD_ZONE`.
+5. `advance_zone_parties` hops them one zone per 1 Hz tick; on reaching `OVERWORLD_ZONE` the existing `march_war_parties` surface logic takes over.
 
 ---
 
 ## Interest Management
 
-- Server maintains one **interest group per zone**.
-- Player entity subscribes to: their current zone + all 1-hop neighbors (pre-fetch group, entities only — not tiles).
-- Portal entities are replicated to both `from_zone` and `to_zone` groups.
-- Raid party entities in deep Underdark zones are **not** replicated to surface players (too far, no threat yet). The `StoryEvent` is the signal.
+**Design:**
+- Server maintains one interest group per zone.
+- Player entity subscribes to: current zone + all 1-hop neighbours (pre-fetch group).
+- Raid party entities in deep Underdark zones are **not** replicated to surface players — the `StoryEvent` is the signal.
+
+**Current state:** the server-side lightyear group wiring is not yet implemented (see Implementation Status table). The client-side `update_zone_visibility` system in `entity_renderer.rs` hides mismatched entities locally as a stop-gap; a comment in that system calls out the missing server plumbing.
 
 ---
 
 ## Rendering
 
-**Above-ground interiors**
-- Floor: one `StandardMaterial` quad per room (instanced by tile count, one draw call per material type).
-- Walls: oriented billboard quads facing the camera, per-wall texture atlas.
-- Props: existing sprite billboards (unchanged pipeline).
-- Lighting: ambient matches exterior time-of-day; interior point lights from candles, fireplaces.
+`ZoneRendererPlugin` (`crates/client/src/plugins/zone_renderer.rs`) spawns one quad per non-empty interior tile on zone entry and despawns them on zone exit. Zone kind drives tint:
 
-**Underground / Underdark**
-- Same mesh pipeline; ambient = near-black.
-- Point lights from torches, bioluminescent fungi (`PointLight` entities, low radius).
-- Underdark: no ambient at all — total darkness outside light radii.
+| ZoneKind | Floor | Wall | Roof | Emissive |
+|---|---|---|---|---|
+| Overworld | not rendered (terrain handles it) | — | — | — |
+| BuildingFloor | warm brown | dark brown | default | none |
+| Dungeon | grey stone | grey stone | default | none |
+| Underdark | near-black | near-black | near-black | blue-green bioluminescent tint |
 
-**Roof cutaway** (zone 0 buildings)
-- `BuildingRoof` mesh has custom wgsl that samples a `proximity_buffer` (vec of player world-positions).
-- Opacity = `smoothstep(inner_r, outer_r, min_dist_to_any_player)`.
-- No depth-sort issues because the roof is opaque when far and transparent when near.
+Tile handling: `Floor`/`Stair`/`Water` → floor quad; `Wall`/`Window` → vertical wall quad; `Balcony` → translucent elevated floor; `Roof` → floor quad at WALL_HEIGHT; `Void`/`Pit` → no mesh (empty space).
 
 ---
 
-## Implementation Order
+## Implementation Order (what's done vs remaining)
 
-1. `crates/shared/src/world/zone.rs` — data types + `ZoneGraph` (no ECS).
-2. `generate_zones()` pure fn — produces child zones for each `Building` that needs one, plus cave entrances.
-3. `ZoneNavPlugin` — builds `ZoneNavGrid` per zone on startup.
-4. `PortalPlugin` (server) — spawns trigger volumes, handles `PlayerZoneTransition` events.
-5. Client zone prefetch — on zone change, request neighbor zone data via BRP.
-6. Roof cutaway shader + `BuildingRoof` component.
-7. `advance_raid_parties` in `ai.rs` — replace overworld-only march with zone-hopping.
-8. `StoryEvent::UnderDarkThreat` + hop-distance gate.
+1. ✅ `crates/shared/src/world/zone.rs` — data types + `ZoneRegistry`/`ZoneTopology` + `generate_zones()`.
+2. ✅ `generate_zones()` — produces child zones for `Tavern`/`Barracks`/`Tower`/`Keep` + hard-coded 3-depth Underdark chain.
+3. ✅ `ZoneNavGrids` — per-zone `Grid<NavCell>` built on startup.
+4. ✅ `PortalPlugin` — spawns trigger entities, emits `PlayerZoneTransition`, applies transitions, broadcasts `ZoneTileMessage` with neighbours.
+5. ✅ Client zone prefetch — `ZoneCache` + `ZoneTileMessage` + `ZoneRendererPlugin`.
+6. ⏳ Roof-cutaway shader for single-story buildings — deferred (no `BuildingRoof` component yet).
+7. ✅ `advance_zone_parties` in `ai.rs` — zone-hopping at 1 Hz; converts to surface march on reaching overworld.
+8. ✅ `StoryEvent::UnderDarkThreat` + hop-distance gate (≤ 3 emits; 0.4/0.7 pressure thresholds emit with synthetic hop counts).
+9. ⏳ Move `shortest_zone_path` from `ai.rs` onto `ZoneTopology` impl.
+10. ⏳ Wire Lightyear interest groups per zone.
+11. ⏳ Propagate building world-coords into portal anchors so `trigger_radius` checks are real.
+12. ⏳ Give `ZoneTileMessage` an explicit `ZoneKind` field.

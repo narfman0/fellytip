@@ -8,15 +8,15 @@ See `docs/` for product documentation:
 - `docs/requirements.md` — what the game must do
 - `docs/architecture.md` — crate layout, design constraints, data flow
 - `docs/milestones.md` — milestone definitions and status
-- `docs/systems/` — one file per major system (world-map, combat, civilization, world-sim, networking, persistence, rendering, pathfinding, perf)
+- `docs/systems/` — one file per major system (world-map, combat, civilization, world-sim, networking, persistence, rendering, pathfinding, perf, zones, underdark)
 
 ## Crate map
 
 | Crate | Role |
 |---|---|
-| `crates/shared` | Pure types, protocol, combat rules, world gen — no ECS, no I/O |
-| `crates/server` | Bevy server logic (library): `WorldSimSchedule` (1 Hz), AI, persistence, map gen, nav grid / pathfinding (`plugins/nav.rs`), adaptive performance throttling (`plugins/perf.rs`), DM BRP methods (`plugins/dm.rs`) |
-| `crates/client` | Bevy client binary: rendering, egui HUD, input — also hosts the server plugins in-process today |
+| `crates/shared` | Pure types, protocol, combat rules, world gen — no ECS, no I/O. Includes `world/zone.rs` (zone graph types + `generate_zones()`) and the generic `world/grid.rs` |
+| `crates/server` | Bevy server logic (library): `WorldSimSchedule` (1 Hz) + `UnderDarkSimSchedule` (0.1 Hz), AI, persistence, map gen, nav grid / pathfinding (`plugins/nav.rs` — refactored to use `Grid<T>`, with `ZoneNavGrids`), zone portals (`plugins/portal.rs`), adaptive performance throttling (`plugins/perf.rs`), DM BRP methods (`plugins/dm.rs`) |
+| `crates/client` | Bevy client binary: rendering, egui HUD, input — also hosts the server plugins in-process today. Zone interior rendering lives in `plugins/zone_renderer.rs`; zone-scoped visibility culling is in `plugins/entity_renderer.rs::update_zone_visibility` |
 | `tools/combat_sim` | proptest harness — runs combat rules with no ECS |
 | `tools/ralph` | BRP HTTP test driver — asserts live world state via JSON-RPC |
 | `tools/worldwatch` | Async egui dashboard — live world inspector + DM control panel over BRP |
@@ -32,7 +32,7 @@ See `docs/` for product documentation:
 - **Pure rules, thin bridge.** Combat and world-sim logic goes in `crates/shared` as `fn(State) -> (State, Vec<Effect>)`. ECS systems only snapshot state → call rules → apply effects.
 - **Never roll dice inside rules.** Always inject `rng: &mut impl Iterator<Item=i32>` so proptest can drive deterministic traces.
 - **No wildcard `_` in interrupt stack `match`.** Every `InterruptFrame` variant must be handled explicitly — this is a lint-level guarantee against silent fallthrough bugs.
-- **Two tick rates.** `FixedUpdate` at 62.5 Hz (combat/movement). `WorldSimSchedule` custom schedule at 1 Hz (factions/ecology/story). Never cross-schedule without a documented reason.
+- **Three tick rates.** `FixedUpdate` at 62.5 Hz (combat/movement). `WorldSimSchedule` custom schedule at 1 Hz (factions/ecology/story/zone-hop). `UnderDarkSimSchedule` custom schedule at 0.1 Hz (Underdark pressure accumulation + decay — slow background buildup). Never cross-schedule without a documented reason.
 - **Isometric stays behind a feature flag.** Only `sync_transform` changes between `topdown` (default) and `isometric` features. Simulation and networking are untouched.
 - **World gen is pure and deterministic.** `generate_map(seed)` and `generate_settlements(map, seed)` are pure functions in `crates/shared` — no ECS, no I/O. Same seed always produces the same world. The server calls them on startup via `MapGenPlugin`.
 - **No circular module deps in world gen.** `world/civilization.rs` may import from `world/map.rs`. `world/map.rs` must NOT import from `civilization.rs`. Settlement generation happens after `generate_map` returns.
@@ -48,7 +48,8 @@ cargo test --workspace                 # 58 tests total (fast, no I/O)
 cargo test -p fellytip-shared          # pure logic: map gen, biomes, civilization, combat
 cargo test -p combat_sim               # 100k+ proptest traces
 cargo clippy --workspace -- -D warnings
-cargo run -p ralph -- --scenario all   # live end-to-end via BRP
+cargo run -p ralph -- --scenario all                # live end-to-end via BRP
+cargo run -p ralph -- --scenario underdark_e2e       # zone-graph raid pipeline end-to-end
 cargo run -p world_gen -- --seed 42    # ASCII world preview (sanity check)
 cargo run -p sprite_gen -- --all --dry-run        # preview AI prompts, no images written
 cargo run -p sprite_gen -- --all                  # generate mock atlas PNGs (no API key needed)
@@ -81,6 +82,8 @@ The headless client registers a set of `dm/*` custom BRP methods (see `crates/se
 | `dm/set_ecology` | `{ region, prey?, predator? }` | Override prey / predator counts in a macro region |
 | `dm/battle_history` | `{ limit? }` | Read the rolling battle record history, newest-first |
 | `dm/clear_battle_history` | `{}` | Drop every queued `BattleRecord` — test helper so scenarios can isolate their own battle |
+| `dm/underdark_pressure` | `{}` | Read the `UnderDarkPressure` snapshot `{ score, last_raid_tick }` |
+| `dm/force_underdark_pressure` | `{}` | Force `UnderDarkPressure.score = 1.0` so the next 1 Hz tick spawns a raid — used by `underdark_e2e` |
 
 Bevy 0.18 renamed the built-in BRP endpoints from `bevy/*` to `world.*` (e.g. `world.query`, `world.get`, `world.spawn`). All new ralph code should call the `world.*` names.
 
@@ -111,6 +114,8 @@ Follow the milestone sequence in `docs/milestones.md`. Each milestone's acceptan
 - `WorldMap` is NOT replicated to clients (512×512 = too large). Clients get entity positions only; tile rendering samples locally on region-load.
 - `generate_map` runs the full pipeline: fBm surface → moisture → biome classification → rivers → shallow caves → Underdark → shafts. Call order in server: `generate_map` → `generate_settlements` → `generate_roads` (mutates map).
 - `Settlements` is a Bevy `Resource` (wraps `Vec<Settlement>`) inserted by `MapGenPlugin`.
+- `BuildingKind` now includes `Tavern` (2-floor), `Barracks` (2-floor), `Tower` (4-floor incl. battlements) and `Keep` (3-floor + 10×10 battlements) — these are the building kinds that produce child zones via `generate_zones()`. All other `BuildingKind` variants stay on the overworld (no interior zone). See `docs/systems/zones.md`.
+- Zone graph: `ZoneRegistry` + `ZoneTopology` are Bevy resources populated at startup. `OVERWORLD_ZONE = ZoneId(0)`. Zones are generated by pure `generate_zones(&buildings, seed)` in `crates/shared/src/world/zone.rs`. A fixed 3-depth Underdark chain is always generated for testing. See `docs/systems/zones.md` and `docs/systems/underdark.md`.
 
 ## Change workflow
 

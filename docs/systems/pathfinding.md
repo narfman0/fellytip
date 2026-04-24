@@ -2,9 +2,24 @@
 
 Navigation lives in `crates/server/src/plugins/nav.rs`. It provides a single static grid for AI pathfinding and two algorithms layered on top — A* for individual movement and BFS/Dijkstra flow fields for war parties that share a destination.
 
-## NavGrid
+## Storage: `Grid<T>`
 
-`NavGrid` is a 256×256 `Resource` built once from `WorldMap` on startup (after `generate_map` inserts it). That's a 4:1 downsample of the 1024×1024 world tile map — one nav cell covers a 4×4 block of tiles.
+Both the overworld `NavGrid` and the per-zone `ZoneNavGrids` share a generic row-major 2D container:
+
+```rust
+// crates/shared/src/world/grid.rs
+pub struct Grid<T> {
+    pub w: usize,
+    pub h: usize,
+    pub cells: Vec<T>,
+}
+```
+
+`Grid<T>` provides `new(w, h)` (default-fill), `from_cells(w, h, cells)`, `get`/`get_mut`, `in_bounds`, and a `neighbors_4` iterator. The nav types below are both thin wrappers around `Grid<NavCell>`.
+
+## NavGrid (overworld)
+
+`NavGrid` wraps `Grid<NavCell>` with dimensions `256 × 256`. It is built once from `WorldMap` on startup (after `generate_map` inserts it) — a 4:1 downsample of the 1024×1024 world tile map, one nav cell per 4×4 tile block.
 
 Each cell is a `NavCell` classifying passability:
 
@@ -49,6 +64,20 @@ War-party and NPC movement pay for pathfinding proportional to their `ChunkTempe
 | `Frozen` | 0.05 | Skip A* and flow fields entirely; linear march toward the target at 0.05× speed |
 
 Frozen-zone NPCs always reach their goal — linear march is deliberately macro-correct. It trades locally-realistic routing for near-zero CPU cost when no player can see the party. See `crates/server/src/plugins/ai.rs` for the movement systems that consume `NavGrid` and `FlowField`.
+
+## `ZoneNavGrids` — per-zone grids for interiors
+
+`ZoneNavGrids(pub HashMap<ZoneId, Grid<NavCell>>)` is a Bevy resource populated at startup by `build_zone_nav_grids` (in `plugins/nav.rs`) from the `ZoneRegistry`. For every zone with a non-empty tile array it builds a `Grid<NavCell>` sized to `zone.width × zone.height`.
+
+`InteriorTile` → `NavCell` mapping (see `interior_tile_to_nav_cell`):
+
+| `InteriorTile` | `NavCell` |
+|---|---|
+| `Floor`, `Stair`, `Balcony` | `Passable` |
+| `Water`, `Roof`, `Window` | `Slow` |
+| `Wall`, `Void`, `Pit` | `Blocked` |
+
+The overworld zone (`OVERWORLD_ZONE = ZoneId(0)`) has an empty tile array in the registry and is deliberately skipped — its pathfinding still uses the flat 256×256 `NavGrid` above. `ZoneNavGrids` is currently a data container; zone-aware A* / flow-field pathfinding is a follow-up. See `docs/systems/zones.md` for the registry side and the overall status table.
 
 ## Interaction with adaptive throttling
 
