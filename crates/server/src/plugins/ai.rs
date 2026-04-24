@@ -1543,9 +1543,13 @@ fn spawn_underdark_raid(
         return;
     };
 
-    // Spawn origin: center of deepest Underdark zone's tile grid (local coords).
-    let spawn_x = deepest_zone.width as f32 * 0.5;
-    let spawn_y = deepest_zone.height as f32 * 0.5;
+    // Spawn at (0,0) in the deepest Underdark zone. The portal-trigger
+    // placeholder (see `advance_zone_parties`) compares to world origin until
+    // anchor world positions are wired in — this keeps the zone-hop progression
+    // deterministic so raid parties traverse the entire route at 1 Hz.
+    let spawn_x = 0.0_f32;
+    let spawn_y = 0.0_f32;
+    let _ = deepest_zone; // kept for future anchor lookup
 
     let underdark_fid = FactionId(SmolStr::new("underdark"));
 

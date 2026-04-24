@@ -136,4 +136,19 @@ impl BrpClient {
             other             => bail!("unexpected dm/battle_history result: {other}"),
         }
     }
+
+    /// `dm/underdark_pressure` — read the current pressure score and last raid tick.
+    pub fn dm_underdark_pressure(&self) -> Result<(f64, u64)> {
+        let result = self.call("dm/underdark_pressure", json!({}))?;
+        let score = result["score"].as_f64().unwrap_or(0.0);
+        let last_raid_tick = result["last_raid_tick"].as_u64().unwrap_or(0);
+        Ok((score, last_raid_tick))
+    }
+
+    /// `dm/force_underdark_pressure` — force score to 1.0 so the next sim tick
+    /// spawns a raid party immediately.
+    pub fn dm_force_underdark_pressure(&self) -> Result<()> {
+        self.call("dm/force_underdark_pressure", json!({}))?;
+        Ok(())
+    }
 }
