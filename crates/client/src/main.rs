@@ -72,7 +72,8 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::MapPlugin)
     .add_plugins(plugins::PauseMenuPlugin)
     .add_plugins(plugins::DebugConsolePlugin)
-    .add_plugins(plugins::ZoneCachePlugin);
+    .add_plugins(plugins::ZoneCachePlugin)
+    .add_plugins(plugins::ZoneRendererPlugin);
 }
 
 fn main() {

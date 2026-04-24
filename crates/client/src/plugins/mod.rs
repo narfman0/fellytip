@@ -12,6 +12,7 @@ pub mod scene_lighting;
 pub mod skybox;
 pub mod terrain;
 pub mod zone_cache;
+pub mod zone_renderer;
 
 pub use battle::BattleVisualsPlugin;
 pub use billboard_sprite::BillboardSpritePlugin;
@@ -28,3 +29,5 @@ pub use skybox::SkyboxPlugin;
 pub use terrain::TerrainPlugin;
 #[allow(unused_imports)]
 pub use zone_cache::{ZoneCache, ZoneCachePlugin};
+#[allow(unused_imports)]
+pub use zone_renderer::{ZoneMeshMarker, ZoneRendererPlugin};
