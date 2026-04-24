@@ -57,7 +57,8 @@ impl Plugin for ServerGamePlugin {
             .add_plugins(plugins::story::StoryPlugin)
             .add_plugins(plugins::combat::CombatPlugin)
             .add_plugins(plugins::interest::InterestPlugin)
-            .add_plugins(plugins::party::PartyPlugin);
+            .add_plugins(plugins::party::PartyPlugin)
+            .add_plugins(plugins::portal::PortalPlugin);
 
         if self.combat_test {
             app.add_plugins(plugins::combat_test::CombatTestPlugin);

@@ -8,6 +8,7 @@ pub mod interest;
 pub mod map_gen;
 pub mod nav;
 pub mod party;
+pub mod portal;
 pub mod perf;
 pub mod persistence;
 pub mod story;
