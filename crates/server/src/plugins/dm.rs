@@ -217,6 +217,8 @@ pub fn dm_trigger_war_party(In(params): In<Option<Value>>, world: &mut World) ->
             target_y: ty,
             attacker_faction: attacker_fid.clone(),
             player_target: None,
+            current_zone: fellytip_shared::world::zone::OVERWORLD_ZONE,
+            zone_route: Vec::new(),
         });
     }
 

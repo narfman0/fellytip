@@ -95,6 +95,14 @@ pub struct WarPartyMember {
     /// marching to the settlement.  `target_x`/`target_y` are updated each tick
     /// by `update_war_party_player_targets` to follow the player's position.
     pub player_target: Option<Entity>,
+    /// Zone the war party member currently occupies. Defaults to the overworld.
+    /// Reflect-skipped because ZoneId is in shared::world::zone and doesn't
+    /// satisfy the reflection derive requirements downstream.
+    #[reflect(ignore)]
+    pub current_zone: fellytip_shared::world::zone::ZoneId,
+    /// Pre-computed zone hop path this party is traversing. Empty = overworld-only.
+    #[reflect(ignore)]
+    pub zone_route: Vec<fellytip_shared::world::zone::ZoneId>,
 }
 
 /// Lives on a bookkeeping entity while a battle is ongoing at a settlement.
@@ -185,6 +193,7 @@ impl Plugin for AiPlugin {
                 age_npcs_system,
                 check_war_party_formation,
                 update_war_party_player_targets,
+                advance_zone_parties,
                 march_war_parties,
                 war_party_separation,
                 run_battle_rounds,
@@ -763,6 +772,8 @@ fn check_war_party_formation(
                     target_y: event.target_y,
                     attacker_faction: event.attacker_faction.clone(),
                     player_target,
+                    current_zone: fellytip_shared::world::zone::OVERWORLD_ZONE,
+                    zone_route: Vec::new(),
                 });
                 tagged += 1;
             }
@@ -914,6 +925,91 @@ fn march_war_parties(
                     "Battle started"
                 );
             }
+        }
+    }
+}
+
+/// WorldSimSchedule system (1 Hz): progress war parties along their zone route.
+///
+/// For each war party member with a non-empty `zone_route` and not on the
+/// overworld: if within the trigger radius of their exit portal (looked up in
+/// `ZoneTopology`) pop the next hop. If the route is exhausted and the member
+/// is now on the overworld, the member resumes normal surface attack logic
+/// via its existing `march_war_parties` path. Intra-zone movement stays on
+/// `FixedUpdate` via `march_war_parties`.
+///
+/// Also emits `StoryEvent::UnderDarkThreat` when the party's hop distance to
+/// the overworld is ≤ 3.
+#[allow(clippy::too_many_arguments)]
+pub fn advance_zone_parties(
+    mut warriors: Query<(
+        &mut WarPartyMember,
+        &WorldPosition,
+        &mut fellytip_shared::world::zone::ZoneMembership,
+    )>,
+    topology: Option<Res<fellytip_shared::world::zone::ZoneTopology>>,
+    mut story_writer: MessageWriter<WriteStoryEvent>,
+    tick: Res<WorldSimTick>,
+) {
+    let Some(topology) = topology else { return };
+
+    for (mut war_member, pos, mut membership) in &mut warriors {
+        // Idle parties (no route, already overworld) — nothing to do.
+        if war_member.zone_route.is_empty()
+            && war_member.current_zone == fellytip_shared::world::zone::OVERWORLD_ZONE
+        {
+            continue;
+        }
+
+        // Emit UnderDarkThreat when hops_to_surface <= 3.
+        if war_member.current_zone != fellytip_shared::world::zone::OVERWORLD_ZONE {
+            if let Some(hops) = topology.hop_distance(
+                war_member.current_zone,
+                fellytip_shared::world::zone::OVERWORLD_ZONE,
+            ) {
+                if hops <= 3 {
+                    story_writer.write(WriteStoryEvent(StoryEvent {
+                        id: Uuid::new_v4(),
+                        tick: tick.0,
+                        world_day: (tick.0 / 86_400).min(u32::MAX as u64) as u32,
+                        kind: StoryEventKind::UnderDarkThreat {
+                            faction_id: war_member.attacker_faction.0.clone(),
+                            hops_to_surface: hops,
+                        },
+                        participants: Vec::new(),
+                        location: None,
+                        lore_tags: Vec::new(),
+                    }));
+                }
+            }
+        }
+
+        // Find exit portal for the next hop in the route.
+        let Some(&next_zone) = war_member.zone_route.first() else {
+            continue;
+        };
+        let Some(portal) = topology
+            .exits_from(war_member.current_zone)
+            .find(|p| p.to_zone == next_zone)
+        else {
+            // No portal to the next zone — clear the route and bail so it
+            // doesn't spin forever.
+            war_member.zone_route.clear();
+            continue;
+        };
+
+        // Within trigger radius? Use squared distance; the exit anchor world
+        // position is not yet propagated (see portal.rs TODO) so we compare
+        // against world origin as a placeholder. This system will become
+        // load-bearing once anchors are wired to world coords.
+        let dx = pos.x - 0.0;
+        let dy = pos.y - 0.0;
+        let r = portal.trigger_radius;
+        if dx * dx + dy * dy <= r * r {
+            // Pop next hop: advance zone_route and update current_zone.
+            war_member.zone_route.remove(0);
+            war_member.current_zone = next_zone;
+            membership.0 = next_zone;
         }
     }
 }

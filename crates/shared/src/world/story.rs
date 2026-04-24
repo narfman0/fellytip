@@ -36,6 +36,9 @@ pub enum StoryEventKind {
     // Emergent
     NpcDefected         { npc: GameEntityId, from: FactionId, to: FactionId },
     MonsterMigrated     { species: SpeciesId, from: RegionId, to: RegionId },
+    /// A war party in the Underdark is within a few hops of the surface and
+    /// poised to erupt. Emitted while `hops_to_surface <= 3`.
+    UnderDarkThreat     { faction_id: SmolStr, hops_to_surface: usize },
 }
 
 // ── Story event ───────────────────────────────────────────────────────────────

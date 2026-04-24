@@ -22,7 +22,9 @@ use uuid::Uuid;
 pub const OVERWORLD_ZONE: ZoneId = ZoneId(0);
 
 /// Opaque zone identifier. `ZoneId(0)` is reserved for the overworld.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect,
+)]
 pub struct ZoneId(pub u32);
 
 /// What category of zone this is (overworld, building floor, dungeon, etc.).
