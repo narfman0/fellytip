@@ -49,7 +49,7 @@ use crate::plugins::combat::{CombatParticipant, ExperienceReward};
 use crate::plugins::interest::{effective_zone, SimTier};
 use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField};
 use crate::plugins::perf::AdaptiveScheduler;
-use crate::plugins::world_sim::{WorldSimSchedule, WorldSimTick};
+use crate::plugins::world_sim::{UnderDarkSimSchedule, WorldSimSchedule, WorldSimTick};
 
 /// Server-only component: which faction this NPC belongs to.
 #[derive(Component)]
@@ -139,6 +139,24 @@ pub struct BattleRecord {
     pub defender_casualties: u32,
 }
 
+/// Background pressure score for the Underdark faction's surface raids.
+///
+/// Accumulates slowly on `UnderDarkSimSchedule` (0.1 Hz). When it crosses
+/// configured thresholds it emits environmental signals (`StoryEvent`s); when
+/// it peaks the raid spawn system converts it into a concrete war party.
+///
+/// * `score`: 0.0 = calm, 1.0 = imminent raid
+/// * `last_raid_tick`: `WorldSimTick` when the last raid party spawned
+/// * `thresholds_crossed`: bitmask of thresholds currently latched (bit 0 = 0.4
+///   distant signal, bit 1 = 0.7 imminent signal). Uses hysteresis: bits are
+///   set when crossed upward and cleared when the score drops back below 0.4.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct UnderDarkPressure {
+    pub score: f32,
+    pub last_raid_tick: u64,
+    pub thresholds_crossed: u8,
+}
+
 /// Rolling history of resolved battles, capped at 100 entries.
 #[derive(Resource, Default)]
 pub struct BattleHistory {
@@ -179,6 +197,7 @@ impl Plugin for AiPlugin {
             .init_resource::<FactionPopulationState>()
             .init_resource::<FlowField>()
             .init_resource::<BattleHistory>()
+            .init_resource::<UnderDarkPressure>()
             .add_message::<FormWarPartyEvent>()
             .register_type::<FactionNpcRank>()
             .register_type::<WarPartyMember>()
@@ -194,11 +213,19 @@ impl Plugin for AiPlugin {
                 check_war_party_formation,
                 update_war_party_player_targets,
                 advance_zone_parties,
+                spawn_underdark_raid,
                 march_war_parties,
                 war_party_separation,
                 run_battle_rounds,
                 wander_npcs,
                 sync_player_standings,
+            ).chain(),
+        );
+        app.add_systems(
+            UnderDarkSimSchedule,
+            (
+                accumulate_underdark_pressure,
+                deliver_underdark_signals,
             ).chain(),
         );
         // spawn_faction_npcs, init_population_state, and flush_factions_to_db are
@@ -1329,3 +1356,291 @@ fn war_party_separation(
         }
     }
 }
+
+// ── Underdark pressure (UnderDarkSimSchedule @ 0.1 Hz) ────────────────────────
+
+/// Minimum elapsed ticks since last raid before natural buildup kicks in.
+const UNDERDARK_NATURAL_BUILDUP_AFTER_TICKS: u64 = 300;
+/// Decay multiplier applied each slow tick: `pressure *= DECAY`.
+const UNDERDARK_DECAY: f32 = 0.95;
+/// Pressure boost while any war party is currently in the Underdark.
+const UNDERDARK_ACTIVE_BOOST: f32 = 0.1;
+/// Natural buildup (when the last raid was long enough ago).
+const UNDERDARK_NATURAL_BOOST: f32 = 0.05;
+/// Threshold bit layout for hysteresis tracking.
+const UNDERDARK_THRESHOLD_DISTANT_BIT: u8 = 1 << 0; // score >= 0.4
+const UNDERDARK_THRESHOLD_IMMINENT_BIT: u8 = 1 << 1; // score >= 0.7
+
+/// Tick the Underdark pressure score on `UnderDarkSimSchedule` (0.1 Hz).
+///
+/// - Decays toward 0 at `DECAY` each slow tick (~2 minutes to zero with no input)
+/// - +`ACTIVE_BOOST` if any `WarPartyMember` currently occupies an Underdark zone
+/// - +`NATURAL_BOOST` if it has been >= 300 WorldSim ticks since the last raid
+/// - Clamps to [0.0, 1.0]
+fn accumulate_underdark_pressure(
+    mut pressure: ResMut<UnderDarkPressure>,
+    tick: Res<WorldSimTick>,
+    zone_registry: Option<Res<fellytip_shared::world::zone::ZoneRegistry>>,
+    warriors: Query<&WarPartyMember>,
+) {
+    // Decay first so bumps accumulate on top of a lower floor.
+    pressure.score *= UNDERDARK_DECAY;
+
+    // Check if any war party is currently in an Underdark zone.
+    if let Some(registry) = zone_registry.as_ref() {
+        let any_in_underdark = warriors.iter().any(|wm| {
+            registry
+                .get(wm.current_zone)
+                .map(|zone| matches!(
+                    zone.kind,
+                    fellytip_shared::world::zone::ZoneKind::Underdark { .. }
+                ))
+                .unwrap_or(false)
+        });
+        if any_in_underdark {
+            pressure.score += UNDERDARK_ACTIVE_BOOST;
+        }
+    }
+
+    // Natural buildup if enough time has passed since the last raid.
+    if tick.0.saturating_sub(pressure.last_raid_tick) > UNDERDARK_NATURAL_BUILDUP_AFTER_TICKS {
+        pressure.score += UNDERDARK_NATURAL_BOOST;
+    }
+
+    pressure.score = pressure.score.clamp(0.0, 1.0);
+}
+
+/// Emit `StoryEvent::UnderDarkThreat` when the pressure score crosses each
+/// threshold (hysteresis: latched while >= threshold, cleared when < 0.4).
+fn deliver_underdark_signals(
+    mut pressure: ResMut<UnderDarkPressure>,
+    tick: Res<WorldSimTick>,
+    mut story_writer: MessageWriter<WriteStoryEvent>,
+) {
+    let score = pressure.score;
+
+    // Distant signal at 0.4 (99 hops).
+    if score >= 0.4 && (pressure.thresholds_crossed & UNDERDARK_THRESHOLD_DISTANT_BIT) == 0 {
+        pressure.thresholds_crossed |= UNDERDARK_THRESHOLD_DISTANT_BIT;
+        story_writer.write(WriteStoryEvent(StoryEvent {
+            id: Uuid::new_v4(),
+            tick: tick.0,
+            world_day: (tick.0 / 86_400).min(u32::MAX as u64) as u32,
+            kind: StoryEventKind::UnderDarkThreat {
+                faction_id: SmolStr::new("underdark"),
+                hops_to_surface: 99,
+            },
+            participants: Vec::new(),
+            location: None,
+            lore_tags: vec!["underdark".into(), "distant".into()],
+        }));
+        tracing::info!(score, "Underdark distant signal fired");
+    }
+
+    // Imminent signal at 0.7 (2 hops).
+    if score >= 0.7 && (pressure.thresholds_crossed & UNDERDARK_THRESHOLD_IMMINENT_BIT) == 0 {
+        pressure.thresholds_crossed |= UNDERDARK_THRESHOLD_IMMINENT_BIT;
+        story_writer.write(WriteStoryEvent(StoryEvent {
+            id: Uuid::new_v4(),
+            tick: tick.0,
+            world_day: (tick.0 / 86_400).min(u32::MAX as u64) as u32,
+            kind: StoryEventKind::UnderDarkThreat {
+                faction_id: SmolStr::new("underdark"),
+                hops_to_surface: 2,
+            },
+            participants: Vec::new(),
+            location: None,
+            lore_tags: vec!["underdark".into(), "imminent".into(), "fleeing".into()],
+        }));
+        tracing::info!(score, "Underdark imminent signal fired");
+    }
+
+    // Hysteresis: reset all latched bits when pressure falls below 0.4.
+    if score < 0.4 && pressure.thresholds_crossed != 0 {
+        pressure.thresholds_crossed = 0;
+    }
+}
+
+// ── Underdark raid spawn (WorldSimSchedule) ──────────────────────────────────
+
+/// Number of `WarPartyMember` entities spawned per Underdark raid.
+const UNDERDARK_RAID_PARTY_SIZE: u32 = 3;
+/// Minimum pressure score before a raid is spawned.
+const UNDERDARK_RAID_THRESHOLD: f32 = 0.8;
+
+/// When pressure is high enough, spawn a `UNDERDARK_RAID_PARTY_SIZE`-member
+/// raid party in the deepest Underdark zone and route them to the overworld.
+///
+/// Runs on `WorldSimSchedule` (1 Hz). Gated so only one raid is active at a
+/// time; successful spawns reset `pressure.score` to zero and record the tick.
+#[allow(clippy::too_many_arguments)]
+fn spawn_underdark_raid(
+    mut commands: Commands,
+    mut pressure: ResMut<UnderDarkPressure>,
+    zone_registry: Option<Res<fellytip_shared::world::zone::ZoneRegistry>>,
+    zone_topology: Option<Res<fellytip_shared::world::zone::ZoneTopology>>,
+    pop: Res<FactionPopulationState>,
+    tick: Res<WorldSimTick>,
+    warriors: Query<&WarPartyMember>,
+) {
+    if pressure.score < UNDERDARK_RAID_THRESHOLD {
+        return;
+    }
+
+    let Some(registry) = zone_registry else { return };
+    let Some(topology) = zone_topology else { return };
+
+    // Only one active Underdark raid at a time.
+    let already_active = warriors.iter().any(|wm| {
+        registry
+            .get(wm.current_zone)
+            .map(|z| matches!(z.kind, fellytip_shared::world::zone::ZoneKind::Underdark { .. }))
+            .unwrap_or(false)
+            || wm.attacker_faction.0.as_str() == "underdark"
+    });
+    if already_active {
+        return;
+    }
+
+    // Find the deepest Underdark zone (highest `depth`).
+    let deepest = registry
+        .zones
+        .iter()
+        .filter_map(|(id, zone)| match zone.kind {
+            fellytip_shared::world::zone::ZoneKind::Underdark { depth } => Some((*id, depth, zone)),
+            _ => None,
+        })
+        .max_by_key(|(_, depth, _)| *depth);
+    let Some((deepest_id, _, deepest_zone)) = deepest else {
+        tracing::warn!("No Underdark zones in registry; skipping raid spawn");
+        return;
+    };
+
+    // Find highest-population surface settlement (defender side).
+    let target = pop
+        .settlements
+        .values()
+        .max_by_key(|s| s.adult_count)
+        .map(|s| (s.settlement_id, s.home_x, s.home_y));
+    let (target_sid, target_x, target_y) = match target {
+        Some(t) => t,
+        None => {
+            tracing::warn!("No populated settlements for Underdark raid target; skipping spawn");
+            return;
+        }
+    };
+
+    // Compute zone route deepest → OVERWORLD_ZONE via BFS.
+    let Some(zone_route) = shortest_zone_path(
+        &topology,
+        deepest_id,
+        fellytip_shared::world::zone::OVERWORLD_ZONE,
+    ) else {
+        tracing::warn!(
+            deepest = ?deepest_id,
+            "No zone path from deepest Underdark to overworld; skipping raid spawn"
+        );
+        return;
+    };
+
+    // Spawn origin: center of deepest Underdark zone's tile grid (local coords).
+    let spawn_x = deepest_zone.width as f32 * 0.5;
+    let spawn_y = deepest_zone.height as f32 * 0.5;
+
+    let underdark_fid = FactionId(SmolStr::new("underdark"));
+
+    for i in 0..UNDERDARK_RAID_PARTY_SIZE {
+        let offset_x = (i % 3) as f32 * 1.0;
+        let offset_y = (i / 3) as f32 * 1.0;
+        let pos = WorldPosition {
+            x: spawn_x + offset_x,
+            y: spawn_y + offset_y,
+            z: 0.0,
+        };
+        commands.spawn((
+            pos.clone(),
+            Health { current: 25, max: 25 },
+            CombatParticipant {
+                id: CombatantId(Uuid::new_v4()),
+                interrupt_stack: InterruptStack::default(),
+                class: CharacterClass::Warrior,
+                level: 2,
+                armor_class: 12,
+                strength: 12,
+                dexterity: 11,
+                constitution: 12,
+            },
+            ExperienceReward(75),
+            FactionBadge {
+                faction_id: "underdark".to_string(),
+                rank: NpcRank::Grunt,
+            },
+            FactionNpcRank(NpcRank::Grunt),
+            EntityKind::FactionNpc,
+            HomePosition(pos),
+            WarPartyMember {
+                target_settlement_id: target_sid,
+                target_x,
+                target_y,
+                attacker_faction: underdark_fid.clone(),
+                player_target: None,
+                current_zone: deepest_id,
+                zone_route: zone_route.clone(),
+            },
+            fellytip_shared::world::zone::ZoneMembership(deepest_id),
+        ));
+    }
+
+    pressure.score = 0.0;
+    pressure.last_raid_tick = tick.0;
+    pressure.thresholds_crossed = 0;
+    tracing::info!(
+        deepest = ?deepest_id,
+        target = %target_sid,
+        hops = zone_route.len(),
+        "Underdark raid party spawned"
+    );
+}
+
+/// BFS shortest zone-hop path from `from` to `to` over `ZoneTopology`.
+/// Returns the list of zones to hop into (excluding `from`, including `to`),
+/// or `None` if unreachable.
+fn shortest_zone_path(
+    topology: &fellytip_shared::world::zone::ZoneTopology,
+    from: fellytip_shared::world::zone::ZoneId,
+    to: fellytip_shared::world::zone::ZoneId,
+) -> Option<Vec<fellytip_shared::world::zone::ZoneId>> {
+    use std::collections::{HashMap, VecDeque};
+    if from == to {
+        return Some(Vec::new());
+    }
+    let mut parent: HashMap<
+        fellytip_shared::world::zone::ZoneId,
+        fellytip_shared::world::zone::ZoneId,
+    > = HashMap::new();
+    let mut queue: VecDeque<fellytip_shared::world::zone::ZoneId> = VecDeque::new();
+    queue.push_back(from);
+    parent.insert(from, from);
+    while let Some(cur) = queue.pop_front() {
+        for next in topology.neighbors(cur) {
+            if parent.contains_key(&next) {
+                continue;
+            }
+            parent.insert(next, cur);
+            if next == to {
+                // Reconstruct path.
+                let mut path = Vec::new();
+                let mut at = to;
+                while at != from {
+                    path.push(at);
+                    at = *parent.get(&at)?;
+                }
+                path.reverse();
+                return Some(path);
+            }
+            queue.push_back(next);
+        }
+    }
+    None
+}
+
