@@ -10,7 +10,7 @@ use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use crate::components::{EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
-use crate::world::zone::{InteriorTile, ZoneAnchor, ZoneId};
+use crate::world::zone::{InteriorTile, WorldId, ZoneAnchor, ZoneId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -78,6 +78,7 @@ pub struct FellytipProtocolPlugin;
 impl Plugin for FellytipProtocolPlugin {
     fn build(&self, app: &mut App) {
         // Register types with Bevy's AppTypeRegistry (required for BRP inspection).
+        app.register_type::<WorldId>();
         app.register_type::<WorldPosition>();
         app.register_type::<Health>();
         app.register_type::<Experience>();

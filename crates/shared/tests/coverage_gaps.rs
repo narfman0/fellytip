@@ -26,6 +26,7 @@ use fellytip_shared::{
             tick_population, PopulationEffect, SettlementPopulation, WAR_PARTY_MILITARY_MIN,
             WAR_PARTY_THRESHOLD,
         },
+        zone::WORLD_SURFACE,
     },
 };
 use std::collections::HashMap;
@@ -37,6 +38,7 @@ fn make_pop(adult_count: u32, military_strength: f32) -> SettlementPopulation {
     SettlementPopulation {
         settlement_id: Uuid::nil(),
         faction_id: FactionId("test".into()),
+        world_id: WORLD_SURFACE,
         birth_ticks: 0,
         adult_count,
         child_count: 0,

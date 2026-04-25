@@ -267,7 +267,7 @@ pub fn populate_zones(
     buildings: Option<Res<Buildings>>,
 ) {
     use fellytip_shared::world::civilization::{Building, BuildingKind};
-    use fellytip_shared::world::zone::ZoneId;
+    use fellytip_shared::world::zone::{ZoneId, WORLD_SURFACE};
 
     // `combat_test` mode skips map generation and has no Buildings resource.
     // Initialise an empty registry with just the overworld so downstream
@@ -316,6 +316,7 @@ pub fn populate_zones(
         id: OVERWORLD_ZONE,
         kind: ZoneKind::Overworld,
         parent: ZoneParent::Overworld,
+        world_id: WORLD_SURFACE,
         width: 1024,
         height: 1024,
         template_id: 0,

@@ -27,6 +27,19 @@ pub const OVERWORLD_ZONE: ZoneId = ZoneId(0);
 )]
 pub struct ZoneId(pub u32);
 
+/// Identifies a distinct coordinate universe. Zones in the same WorldId share
+/// a coordinate space; zones in different WorldIds do not.
+///
+/// WorldId(0) = The Surface (main world)
+/// WorldId(1) = The Sunken Realm (underground)
+/// WorldId(2) = The Mycelium (extra-cosmological fungi world, separate universe)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
+pub struct WorldId(pub u32);
+
+pub const WORLD_SURFACE: WorldId = WorldId(0);
+pub const WORLD_SUNKEN_REALM: WorldId = WorldId(1);
+pub const WORLD_MYCELIUM: WorldId = WorldId(2);
+
 /// What category of zone this is (overworld, building floor, dungeon, etc.).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ZoneKind {
@@ -103,6 +116,7 @@ pub struct Zone {
     pub id: ZoneId,
     pub kind: ZoneKind,
     pub parent: ZoneParent,
+    pub world_id: WorldId,
     pub width: u16,
     pub height: u16,
     pub template_id: ZoneTemplateId,
@@ -197,6 +211,14 @@ impl ZoneTopology {
         self.exits_from(zone).map(|p| p.to_zone)
     }
 
+    /// Returns `true` if `portal` crosses a world boundary (i.e. `from_zone` and
+    /// `to_zone` belong to different `WorldId`s).
+    pub fn is_world_crossing(&self, portal: &Portal, registry: &ZoneRegistry) -> bool {
+        let from_world = registry.get(portal.from_zone).map(|z| z.world_id);
+        let to_world = registry.get(portal.to_zone).map(|z| z.world_id);
+        from_world != to_world
+    }
+
     /// BFS hop count between zones. `Some(0)` if from == to. `None` if unreachable.
     pub fn hop_distance(&self, from: ZoneId, to: ZoneId) -> Option<usize> {
         if from == to {
@@ -261,6 +283,7 @@ pub fn generate_zones(
         id: overworld_id,
         kind: ZoneKind::Overworld,
         parent: ZoneParent::Overworld,
+        world_id: WORLD_SURFACE,
         width: 1024,
         height: 1024,
         template_id: overworld_template.id,
@@ -292,6 +315,7 @@ pub fn generate_zones(
                 id: zone_id,
                 kind: ZoneKind::BuildingFloor { floor },
                 parent: ZoneParent::Settlement(building.settlement_id),
+                world_id: WORLD_SURFACE,
                 width: w,
                 height: h,
                 template_id,
@@ -369,6 +393,7 @@ pub fn generate_zones(
             id: zone_id,
             kind: ZoneKind::Underground { depth },
             parent: ZoneParent::Underground,
+            world_id: WORLD_SUNKEN_REALM,
             width: 16,
             height: 16,
             template_id: underground_template_id,

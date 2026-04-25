@@ -6,6 +6,7 @@
 //! `ecology.rs`) so no dice are needed.
 
 use crate::world::faction::FactionId;
+use crate::world::zone::WorldId;
 use uuid::Uuid;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -43,6 +44,8 @@ pub const WAR_PARTY_MILITARY_MIN: f32 = 15.0;
 pub struct SettlementPopulation {
     pub settlement_id: Uuid,
     pub faction_id: FactionId,
+    /// Coordinate universe this settlement belongs to. Defaults to the surface world.
+    pub world_id: WorldId,
     /// Ticks elapsed since the last birth.  Fires a spawn when it reaches `BIRTH_PERIOD`.
     pub birth_ticks: u32,
     /// Live adult NPC count (updated from ECS before calling `tick_population`).
@@ -149,11 +152,13 @@ fn nearest_target(hx: f32, hy: f32, targets: &[(Uuid, f32, f32)]) -> Option<&(Uu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::zone::WORLD_SURFACE;
 
     fn make_pop(adult_count: u32) -> SettlementPopulation {
         SettlementPopulation {
             settlement_id: Uuid::nil(),
             faction_id: FactionId("test".into()),
+            world_id: WORLD_SURFACE,
             birth_ticks: 0,
             adult_count,
             child_count: 0,

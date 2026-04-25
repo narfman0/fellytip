@@ -539,6 +539,7 @@ pub fn init_population_state(
             SettlementPopulation {
                 settlement_id: settlement.id,
                 faction_id: faction.id.clone(),
+                world_id: fellytip_shared::world::zone::WORLD_SURFACE,
                 birth_ticks: 0,
                 adult_count: config.npcs_per_faction as u32,
                 child_count: 0,
@@ -875,6 +876,13 @@ fn march_war_parties(
     // member would spawn its own ActiveBattle (and BattleRecord on resolution).
     let mut spawned_this_tick: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     for (war_member, mut pos) in &mut warriors {
+        // Guard: only advance surface-world war parties here. Underground or
+        // cross-world parties are handled by `advance_zone_parties` until they
+        // reach OVERWORLD_ZONE, at which point current_zone == OVERWORLD_ZONE
+        // and the WORLD_SURFACE check passes.
+        if war_member.current_zone != fellytip_shared::world::zone::OVERWORLD_ZONE {
+            continue;
+        }
         let zone = effective_zone(&pos, &temp, scheduler.level);
         let speed = zone.speed();
         let dx = war_member.target_x - pos.x;
@@ -1517,9 +1525,12 @@ fn spawn_underground_raid(
     };
 
     // Find highest-population surface settlement (defender side).
+    // Guard: only consider settlements in WORLD_SURFACE so cross-world
+    // coordinate math stays valid.
     let target = pop
         .settlements
         .values()
+        .filter(|s| s.world_id == fellytip_shared::world::zone::WORLD_SURFACE)
         .max_by_key(|s| s.adult_count)
         .map(|s| (s.settlement_id, s.home_x, s.home_y));
     let (target_sid, target_x, target_y) = match target {
