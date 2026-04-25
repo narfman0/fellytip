@@ -73,3 +73,12 @@ The seal requires maintenance. Which means it requires *people*.
 | Threat signal | `StoryEventKind::UndergroundThreat` |
 | Pressure resource | `UndergroundPressure` |
 | The Kindled / Remnants (faction) | `faction_id: "remnants"` |
+
+## The Factions and the Cosmology
+
+| Faction | Cosmological aspect | Core agent ability | Docs |
+|---------|--------------------|--------------------|------|
+| Ash Covenant | Weave as divine substrate | Weave perception → physics rewriting | [ash-covenant.md](factions/ash-covenant.md) |
+| Deep Tide | Parallel topologies / fold geometry | Fold navigation → topology combat | [deep-tide.md](factions/deep-tide.md) |
+| Iron Wolves | Thermodynamic hierarchy / anti-entropy | Chaos resistance → order projection | [iron-wolves.md](factions/iron-wolves.md) |
+| Merchant Guild | Recursion problem / self-model | Identity consistency → reality editing | [merchant-guild.md](factions/merchant-guild.md) |
