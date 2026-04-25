@@ -10,7 +10,7 @@ use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use crate::components::{EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
-use crate::world::zone::{InteriorTile, Portal, WorldId, ZoneAnchor, ZoneId};
+use crate::world::zone::{InteriorTile, Portal, WorldId, ZoneAnchor, ZoneId, ZoneKind};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -65,6 +65,7 @@ pub struct BattleAttackMsg {
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
 pub struct ZoneTileMessage {
     pub zone_id: ZoneId,
+    pub zone_kind: ZoneKind,
     pub width: u16,
     pub height: u16,
     pub tiles: Vec<InteriorTile>,

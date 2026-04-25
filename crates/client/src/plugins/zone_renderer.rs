@@ -19,9 +19,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-use fellytip_shared::world::zone::{
-    InteriorTile, ZoneId, ZoneKind, ZoneMembership, OVERWORLD_ZONE,
-};
+use fellytip_shared::world::zone::{InteriorTile, ZoneId, ZoneKind, ZoneMembership, OVERWORLD_ZONE};
 
 use super::zone_cache::{ZoneCache, ZoneNeighborCache};
 use crate::LocalPlayer;
@@ -130,23 +128,6 @@ fn emissive_for(kind: ZoneKind) -> LinearRgba {
     }
 }
 
-/// Determine the zone kind for a given `ZoneId` from cached server data.
-/// Until we cache the kind explicitly, classify from the `ZoneId` via the
-/// known Underground / BuildingFloor ranges encoded in the tile layout (anchors
-/// and tile shapes differ enough). For now we cache the kind *per message*
-/// by inspecting tile distribution heuristically.
-fn classify_zone(id: ZoneId, tiles: &[InteriorTile]) -> ZoneKind {
-    if id == OVERWORLD_ZONE {
-        return ZoneKind::Overworld;
-    }
-    // Heuristic: a pure-floor 16×16 (256) grid matches the underground template.
-    if tiles.len() == 256 && tiles.iter().all(|t| matches!(t, InteriorTile::Floor)) {
-        return ZoneKind::Underground { depth: 1 };
-    }
-    // Fallback to a generic building interior.
-    ZoneKind::BuildingFloor { floor: 0 }
-}
-
 /// Spawn meshes for a zone at the given hop distance.
 fn spawn_zone(
     zone_id: ZoneId,
@@ -172,7 +153,7 @@ fn spawn_zone(
 
     let render_layer = RenderLayers::layer(hop_distance as usize);
 
-    let kind = classify_zone(msg.zone_id, &msg.tiles);
+    let kind = msg.zone_kind;
     let floor_mat = materials.add(StandardMaterial {
         base_color: floor_color(kind),
         emissive: emissive_for(kind),

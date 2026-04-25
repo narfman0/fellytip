@@ -1542,8 +1542,7 @@ fn spawn_underground_raid(
     };
 
     // Compute zone route deepest → OVERWORLD_ZONE via BFS.
-    let Some(zone_route) = shortest_zone_path(
-        &topology,
+    let Some(zone_route) = topology.shortest_path(
         deepest_id,
         fellytip_shared::world::zone::OVERWORLD_ZONE,
     ) else {
@@ -1617,45 +1616,4 @@ fn spawn_underground_raid(
     );
 }
 
-/// BFS shortest zone-hop path from `from` to `to` over `ZoneTopology`.
-/// Returns the list of zones to hop into (excluding `from`, including `to`),
-/// or `None` if unreachable.
-fn shortest_zone_path(
-    topology: &fellytip_shared::world::zone::ZoneTopology,
-    from: fellytip_shared::world::zone::ZoneId,
-    to: fellytip_shared::world::zone::ZoneId,
-) -> Option<Vec<fellytip_shared::world::zone::ZoneId>> {
-    use std::collections::{HashMap, VecDeque};
-    if from == to {
-        return Some(Vec::new());
-    }
-    let mut parent: HashMap<
-        fellytip_shared::world::zone::ZoneId,
-        fellytip_shared::world::zone::ZoneId,
-    > = HashMap::new();
-    let mut queue: VecDeque<fellytip_shared::world::zone::ZoneId> = VecDeque::new();
-    queue.push_back(from);
-    parent.insert(from, from);
-    while let Some(cur) = queue.pop_front() {
-        for next in topology.neighbors(cur) {
-            if parent.contains_key(&next) {
-                continue;
-            }
-            parent.insert(next, cur);
-            if next == to {
-                // Reconstruct path.
-                let mut path = Vec::new();
-                let mut at = to;
-                while at != from {
-                    path.push(at);
-                    at = *parent.get(&at)?;
-                }
-                path.reverse();
-                return Some(path);
-            }
-            queue.push_back(next);
-        }
-    }
-    None
-}
 

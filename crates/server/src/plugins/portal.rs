@@ -211,6 +211,7 @@ fn send_zone_tiles(
             let Some(tiles) = registry.tiles(zone) else { continue };
             writer.write(ZoneTileMessage {
                 zone_id: zid,
+                zone_kind: zone.kind,
                 width: zone.width,
                 height: zone.height,
                 tiles: tiles.to_vec(),

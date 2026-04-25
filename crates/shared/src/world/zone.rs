@@ -223,6 +223,41 @@ impl ZoneTopology {
         from_world != to_world
     }
 
+    /// BFS shortest zone-hop path from `from` to `to`.
+    /// Returns the list of zones to hop into (excluding `from`, including `to`),
+    /// or `None` if unreachable. Returns `Some(vec![])` if `from == to`.
+    pub fn shortest_path(&self, from: ZoneId, to: ZoneId) -> Option<Vec<ZoneId>> {
+        use std::collections::{HashMap, VecDeque};
+        if from == to {
+            return Some(Vec::new());
+        }
+        let mut parent: HashMap<ZoneId, ZoneId> = HashMap::new();
+        let mut queue: VecDeque<ZoneId> = VecDeque::new();
+        queue.push_back(from);
+        parent.insert(from, from);
+        while let Some(cur) = queue.pop_front() {
+            for next in self.neighbors(cur) {
+                if parent.contains_key(&next) {
+                    continue;
+                }
+                parent.insert(next, cur);
+                if next == to {
+                    // Reconstruct path.
+                    let mut path = Vec::new();
+                    let mut at = to;
+                    while at != from {
+                        path.push(at);
+                        at = *parent.get(&at)?;
+                    }
+                    path.reverse();
+                    return Some(path);
+                }
+                queue.push_back(next);
+            }
+        }
+        None
+    }
+
     /// BFS hop count between zones. `Some(0)` if from == to. `None` if unreachable.
     pub fn hop_distance(&self, from: ZoneId, to: ZoneId) -> Option<usize> {
         if from == to {
