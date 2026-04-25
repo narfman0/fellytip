@@ -3,7 +3,7 @@
 //! When the local player enters a zone (as reflected by `ZoneMembership`),
 //! this plugin reads the cached `ZoneTileMessage` from `ZoneCache` and spawns
 //! one PBR quad per tile — floor, wall billboard, balcony, roof — tinted by
-//! the zone kind (above-ground warm brown, dungeon grey, underdark near-black
+//! the zone kind (above-ground warm brown, dungeon grey, underground near-black
 //! with a bioluminescent tint).
 //!
 //! Meshes from other zones are despawned, so the interior rendering stays
@@ -94,7 +94,7 @@ fn floor_color(kind: ZoneKind) -> Color {
         ZoneKind::Overworld => Color::srgb(0.45, 0.35, 0.2),
         ZoneKind::BuildingFloor { .. } => Color::srgb(0.55, 0.40, 0.25), // warm brown
         ZoneKind::Dungeon { .. } => Color::srgb(0.35, 0.35, 0.38),      // grey stone
-        ZoneKind::Underdark { .. } => Color::srgb(0.08, 0.08, 0.14),    // near-black
+        ZoneKind::Underground { .. } => Color::srgb(0.08, 0.08, 0.14),    // near-black
     }
 }
 
@@ -103,37 +103,37 @@ fn wall_color(kind: ZoneKind) -> Color {
         ZoneKind::Overworld => Color::srgb(0.3, 0.25, 0.18),
         ZoneKind::BuildingFloor { .. } => Color::srgb(0.40, 0.28, 0.18),
         ZoneKind::Dungeon { .. } => Color::srgb(0.24, 0.24, 0.26),
-        ZoneKind::Underdark { .. } => Color::srgb(0.04, 0.04, 0.09),
+        ZoneKind::Underground { .. } => Color::srgb(0.04, 0.04, 0.09),
     }
 }
 
 fn roof_color(kind: ZoneKind) -> Color {
     match kind {
-        ZoneKind::Underdark { .. } => Color::srgb(0.05, 0.05, 0.10),
+        ZoneKind::Underground { .. } => Color::srgb(0.05, 0.05, 0.10),
         _ => Color::srgb(0.2, 0.15, 0.1),
     }
 }
 
-/// Emissive tint for bioluminescent Underdark atmosphere. Zero for all others.
+/// Emissive tint for bioluminescent underground (Sunken Realm) atmosphere. Zero for all others.
 fn emissive_for(kind: ZoneKind) -> LinearRgba {
     match kind {
-        ZoneKind::Underdark { .. } => LinearRgba::new(0.05, 0.12, 0.18, 0.0),
+        ZoneKind::Underground { .. } => LinearRgba::new(0.05, 0.12, 0.18, 0.0),
         _ => LinearRgba::new(0.0, 0.0, 0.0, 0.0),
     }
 }
 
 /// Determine the zone kind for a given `ZoneId` from cached server data.
 /// Until we cache the kind explicitly, classify from the `ZoneId` via the
-/// known Underdark / BuildingFloor ranges encoded in the tile layout (anchors
+/// known Underground / BuildingFloor ranges encoded in the tile layout (anchors
 /// and tile shapes differ enough). For now we cache the kind *per message*
 /// by inspecting tile distribution heuristically.
 fn classify_zone(id: ZoneId, tiles: &[InteriorTile]) -> ZoneKind {
     if id == OVERWORLD_ZONE {
         return ZoneKind::Overworld;
     }
-    // Heuristic: a pure-floor 16×16 (256) grid matches the underdark template.
+    // Heuristic: a pure-floor 16×16 (256) grid matches the underground template.
     if tiles.len() == 256 && tiles.iter().all(|t| matches!(t, InteriorTile::Floor)) {
-        return ZoneKind::Underdark { depth: 1 };
+        return ZoneKind::Underground { depth: 1 };
     }
     // Fallback to a generic building interior.
     ZoneKind::BuildingFloor { floor: 0 }

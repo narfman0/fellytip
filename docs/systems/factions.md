@@ -11,7 +11,7 @@ Pure faction logic lives in `crates/shared/src/world/faction.rs`. Server-only EC
 | Iron Wolves | `iron_wolves` | 0 (Neutral) | No | Ash Covenant | Mercenary warband guarding northern mines. Respects strength; will trade. |
 | Merchant Guild | `merchant_guild` | 0 (Neutral) | No | Deep Tide | Trade consortium controlling southern ports. Prefers alliances to war. |
 | Ash Covenant | `ash_covenant` | −500 (Hostile) | Yes | Iron Wolves | Zealot order that treats ancient ruins as sacred ground. Purges all outsiders on sight. |
-| Deep Tide | `deep_tide` | −500 (Hostile) | Yes | Merchant Guild | Underdark raiders that surface seasonally to plunder before retreating below. |
+| Deep Tide | `deep_tide` | −500 (Hostile) | Yes | Merchant Guild | Underground raiders from the Sunken Realm that surface seasonally to plunder before retreating below. |
 
 Default standing is applied when a player has no prior interaction with the faction. Ash Covenant and Deep Tide always begin at Hostile, meaning their NPCs attack players on sight from the first encounter.
 

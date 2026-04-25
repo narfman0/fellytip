@@ -13,7 +13,7 @@ Milestones are ordered by dependency. Each one builds on the previous.
 | **3 — Party Play** | 4 simultaneous clients connect; party registry enforces cap; NPC interest management | ✅ Complete (party HUD still pending) |
 | **World Gen** | fBm terrain, Whittaker biomes, rivers, settlements, territory, roads, history warp | ✅ Complete |
 | **Living World ext.** | Settlement population growth; faction war parties; client battle visualizations | ✅ Complete |
-| **Zone Graph / Interiors** | `ZoneRegistry`/`ZoneTopology` + `generate_zones()`; `PortalPlugin` with `PlayerZoneTransition`; `ZoneNavGrids`; `UnderDarkSimSchedule` (0.1 Hz) + `UnderDarkPressure` + raid spawn; client `ZoneRendererPlugin` + `ZoneCache`; `underdark_e2e` ralph scenario green | ✅ Scaffold complete — see follow-ups in `docs/systems/zones.md` (portal anchor world-coords, `ZoneTopology::shortest_path`, `ZoneTileMessage::kind`, lightyear per-zone interest groups, roof-cutaway shader) |
+| **Zone Graph / Interiors** | `ZoneRegistry`/`ZoneTopology` + `generate_zones()`; `PortalPlugin` with `PlayerZoneTransition`; `ZoneNavGrids`; `UndergroundSimSchedule` (0.1 Hz) + `UndergroundPressure` + raid spawn; client `ZoneRendererPlugin` + `ZoneCache`; `underground_e2e` ralph scenario green | ✅ Scaffold complete — see follow-ups in `docs/systems/zones.md` (portal anchor world-coords, `ZoneTopology::shortest_path`, `ZoneTileMessage::kind`, lightyear per-zone interest groups, roof-cutaway shader) |
 | **4 — MVF** | 3 character classes with distinct abilities; dungeon room transitions; faction consequences visible in-game; ralph full suite green; 2-hour session stable | 🚧 Scaffold done — classes, abilities, full ralph suite remaining |
 
 ## Acceptance criteria per milestone
@@ -56,11 +56,11 @@ Milestones are ordered by dependency. Each one builds on the previous.
 - **Adaptive performance throttling is complete**: rolling tick-time samples derive a `ThrottleLevel` (`Full`/`Reduced`/`Minimal`/`Suspended`) with hysteresis. Host-mode client frame pressure bumps the level one step. See `docs/systems/perf.md`.
 
 ### Zone Graph / Interiors
-- `generate_zones(&buildings, seed)` is pure and deterministic; emits one child zone per floor for multi-story building kinds (`Tavern`, `Barracks`, `Tower`, `Keep`) plus a hard-coded 3-depth Underdark chain.
+- `generate_zones(&buildings, seed)` is pure and deterministic; emits one child zone per floor for multi-story building kinds (`Tavern`, `Barracks`, `Tower`, `Keep`) plus a hard-coded 3-depth underground chain.
 - `PortalPlugin` spawns `PortalTrigger` entities for every portal, emits `PlayerZoneTransition` on proximity, applies transitions (respecting `one_way`), and broadcasts `ZoneTileMessage` for the destination zone + 1-hop neighbours.
-- `UnderDarkSimSchedule` runs at 0.1 Hz (one tick per 10 real seconds). `UnderDarkPressure` accumulates on that schedule; thresholds at 0.4 / 0.7 emit `StoryEvent::UnderDarkThreat` signals; threshold 0.8 spawns a 3-member raid party in the deepest Underdark zone that then zone-hops via `advance_zone_parties` on `WorldSimSchedule` (1 Hz) until it reaches `OVERWORLD_ZONE` and converts to a normal surface war party.
-- `dm/underdark_pressure` and `dm/force_underdark_pressure` BRP methods drive the `underdark_e2e` ralph scenario.
-- Client side: `ZoneRendererPlugin` spawns interior meshes for the player's current zone; `update_zone_visibility` culls entities in other zones locally. See `docs/systems/zones.md` and `docs/systems/underdark.md`.
+- `UndergroundSimSchedule` runs at 0.1 Hz (one tick per 10 real seconds). `UndergroundPressure` accumulates on that schedule; thresholds at 0.4 / 0.7 emit `StoryEvent::UndergroundThreat` signals; threshold 0.8 spawns a 3-member raid party in the deepest underground zone that then zone-hops via `advance_zone_parties` on `WorldSimSchedule` (1 Hz) until it reaches `OVERWORLD_ZONE` and converts to a normal surface war party.
+- `dm/underground_pressure` and `dm/force_underground_pressure` BRP methods drive the `underground_e2e` ralph scenario.
+- Client side: `ZoneRendererPlugin` spawns interior meshes for the player's current zone; `update_zone_visibility` culls entities in other zones locally. See `docs/systems/zones.md` and `docs/systems/underground.md`.
 
 ### Milestone 4
 - Three `CharacterClass` variants each have at least one distinct ability in the interrupt stack.
@@ -75,7 +75,7 @@ Milestones are ordered by dependency. Each one builds on the previous.
 - Party HUD (show party members' health bars)
 - Ralph `combat_resolves` scenario
 - Isometric rendering upgrade (feature flag already in place)
-- Dungeon room transition system — zone graph scaffold is in place, still need surface `CaveEntrance` portals generated per biome and populated Dungeon tile layouts (currently only the Underdark chain generates content).
+- Dungeon room transition system — zone graph scaffold is in place, still need surface `CaveEntrance` portals generated per biome and populated Dungeon tile layouts (currently only the underground chain generates content).
 - NPC pathfinding (war-party march is tile-linear; goal-directed movement for guards)
 - Zone-aware A* / flow-field pathfinding that consumes `ZoneNavGrids`
 - Lightyear per-zone interest groups (replace client-only `update_zone_visibility` stop-gap)

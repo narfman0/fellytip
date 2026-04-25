@@ -103,8 +103,8 @@ fn main() {
                         .with_method("dm/set_ecology",       fellytip_server::plugins::dm::dm_set_ecology)
                         .with_method("dm/battle_history",    fellytip_server::plugins::dm::dm_battle_history)
                         .with_method("dm/clear_battle_history", fellytip_server::plugins::dm::dm_clear_battle_history)
-                        .with_method("dm/underdark_pressure", fellytip_server::plugins::dm::dm_underdark_pressure)
-                        .with_method("dm/force_underdark_pressure", fellytip_server::plugins::dm::dm_force_underdark_pressure)
+                        .with_method("dm/underground_pressure", fellytip_server::plugins::dm::dm_underground_pressure)
+                        .with_method("dm/force_underground_pressure", fellytip_server::plugins::dm::dm_force_underground_pressure)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));

@@ -19,6 +19,8 @@
 //! | `dm/set_ecology`        | Override prey / predator counts in a region    |
 //! | `dm/battle_history`     | Read the rolling battle record history         |
 //! | `dm/clear_battle_history` | Drop every queued BattleRecord (test helper) |
+//! | `dm/underground_pressure` | Read the underground pressure resource snapshot |
+//! | `dm/force_underground_pressure` | Force pressure score to 1.0 for tests |
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
@@ -36,7 +38,7 @@ use fellytip_shared::{
 };
 
 use crate::plugins::{
-    ai::{BattleHistory, CurrentGoal, FactionMember, FactionNpcRank, FactionPopulationState, FactionRegistry, HomePosition, UnderDarkPressure, WarPartyMember},
+    ai::{BattleHistory, CurrentGoal, FactionMember, FactionNpcRank, FactionPopulationState, FactionRegistry, HomePosition, UndergroundPressure, WarPartyMember},
     combat::{CombatParticipant, ExperienceReward},
     ecology::EcologyState,
 };
@@ -292,29 +294,29 @@ pub fn dm_clear_battle_history(In(_params): In<Option<Value>>, world: &mut World
     Ok(json!({ "ok": true, "cleared": cleared }))
 }
 
-// ── dm/underdark_pressure ─────────────────────────────────────────────────────
+// ── dm/underground_pressure ───────────────────────────────────────────────────
 
-/// Return the current Underdark pressure resource snapshot.
+/// Return the current underground pressure resource snapshot.
 ///
 /// Returns `{ score: f32, last_raid_tick: u64 }`.
-pub fn dm_underdark_pressure(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
-    let pressure = world.resource::<UnderDarkPressure>();
+pub fn dm_underground_pressure(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let pressure = world.resource::<UndergroundPressure>();
     Ok(json!({
         "score": pressure.score,
         "last_raid_tick": pressure.last_raid_tick,
     }))
 }
 
-// ── dm/force_underdark_pressure ───────────────────────────────────────────────
+// ── dm/force_underground_pressure ─────────────────────────────────────────────
 
-/// Force the Underdark pressure score to 1.0 immediately so subsequent
+/// Force the underground pressure score to 1.0 immediately so subsequent
 /// systems trigger the raid path on the next tick. Intended for ralph e2e
 /// scenarios that don't want to wait 10+ slow ticks for organic buildup.
 ///
 /// Params: `{}`  Returns `{ ok: true }`.
-pub fn dm_force_underdark_pressure(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
-    let mut pressure = world.resource_mut::<UnderDarkPressure>();
+pub fn dm_force_underground_pressure(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let mut pressure = world.resource_mut::<UndergroundPressure>();
     pressure.score = 1.0;
-    tracing::info!("DM forced underdark pressure to 1.0");
+    tracing::info!("DM forced underground pressure to 1.0");
     Ok(json!({ "ok": true }))
 }

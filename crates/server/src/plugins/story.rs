@@ -55,8 +55,8 @@ fn format_story_event(ev: &StoryEvent) -> String {
             format!("Day {day}: A soldier defects from {} to {}!", from.0, to.0),
         StoryEventKind::MonsterMigrated { species, from, to } =>
             format!("Day {day}: {} migrate from {} to {}!", species.0, from.0, to.0),
-        StoryEventKind::UnderDarkThreat { faction_id, hops_to_surface } =>
-            format!("Day {day}: {} stirs in the Underdark — {hops_to_surface} hops from the surface!", faction_id),
+        StoryEventKind::UndergroundThreat { faction_id, hops_to_surface } =>
+            format!("Day {day}: {} stirs in the Sunken Realm — {hops_to_surface} hops from the surface!", faction_id),
     }
 }
 

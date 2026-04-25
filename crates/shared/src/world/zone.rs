@@ -1,7 +1,7 @@
-//! Zone Graph — spatial hierarchy of worldspace, interiors, and the Underdark.
+//! Zone Graph — spatial hierarchy of worldspace, interiors, and the Sunken Realm.
 //!
 //! A `Zone` is a self-contained tile grid (overworld region, building floor,
-//! dungeon level, underdark cave). Zones connect via `Portal`s. Entities carry
+//! dungeon level, underground cave). Zones connect via `Portal`s. Entities carry
 //! a `ZoneMembership` component pointing at the zone they currently occupy.
 //!
 //! The `ZoneRegistry` resource owns all zones and templates; `ZoneTopology`
@@ -33,7 +33,7 @@ pub enum ZoneKind {
     Overworld,
     BuildingFloor { floor: u8 },
     Dungeon { depth: u8 },
-    Underdark { depth: u8 },
+    Underground { depth: u8 },
 }
 
 /// Parent relationship — used for spatial ownership and cleanup semantics.
@@ -42,7 +42,7 @@ pub enum ZoneParent {
     Overworld,
     Settlement(Uuid),
     Dungeon,
-    Underdark,
+    Underground,
 }
 
 /// Tile kinds inside an interior or subterranean zone.
@@ -118,7 +118,7 @@ pub enum PortalKind {
     Ladder,
     Trapdoor,
     CaveEntrance,
-    UnderDarkRift,
+    SealRift,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -230,12 +230,12 @@ pub struct ZoneMembership(pub ZoneId);
 
 use crate::world::civilization::{Building, BuildingKind};
 
-/// Generate zone graph from a list of buildings plus a seeded underdark chain.
+/// Generate zone graph from a list of buildings plus a seeded underground chain.
 ///
 /// Each multi-story building produces N `BuildingFloor` zones with
 /// `Staircase` portal pairs connecting adjacent floors. A small 3-level
-/// underdark chain is generated unconditionally for testing; it attaches to
-/// the overworld via a `CaveEntrance` portal.
+/// underground chain (the Sunken Realm) is generated unconditionally for
+/// testing; it attaches to the overworld via a `CaveEntrance` portal.
 pub fn generate_zones(
     buildings: &[Building],
     _seed: u64,
@@ -340,15 +340,16 @@ pub fn generate_zones(
         }
     }
 
-    // Underdark chain: 3 zones depth 1→3. Overworld attaches via CaveEntrance
-    // portal to depth 1; UnderDarkRift portals link deeper layers.
-    let underdark_template_tiles: Vec<InteriorTile> = vec![InteriorTile::Floor; 16 * 16];
-    let underdark_template_id = ZoneTemplate::compute_id(&underdark_template_tiles);
-    let underdark_template = ZoneTemplate {
-        id: underdark_template_id,
+    // Underground chain (the Sunken Realm): 3 zones depth 1→3. Overworld
+    // attaches via CaveEntrance portal to depth 1; SealRift portals link
+    // deeper layers.
+    let underground_template_tiles: Vec<InteriorTile> = vec![InteriorTile::Floor; 16 * 16];
+    let underground_template_id = ZoneTemplate::compute_id(&underground_template_tiles);
+    let underground_template = ZoneTemplate {
+        id: underground_template_id,
         width: 16,
         height: 16,
-        tiles: underdark_template_tiles.clone(),
+        tiles: underground_template_tiles.clone(),
         anchors: vec![
             ZoneAnchor {
                 name: SmolStr::new("up"),
@@ -361,24 +362,24 @@ pub fn generate_zones(
         ],
     };
 
-    let mut underdark_ids: Vec<ZoneId> = Vec::with_capacity(3);
+    let mut underground_ids: Vec<ZoneId> = Vec::with_capacity(3);
     for depth in 1u8..=3 {
         let zone_id = registry.alloc_id();
         let zone = Zone {
             id: zone_id,
-            kind: ZoneKind::Underdark { depth },
-            parent: ZoneParent::Underdark,
+            kind: ZoneKind::Underground { depth },
+            parent: ZoneParent::Underground,
             width: 16,
             height: 16,
-            template_id: underdark_template_id,
-            anchors: underdark_template.anchors.clone(),
+            template_id: underground_template_id,
+            anchors: underground_template.anchors.clone(),
         };
         // Reuse the same template across all three.
-        registry.insert(zone, underdark_template.clone());
-        underdark_ids.push(zone_id);
+        registry.insert(zone, underground_template.clone());
+        underground_ids.push(zone_id);
     }
 
-    // Overworld → Underdark depth 1 via CaveEntrance (bidirectional).
+    // Overworld → Underground depth 1 via CaveEntrance (bidirectional).
     topology.add_portal(Portal {
         id: next_portal_id,
         kind: PortalKind::CaveEntrance,
@@ -388,14 +389,14 @@ pub fn generate_zones(
         traversal_cost: 2.0,
         faction_permeable: true,
         one_way: false,
-        to_zone: underdark_ids[0],
+        to_zone: underground_ids[0],
         to_anchor: SmolStr::new("up"),
     });
     next_portal_id += 1;
     topology.add_portal(Portal {
         id: next_portal_id,
         kind: PortalKind::CaveEntrance,
-        from_zone: underdark_ids[0],
+        from_zone: underground_ids[0],
         from_anchor: SmolStr::new("up"),
         trigger_radius: 2.0,
         traversal_cost: 2.0,
@@ -406,13 +407,13 @@ pub fn generate_zones(
     });
     next_portal_id += 1;
 
-    // Deeper links via UnderDarkRift (bidirectional).
-    for i in 0..(underdark_ids.len() - 1) {
-        let upper = underdark_ids[i];
-        let lower = underdark_ids[i + 1];
+    // Deeper links via SealRift (bidirectional).
+    for i in 0..(underground_ids.len() - 1) {
+        let upper = underground_ids[i];
+        let lower = underground_ids[i + 1];
         topology.add_portal(Portal {
             id: next_portal_id,
-            kind: PortalKind::UnderDarkRift,
+            kind: PortalKind::SealRift,
             from_zone: upper,
             from_anchor: SmolStr::new("down"),
             trigger_radius: 1.5,
@@ -425,7 +426,7 @@ pub fn generate_zones(
         next_portal_id += 1;
         topology.add_portal(Portal {
             id: next_portal_id,
-            kind: PortalKind::UnderDarkRift,
+            kind: PortalKind::SealRift,
             from_zone: lower,
             from_anchor: SmolStr::new("up"),
             trigger_radius: 1.5,

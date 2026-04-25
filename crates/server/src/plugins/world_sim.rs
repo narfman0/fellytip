@@ -5,9 +5,9 @@
 //! It is driven by a real-time 1-second `Timer` so it stays decoupled
 //! from the 62.5 Hz `FixedUpdate` combat/movement tick.
 //!
-//! `UnderDarkSimSchedule` runs at 0.1 Hz (one tick every 10 real seconds)
+//! `UndergroundSimSchedule` runs at 0.1 Hz (one tick every 10 real seconds)
 //! for slow background pressure accumulation — see `plugins::ai` for the
-//! underdark pressure systems.
+//! underground pressure systems.
 
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
@@ -17,17 +17,17 @@ use bevy::reflect::Reflect;
 #[derive(ScheduleLabel, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct WorldSimSchedule;
 
-/// The slow 0.1 Hz schedule for Underdark pressure accumulation.
+/// The slow 0.1 Hz schedule for underground pressure accumulation.
 #[derive(ScheduleLabel, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct UnderDarkSimSchedule;
+pub struct UndergroundSimSchedule;
 
 /// Bevy resource that controls when WorldSimSchedule fires.
 #[derive(Resource)]
 struct WorldSimTimer(Timer);
 
-/// Bevy resource that controls when UnderDarkSimSchedule fires (0.1 Hz).
+/// Bevy resource that controls when UndergroundSimSchedule fires (0.1 Hz).
 #[derive(Resource)]
-struct UnderDarkSimTimer(Timer);
+struct UndergroundSimTimer(Timer);
 
 /// Number of world sim ticks elapsed since the server started.
 #[derive(Resource, Default, Reflect)]
@@ -39,18 +39,18 @@ pub struct WorldSimPlugin;
 impl Plugin for WorldSimPlugin {
     fn build(&self, app: &mut App) {
         app.init_schedule(WorldSimSchedule);
-        app.init_schedule(UnderDarkSimSchedule);
+        app.init_schedule(UndergroundSimSchedule);
         app.insert_resource(WorldSimTimer(Timer::from_seconds(
             1.0,
             TimerMode::Repeating,
         )));
-        app.insert_resource(UnderDarkSimTimer(Timer::from_seconds(
+        app.insert_resource(UndergroundSimTimer(Timer::from_seconds(
             10.0,
             TimerMode::Repeating,
         )));
         app.init_resource::<WorldSimTick>();
         app.register_type::<WorldSimTick>();
-        app.add_systems(Update, (tick_world_sim, tick_underdark_sim));
+        app.add_systems(Update, (tick_world_sim, tick_underground_sim));
     }
 }
 
@@ -68,16 +68,16 @@ fn tick_world_sim(world: &mut World) {
     }
 }
 
-/// Each frame: advance the slow underdark timer; when it fires, run
-/// `UnderDarkSimSchedule` once (every 10 real seconds).
-fn tick_underdark_sim(world: &mut World) {
+/// Each frame: advance the slow underground timer; when it fires, run
+/// `UndergroundSimSchedule` once (every 10 real seconds).
+fn tick_underground_sim(world: &mut World) {
     let delta = world.resource::<Time>().delta();
     let fired = {
-        let mut timer = world.resource_mut::<UnderDarkSimTimer>();
+        let mut timer = world.resource_mut::<UndergroundSimTimer>();
         timer.0.tick(delta);
         timer.0.just_finished()
     };
     if fired {
-        world.run_schedule(UnderDarkSimSchedule);
+        world.run_schedule(UndergroundSimSchedule);
     }
 }

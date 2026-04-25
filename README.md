@@ -56,7 +56,7 @@ cargo clippy --workspace -- -D warnings
 | **Territory** | BFS flood-fill assigns every walkable tile to nearest settlement |
 | **Roads** | Kruskal MST + Bresenham rasterization between settlements |
 | **History warp** | 200 WorldSim ticks run at startup before clients connect |
-| **Underground** | Shallow caves (CA 48%), Underdark voids (CA 30%), shaft connectors |
+| **Underground** | Shallow caves (CA 48%), deep voids (CA 30%), shaft connectors |
 | Ecology | Discrete Lotka-Volterra per region; Collapse/Recovery events |
 | Faction AI | Utility-scored goals; NPC wander each world-sim tick |
 | Story log | `WriteStoryEvent` messages → `StoryLog` resource |
