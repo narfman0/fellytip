@@ -103,3 +103,4 @@ Each faction NPC carries `FactionNpcRank(NpcRank)` — a server-only component s
 - War parties form when `adult_count ≥ 15` and march toward hostile-faction settlements via `march_war_parties` (1 Hz).
 - Battles resolve via `run_battle_rounds` using seeded deterministic dice; results broadcast to clients.
 - Non-war-party NPCs (guards) are stationary pending pathfinding implementation.
+- After a battle ends (`BattleEndMsg`), both the winning and losing factions are set to `FactionAlertLevel::Alerted` via `FactionAlertState` resource. Alerted NPCs patrol with 2× radius and 1.5× speed for `ALERT_DECAY_TICKS` (300) world-sim ticks (~5 minutes).

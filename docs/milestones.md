@@ -9,12 +9,12 @@ Milestones are ordered by dependency. Each one builds on the previous.
 | **0 — Bones** | Server and client binaries connect; `WorldPosition` replicates; WASD moves a sprite | ✅ Complete |
 | **0b — Ralph** | BRP wired on server (15702) and headless client (15703); `ralph basic_movement` passes | ✅ Complete |
 | **1 — Living World** | `WorldSimSchedule` at 1 Hz; factions, ecology, story log all tick; world survives restart | ✅ Complete |
-| **2 — First Blood** | Player attacks NPC; NPC dies; XP awarded; story event emitted; proptest suite green | ✅ Complete (ralph `combat_resolves` scenario pending) |
-| **3 — Party Play** | 4 simultaneous clients connect; party registry enforces cap; NPC interest management | ✅ Complete (party HUD still pending) |
+| **2 — First Blood** | Player attacks NPC; NPC dies; XP awarded; story event emitted; proptest suite green | ✅ Complete |
+| **3 — Party Play** | 4 simultaneous clients connect; party registry enforces cap; NPC interest management | ✅ Complete |
 | **World Gen** | fBm terrain, Whittaker biomes, rivers, settlements, territory, roads, history warp | ✅ Complete |
 | **Living World ext.** | Settlement population growth; faction war parties; client battle visualizations | ✅ Complete |
 | **Zone Graph / Interiors** | `ZoneRegistry`/`ZoneTopology` + `generate_zones()`; `PortalPlugin` with `PlayerZoneTransition`; `ZoneNavGrids`; `UndergroundSimSchedule` (0.1 Hz) + `UndergroundPressure` + raid spawn; client `ZoneRendererPlugin` + `ZoneCache`; `underground_e2e` ralph scenario green | ✅ Scaffold complete — see follow-ups in `docs/systems/zones.md` (portal anchor world-coords, `ZoneTopology::shortest_path`, `ZoneTileMessage::kind`, lightyear per-zone interest groups, roof-cutaway shader) |
-| **4 — MVF** | 3 character classes with distinct abilities; dungeon room transitions; faction consequences visible in-game; ralph full suite green; 2-hour session stable | 🚧 Scaffold done — classes, abilities, full ralph suite remaining |
+| **4 — MVF** | 3 character classes with distinct abilities; dungeon room transitions; faction consequences visible in-game; ralph full suite green; 2-hour session stable | 🚧 Classes + abilities done; boss phases done; faction alert done; party HUD done; ralph `combat_resolves` scenario complete. Remaining: dungeon room transitions, 2-hour load test |
 
 ## Acceptance criteria per milestone
 
@@ -72,8 +72,6 @@ Milestones are ordered by dependency. Each one builds on the previous.
 ## What's next after Milestone 4
 
 - SQLite autosave flush for story events and player state (faction reputation load/save)
-- Party HUD (show party members' health bars)
-- Ralph `combat_resolves` scenario
 - Isometric rendering upgrade (feature flag already in place)
 - Dungeon room transition system — zone graph scaffold is in place, still need surface `CaveEntrance` portals generated per biome and populated Dungeon tile layouts (currently only the underground chain generates content).
 - NPC pathfinding (war-party march is tile-linear; goal-directed movement for guards)

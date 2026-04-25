@@ -51,6 +51,72 @@ use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField};
 use crate::plugins::perf::AdaptiveScheduler;
 use crate::plugins::world_sim::{UndergroundSimSchedule, WorldSimSchedule, WorldSimTick};
 
+/// Alert level for a faction after a war event.
+///
+/// Raised when the faction wins or loses a battle (`BattleEndMsg`).
+/// Decays back to `Calm` after `ALERT_DECAY_TICKS` world-sim ticks.
+/// NPCs check this via `FactionAlertState` during the wander system —
+/// when their faction is `Alerted` they patrol a larger radius and at
+/// higher speed, making the faction visibly more dangerous.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FactionAlertLevel {
+    /// Normal wandering behaviour.
+    Calm,
+    /// Post-battle state: expanded patrol radius, increased speed.
+    Alerted,
+}
+
+/// Per-faction alert state with a decay counter.
+#[derive(Clone, Debug)]
+pub struct FactionAlert {
+    pub level: FactionAlertLevel,
+    /// World-sim ticks remaining before the alert decays back to Calm.
+    pub ticks_remaining: u32,
+}
+
+/// Resource: alert levels for all factions, keyed by `FactionId`.
+#[derive(Resource, Default)]
+pub struct FactionAlertState {
+    pub alerts: HashMap<FactionId, FactionAlert>,
+}
+
+impl FactionAlertState {
+    /// Number of world-sim ticks an alert persists before decaying (5 minutes at 1 Hz).
+    pub const ALERT_DECAY_TICKS: u32 = 300;
+
+    /// Raise a faction to `Alerted`, resetting the decay counter.
+    pub fn raise(&mut self, faction_id: &FactionId) {
+        self.alerts.insert(
+            faction_id.clone(),
+            FactionAlert {
+                level: FactionAlertLevel::Alerted,
+                ticks_remaining: Self::ALERT_DECAY_TICKS,
+            },
+        );
+    }
+
+    /// Returns true when the faction is currently alerted.
+    pub fn is_alerted(&self, faction_id: &FactionId) -> bool {
+        self.alerts
+            .get(faction_id)
+            .is_some_and(|a| a.level == FactionAlertLevel::Alerted)
+    }
+
+    /// Decay all alert counters by one tick; remove expired entries.
+    pub fn tick_decay(&mut self) {
+        self.alerts.retain(|_, alert| {
+            if alert.ticks_remaining == 0 {
+                return false;
+            }
+            alert.ticks_remaining -= 1;
+            if alert.ticks_remaining == 0 {
+                alert.level = FactionAlertLevel::Calm;
+            }
+            alert.ticks_remaining > 0
+        });
+    }
+}
+
 /// Server-only component: which faction this NPC belongs to.
 #[derive(Component)]
 pub struct FactionMember(#[allow(dead_code)] pub FactionId);
@@ -198,6 +264,7 @@ impl Plugin for AiPlugin {
             .init_resource::<FlowField>()
             .init_resource::<BattleHistory>()
             .init_resource::<UndergroundPressure>()
+            .init_resource::<FactionAlertState>()
             .add_message::<FormWarPartyEvent>()
             .register_type::<FactionNpcRank>()
             .register_type::<WarPartyMember>()
@@ -207,6 +274,7 @@ impl Plugin for AiPlugin {
         app.add_systems(
             WorldSimSchedule,
             (
+                update_faction_alerts,
                 update_faction_goals,
                 tick_population_system,
                 age_npcs_system,
@@ -234,6 +302,43 @@ impl Plugin for AiPlugin {
     }
 }
 
+/// Read incoming `BattleEndMsg` events and raise both the winner and loser
+/// factions to `Alerted` state so their NPCs patrol more aggressively.
+///
+/// Also ticks the decay counter each world-sim tick so alerts expire after
+/// `FactionAlertState::ALERT_DECAY_TICKS` ticks.
+fn update_faction_alerts(
+    mut alerts: ResMut<FactionAlertState>,
+    mut battle_end_msgs: MessageReader<BattleEndMsg>,
+    registry: Res<FactionRegistry>,
+) {
+    // Decay existing alerts first so the freshest raise wins.
+    alerts.tick_decay();
+
+    for msg in battle_end_msgs.read() {
+        // Raise alerts for both sides of the battle.
+        for faction_id in registry.factions.iter().filter(|f| {
+            f.id.0.as_str() == msg.winner_faction
+                || registry.factions.iter().any(|other| {
+                    other.id.0.as_str() != msg.winner_faction
+                        && other.disposition.get(&f.id)
+                            == Some(&fellytip_shared::world::faction::Disposition::Hostile)
+                })
+        }).map(|f| f.id.clone()).collect::<Vec<_>>() {
+            alerts.raise(&faction_id);
+            tracing::info!(
+                faction = %faction_id.0,
+                "Faction alerted after battle — NPCs patrol aggressively"
+            );
+        }
+
+        // Always alert the winner directly by name.
+        if let Some(winner) = registry.factions.iter().find(|f| f.id.0.as_str() == msg.winner_faction) {
+            alerts.raise(&winner.id.clone());
+        }
+    }
+}
+
 /// Re-score and update the active goal for every faction.
 fn update_faction_goals(mut registry: ResMut<FactionRegistry>) {
     for faction in &mut registry.factions {
@@ -254,23 +359,34 @@ fn update_faction_goals(mut registry: ResMut<FactionRegistry>) {
 /// - **Warm** (chunks 3–8 from player): replan every 8 ticks, follow at 0.25× speed.
 /// - **Frozen** (>8 chunks from player): skip A*, linear march toward home at 0.05× speed.
 ///
+/// # Alert behavior (faction consequences)
+/// When an NPC's faction is in `FactionAlertLevel::Alerted` state (set by `update_faction_alerts`
+/// after a `BattleEndMsg`), the NPC patrols with:
+/// - Double wander radius (7.0 tiles instead of 3.5)
+/// - 1.5× movement speed
+///
 /// War party members are excluded — they march under `march_war_parties` instead.
 #[allow(clippy::type_complexity)]
 fn wander_npcs(
     mut query: Query<
-        (Entity, &mut WorldPosition, &HomePosition, &mut NavPath, &mut NavReplanTimer),
+        (Entity, &mut WorldPosition, &HomePosition, &FactionMember, &mut NavPath, &mut NavReplanTimer),
         (With<FactionMember>, Without<WarPartyMember>),
     >,
     temp: Res<ChunkTemperature>,
     scheduler: Res<AdaptiveScheduler>,
     nav: Option<Res<NavGrid>>,
     tick: Res<WorldSimTick>,
+    alerts: Res<FactionAlertState>,
 ) {
     let Some(nav) = nav else { return };
 
-    for (entity, mut pos, home, mut nav_path, mut replan_timer) in &mut query {
+    for (entity, mut pos, home, faction_member, mut nav_path, mut replan_timer) in &mut query {
         let zone = effective_zone(&pos, &temp, scheduler.level);
         let zone_speed = zone.speed();
+        let alerted = alerts.is_alerted(&faction_member.0);
+
+        // Alerted NPCs move 50% faster during patrol.
+        let speed_mul = if alerted { 1.5 } else { 1.0 };
 
         // Frozen: skip A*, linear march toward home position.
         if zone == SimTier::Frozen {
@@ -279,8 +395,8 @@ fn wander_npcs(
             let dist_sq = dx * dx + dy * dy;
             if dist_sq > 0.01 {
                 let dist = dist_sq.sqrt();
-                pos.x += (dx / dist) * FROZEN_WANDER_STEP * zone_speed;
-                pos.y += (dy / dist) * FROZEN_WANDER_STEP * zone_speed;
+                pos.x += (dx / dist) * FROZEN_WANDER_STEP * zone_speed * speed_mul;
+                pos.y += (dy / dist) * FROZEN_WANDER_STEP * zone_speed * speed_mul;
             }
             continue;
         }
@@ -294,13 +410,16 @@ fn wander_npcs(
         if replan_timer.0 >= replan_every || nav_path.is_complete() {
             replan_timer.0 = 0;
 
-            // Wander goal: pick a position within 4 tiles of home using entity seed.
+            // Wander radius: doubled when the faction is on alert.
+            let patrol_radius = if alerted { 7.0_f32 } else { 3.5_f32 };
+
+            // Wander goal: pick a position within `patrol_radius` tiles of home using entity seed.
             #[allow(clippy::cast_precision_loss)]
             let entity_seed = entity.to_bits() as f32 * 0.000_013_7;
             #[allow(clippy::cast_precision_loss)]
             let angle = (entity_seed + tick.0 as f32 * 0.07).sin() * std::f32::consts::TAU;
-            let goal_x = home.0.x + angle.cos() * 3.5;
-            let goal_y = home.0.y + angle.sin() * 3.5;
+            let goal_x = home.0.x + angle.cos() * patrol_radius;
+            let goal_y = home.0.y + angle.sin() * patrol_radius;
 
             let start = world_to_nav(pos.x, pos.y);
             let goal  = world_to_nav(goal_x, goal_y);
@@ -316,7 +435,7 @@ fn wander_npcs(
             let dx = target_x - pos.x;
             let dy = target_y - pos.y;
             let dist_sq = dx * dx + dy * dy;
-            let step = WANDER_STEP * zone_speed;
+            let step = WANDER_STEP * zone_speed * speed_mul;
             if dist_sq <= step * step {
                 pos.x = target_x;
                 pos.y = target_y;
@@ -1616,4 +1735,62 @@ fn spawn_underground_raid(
     );
 }
 
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn faction_id(s: &str) -> FactionId {
+        FactionId(SmolStr::new(s))
+    }
+
+    #[test]
+    fn faction_alert_raise_marks_alerted() {
+        let mut state = FactionAlertState::default();
+        let fid = faction_id("iron_wolves");
+        assert!(!state.is_alerted(&fid));
+        state.raise(&fid);
+        assert!(state.is_alerted(&fid));
+    }
+
+    #[test]
+    fn faction_alert_decays_after_ticks() {
+        let mut state = FactionAlertState::default();
+        let fid = faction_id("ash_covenant");
+        state.raise(&fid);
+        // Tick ALERT_DECAY_TICKS times — should be calm afterward.
+        for _ in 0..FactionAlertState::ALERT_DECAY_TICKS {
+            state.tick_decay();
+        }
+        assert!(!state.is_alerted(&fid));
+    }
+
+    #[test]
+    fn faction_alert_raise_resets_decay_counter() {
+        let mut state = FactionAlertState::default();
+        let fid = faction_id("merchant_guild");
+        state.raise(&fid);
+        // Partial decay
+        for _ in 0..50 {
+            state.tick_decay();
+        }
+        // Re-raise resets counter
+        state.raise(&fid);
+        assert!(state.is_alerted(&fid));
+        // Should still be alerted after ALERT_DECAY_TICKS - 50 more ticks
+        for _ in 0..(FactionAlertState::ALERT_DECAY_TICKS - 50) {
+            state.tick_decay();
+        }
+        // Was just raised, so we still have ALERT_DECAY_TICKS remaining before expiry
+        // (50 ticks elapsed after the raise), so still alerted.
+        assert!(state.is_alerted(&fid));
+    }
+
+    #[test]
+    fn unknown_faction_is_not_alerted() {
+        let state = FactionAlertState::default();
+        assert!(!state.is_alerted(&faction_id("nonexistent")));
+    }
+}
 

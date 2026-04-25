@@ -14,6 +14,7 @@ use fellytip_shared::{
     components::{Experience, Health, PlayerStandings},
     world::faction::standing_tier,
 };
+use fellytip_server::plugins::party::PartyRegistry;
 use crate::LocalPlayer;
 use crate::plugins::battle::{BattleLog, ClientStoryLog};
 use crate::plugins::debug_console::DebugConsole;
@@ -36,7 +37,7 @@ impl Plugin for HudPlugin {
             .init_resource::<CharScreen>()
             .add_systems(PostStartup, ensure_primary_egui_context)
             .add_systems(Update, toggle_char_screen)
-            .add_systems(EguiPrimaryContextPass, (draw_hud, draw_char_screen, draw_battle_log, draw_story_log));
+            .add_systems(EguiPrimaryContextPass, (draw_hud, draw_party_hud, draw_char_screen, draw_battle_log, draw_story_log));
     }
 }
 
@@ -95,6 +96,63 @@ fn draw_hud(
                 }
                 Err(_) => {
                     ui.label("Connecting…");
+                }
+            }
+        });
+    Ok(())
+}
+
+/// Draw the party members panel (top-right).
+///
+/// Shows each party member's name and a health bar (current HP / max HP).
+/// Only visible when the local player is in a party with at least one other member.
+fn draw_party_hud(
+    mut ctx: EguiContexts,
+    party_registry: Option<Res<PartyRegistry>>,
+    local_q: Query<Entity, With<LocalPlayer>>,
+    health_q: Query<(&Health, Option<&Experience>)>,
+) -> Result {
+    let Some(registry) = party_registry else { return Ok(()) };
+
+    // Find which party (if any) the local player belongs to.
+    let Ok(local_entity) = local_q.single() else { return Ok(()) };
+
+    let party = registry.parties.iter().find(|p| p.members.contains(&local_entity));
+    let Some(party) = party else { return Ok(()) };
+
+    // Only render the panel when there are other party members to show.
+    let others: Vec<Entity> = party.members.iter()
+        .copied()
+        .filter(|&e| e != local_entity)
+        .collect();
+    if others.is_empty() {
+        return Ok(());
+    }
+
+    egui::Window::new("Party")
+        .anchor(egui::Align2::RIGHT_TOP, [-10.0, 10.0])
+        .resizable(false)
+        .title_bar(true)
+        .show(ctx.ctx_mut()?, |ui| {
+            for (slot, &entity) in others.iter().enumerate() {
+                match health_q.get(entity) {
+                    Ok((health, exp)) => {
+                        let level = exp.map(|e| e.level).unwrap_or(1);
+                        ui.label(format!("Member {} (Lv {})", slot + 1, level));
+                        let hp_frac =
+                            (health.current as f32 / health.max.max(1) as f32).clamp(0.0, 1.0);
+                        ui.label(format!("{}/{}", health.current, health.max));
+                        ui.add(
+                            egui::ProgressBar::new(hp_frac)
+                                .fill(egui::Color32::from_rgb(200, 50, 50)),
+                        );
+                        if slot + 1 < others.len() {
+                            ui.separator();
+                        }
+                    }
+                    Err(_) => {
+                        ui.label(format!("Member {} — unknown", slot + 1));
+                    }
                 }
             }
         });

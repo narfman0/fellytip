@@ -80,6 +80,11 @@ pub struct ClientPortalEntry {
     /// Hop distance from the player's current zone to `portal.from_zone`.
     /// 0 = portal is in the current zone, 1 = one hop away, etc.
     pub from_hop: u8,
+    /// World-space position of the portal's from-anchor (tile coords for
+    /// interior zones, which share the global coordinate space).
+    pub from_world_pos: glam::Vec3,
+    /// World-space position of the portal's to-anchor in the destination zone.
+    pub to_world_pos: glam::Vec3,
 }
 
 /// Server → client message carrying the portal graph for the player's current

@@ -242,7 +242,12 @@ fn send_zone_neighbors(
 
         // Hop 0: portals in current zone.
         for portal in topology.exits_from(current_zone) {
-            portals.push(ClientPortalEntry { portal: portal.clone(), from_hop: 0 });
+            portals.push(ClientPortalEntry {
+                portal: portal.clone(),
+                from_hop: 0,
+                from_world_pos: Vec3::ZERO,
+                to_world_pos: Vec3::ZERO,
+            });
         }
 
         // Hop 1: 1-hop neighbor zones.
@@ -252,7 +257,12 @@ fn send_zone_neighbors(
             for portal in topology.exits_from(zone1) {
                 // Avoid duplicating portals already in the list.
                 if !portals.iter().any(|e| e.portal.id == portal.id) {
-                    portals.push(ClientPortalEntry { portal: portal.clone(), from_hop: 1 });
+                    portals.push(ClientPortalEntry {
+                        portal: portal.clone(),
+                        from_hop: 1,
+                        from_world_pos: Vec3::ZERO,
+                        to_world_pos: Vec3::ZERO,
+                    });
                 }
             }
         }
@@ -267,7 +277,12 @@ fn send_zone_neighbors(
                 zone_hops.push((zone2, 2));
                 for portal in topology.exits_from(zone2) {
                     if !portals.iter().any(|e| e.portal.id == portal.id) {
-                        portals.push(ClientPortalEntry { portal: portal.clone(), from_hop: 2 });
+                        portals.push(ClientPortalEntry {
+                            portal: portal.clone(),
+                            from_hop: 2,
+                            from_world_pos: Vec3::ZERO,
+                            to_world_pos: Vec3::ZERO,
+                        });
                     }
                 }
             }

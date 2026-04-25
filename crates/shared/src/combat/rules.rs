@@ -31,8 +31,12 @@ pub fn resolve_attack_roll(
     if roll == 1 {
         return AttackRollResult::Miss;
     }
-    // TODO: use DEX for Rogue finesse, INT for Mage spell attacks.
-    let ability_mod = attacker.str_mod();
+    // Rogue uses DEX (finesse), Mage uses INT for spell attacks, Warrior uses STR.
+    let ability_mod = match attacker.class {
+        CharacterClass::Rogue => attacker.dex_mod(),
+        CharacterClass::Mage  => CombatantSnapshot::modifier(attacker.stats.intellect),
+        CharacterClass::Warrior => attacker.str_mod(),
+    };
     let prof = proficiency_bonus(attacker.level);
     if roll + ability_mod + prof >= defender.armor_class {
         AttackRollResult::Hit
@@ -43,20 +47,30 @@ pub fn resolve_attack_roll(
 
 // ── Damage resolution ─────────────────────────────────────────────────────────
 
-/// Calculate damage effects from a successful roll.
+/// Calculate effects from a successful roll.
 ///
 /// `dmg_roll` — raw damage die value provided by caller.
+///
+/// Damage modifier is class-appropriate:
+/// - Warrior: STR modifier (melee weapon attacks)
+/// - Rogue: DEX modifier (finesse weapons)
+/// - Mage: INT modifier (spell attacks)
 pub fn resolve_damage(
     result: &AttackRollResult,
     attacker: &CombatantSnapshot,
     defender: &CombatantSnapshot,
     dmg_roll: i32,
 ) -> Vec<Effect> {
+    let ability_mod = match attacker.class {
+        CharacterClass::Rogue   => attacker.dex_mod(),
+        CharacterClass::Mage    => CombatantSnapshot::modifier(attacker.stats.intellect),
+        CharacterClass::Warrior => attacker.str_mod(),
+    };
     match result {
         AttackRollResult::Miss => vec![],
         AttackRollResult::Hit => {
             // No flat damage reduction in 5e — AC already determined whether we hit.
-            let amount = (dmg_roll + attacker.str_mod()).max(1);
+            let amount = (dmg_roll + ability_mod).max(1);
             vec![Effect::TakeDamage {
                 target: defender.id.clone(),
                 amount,
@@ -64,7 +78,7 @@ pub fn resolve_damage(
         }
         AttackRollResult::CriticalHit => {
             // Crit doubles the die (not the modifier), ignores armour.
-            let raw = (dmg_roll * 2 + attacker.str_mod()).max(1);
+            let raw = (dmg_roll * 2 + ability_mod).max(1);
             vec![Effect::TakeDamage {
                 target: defender.id.clone(),
                 amount: raw,
@@ -167,6 +181,76 @@ pub fn resolve_ability(
             let roll_result = resolve_attack_roll(caster, target, attack_roll);
             let mut effects = resolve_damage(&roll_result, caster, target, dmg1 + dmg2);
             if matches!(roll_result, AttackRollResult::Hit | AttackRollResult::CriticalHit) {
+                effects.push(Effect::ApplyStatus {
+                    target: target.id.clone(),
+                    status: SmolStr::new("weakened"),
+                });
+            }
+            effects
+        }
+        2 => {
+            // SneakAttack (Rogue): single d6 stab with bonus damage on hit.
+            // Rolls layout: [attack_d20, dmg_d6, bonus_d6].
+            let attack_roll = rolls.first().copied().unwrap_or(1);
+            let dmg1 = rolls.get(1).copied().unwrap_or(1);
+            let dmg2 = rolls.get(2).copied().unwrap_or(1);
+            let roll_result = resolve_attack_roll(caster, target, attack_roll);
+            let mut effects = resolve_damage(&roll_result, caster, target, dmg1 + dmg2);
+            // On hit, apply "poisoned" status representing the rogue's toxin.
+            if matches!(roll_result, AttackRollResult::Hit | AttackRollResult::CriticalHit) {
+                effects.push(Effect::ApplyStatus {
+                    target: target.id.clone(),
+                    status: SmolStr::new("poisoned"),
+                });
+            }
+            effects
+        }
+        3 => {
+            // ArcaneBlast (Mage): ranged spell, no attack roll — auto-hits for d8+INT mod,
+            // and ignores armour (flat damage). Crits double the die as usual.
+            // Rolls layout: [dmg_d8].
+            let dmg_roll = rolls.first().copied().unwrap_or(1);
+            let int_mod   = CombatantSnapshot::modifier(caster.stats.intellect);
+            let amount    = (dmg_roll + int_mod).max(1);
+            vec![
+                Effect::TakeDamage { target: target.id.clone(), amount },
+                Effect::ApplyStatus {
+                    target: target.id.clone(),
+                    status: SmolStr::new("scorched"),
+                },
+            ]
+        }
+        4 => vec![], // reserved
+        5 => {
+            // BossRage (Phase2): heavy attack with a flat +3 bonus to damage,
+            // applies "enraged" self-buff to the caster so the bridge can boost later rolls.
+            // Rolls layout: [attack_d20, dmg_d10].
+            let attack_roll = rolls.first().copied().unwrap_or(1);
+            let dmg_roll    = rolls.get(1).copied().unwrap_or(1);
+            let roll_result = resolve_attack_roll(caster, target, attack_roll);
+            let mut effects = resolve_damage(&roll_result, caster, target, dmg_roll + 3);
+            if matches!(roll_result, AttackRollResult::Hit | AttackRollResult::CriticalHit) {
+                // Self-buff: caster gains "enraged" status (ECS bridge may apply bonuses).
+                effects.push(Effect::ApplyStatus {
+                    target: caster.id.clone(),
+                    status: SmolStr::new("enraged"),
+                });
+            }
+            effects
+        }
+        6 => {
+            // BossFrenzy (Phase3): two rapid strikes at reduced individual damage.
+            // Rolls layout: [attack_d20_1, dmg_d6_1, attack_d20_2, dmg_d6_2].
+            let mut effects = Vec::new();
+            for strike in 0..2_usize {
+                let a_roll = rolls.get(strike * 2).copied().unwrap_or(1);
+                let d_roll = rolls.get(strike * 2 + 1).copied().unwrap_or(1);
+                let roll_result = resolve_attack_roll(caster, target, a_roll);
+                effects.extend(resolve_damage(&roll_result, caster, target, d_roll));
+            }
+            // On any damage landed, apply "weakened" to the target.
+            let dealt_damage = effects.iter().any(|e| matches!(e, Effect::TakeDamage { .. }));
+            if dealt_damage {
                 effects.push(Effect::ApplyStatus {
                     target: target.id.clone(),
                     status: SmolStr::new("weakened"),
@@ -396,5 +480,128 @@ mod tests {
         let target = state.get(&did).unwrap().snapshot.clone();
         let effects = resolve_ability(99, &caster, &target, &[15, 4, 4]);
         assert!(effects.is_empty());
+    }
+
+    // ── Rogue SneakAttack (ability 2) tests ───────────────────────────────────
+
+    fn make_rogue_snapshot(id: Uuid) -> CombatantSnapshot {
+        CombatantSnapshot {
+            id: CombatantId(id),
+            faction: None,
+            class: CharacterClass::Rogue,
+            stats: CoreStats { dexterity: 16, ..CoreStats::default() }, // DEX 16 → mod +3
+            health_current: 20,
+            health_max: 20,
+            level: 1,
+            armor_class: 12,
+        }
+    }
+
+    fn make_mage_snapshot(id: Uuid) -> CombatantSnapshot {
+        CombatantSnapshot {
+            id: CombatantId(id),
+            faction: None,
+            class: CharacterClass::Mage,
+            stats: CoreStats { intellect: 18, ..CoreStats::default() }, // INT 18 → mod +4
+            health_current: 10,
+            health_max: 10,
+            level: 1,
+            armor_class: 10,
+        }
+    }
+
+    #[test]
+    fn sneak_attack_applies_poisoned_on_hit() {
+        let rogue_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let caster = make_rogue_snapshot(rogue_id);
+        let target = make_snapshot(target_id, 50, 10);
+        // Roll 15: guaranteed hit (15 + DEX mod 3 + prof 2 = 20 >= AC 10)
+        let effects = resolve_ability(2, &caster, &target, &[15, 3, 3]);
+        assert!(effects.iter().any(|e| matches!(e,
+            Effect::ApplyStatus { status, .. } if status == "poisoned"
+        )));
+    }
+
+    #[test]
+    fn sneak_attack_deals_double_die_damage_on_hit() {
+        let rogue_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let caster = make_rogue_snapshot(rogue_id);
+        let target = make_snapshot(target_id, 50, 10);
+        // Rolls: attack 15 (hit), dmg_d6=4, bonus_d6=4 → 4+4+DEX mod(3) = 11
+        let effects = resolve_ability(2, &caster, &target, &[15, 4, 4]);
+        let total_damage: i32 = effects.iter()
+            .filter_map(|e| if let Effect::TakeDamage { amount, .. } = e { Some(*amount) } else { None })
+            .sum();
+        // 4+4 roll + DEX mod 3 = 11
+        assert_eq!(total_damage, 11);
+    }
+
+    #[test]
+    fn sneak_attack_no_poison_on_miss() {
+        let rogue_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let caster = make_rogue_snapshot(rogue_id);
+        // High AC so natural roll 5 still misses: 5 + 3 + 2 = 10 < 20
+        let target = make_snapshot(target_id, 50, 20);
+        let effects = resolve_ability(2, &caster, &target, &[5, 4, 4]);
+        assert!(!effects.iter().any(|e| matches!(e, Effect::ApplyStatus { .. })));
+    }
+
+    // ── Mage ArcaneBlast (ability 3) tests ───────────────────────────────────
+
+    #[test]
+    fn arcane_blast_always_hits_and_applies_scorched() {
+        let mage_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let caster = make_mage_snapshot(mage_id);
+        let target = make_snapshot(target_id, 50, 30); // AC 30 — never hittable by normal attack
+        let effects = resolve_ability(3, &caster, &target, &[5]);
+        // Should deal damage even to AC 30 target (auto-hit)
+        assert!(effects.iter().any(|e| matches!(e, Effect::TakeDamage { .. })));
+        assert!(effects.iter().any(|e| matches!(e,
+            Effect::ApplyStatus { status, .. } if status == "scorched"
+        )));
+    }
+
+    #[test]
+    fn arcane_blast_damage_includes_int_modifier() {
+        let mage_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let caster = make_mage_snapshot(mage_id); // INT 18 → mod +4
+        let target = make_snapshot(target_id, 50, 10);
+        // Roll 6: expected damage = (6 + 4).max(1) = 10
+        let effects = resolve_ability(3, &caster, &target, &[6]);
+        let total: i32 = effects.iter()
+            .filter_map(|e| if let Effect::TakeDamage { amount, .. } = e { Some(*amount) } else { None })
+            .sum();
+        assert_eq!(total, 10);
+    }
+
+    // ── Class ability modifier tests ──────────────────────────────────────────
+
+    #[test]
+    fn rogue_uses_dex_for_attack_roll() {
+        let rogue_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let caster = make_rogue_snapshot(rogue_id); // DEX 16 → mod +3
+        let target = make_snapshot(target_id, 50, 15); // AC 15
+        // Roll 10: 10 + DEX mod 3 + prof 2 = 15 ≥ 15 → hit
+        assert_eq!(resolve_attack_roll(&caster, &target, 10), AttackRollResult::Hit);
+        // Roll 9:  9 + 3 + 2 = 14 < 15 → miss
+        assert_eq!(resolve_attack_roll(&caster, &target, 9), AttackRollResult::Miss);
+    }
+
+    #[test]
+    fn mage_uses_int_for_attack_roll() {
+        let mage_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+        let caster = make_mage_snapshot(mage_id); // INT 18 → mod +4
+        let target = make_snapshot(target_id, 50, 16); // AC 16
+        // Roll 10: 10 + INT mod 4 + prof 2 = 16 ≥ 16 → hit
+        assert_eq!(resolve_attack_roll(&caster, &target, 10), AttackRollResult::Hit);
+        // Roll 9:  9 + 4 + 2 = 15 < 16 → miss
+        assert_eq!(resolve_attack_roll(&caster, &target, 9), AttackRollResult::Miss);
     }
 }

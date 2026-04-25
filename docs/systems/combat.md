@@ -74,6 +74,32 @@ On each level-up, HP increases by rolling the class hit die + CON modifier (mini
 | `PlayerEntity(Entity)` | Links a `ClientOf` entity to its spawned player entity |
 | `GameEntityId(Uuid)` | Stable cross-session identity on player entities; `CombatantId.0 == GameEntityId.0` for all players |
 
+## Character classes
+
+Three classes are implemented in `CharacterClass` (Warrior, Rogue, Mage). Each class has:
+
+- **Distinct attack roll modifier**: Warrior uses STR, Rogue uses DEX (finesse), Mage uses INT.
+- **Distinct damage modifier**: same class-appropriate modifier applied to damage rolls.
+- **Class-specific ability**:
+
+| Class   | Ability ID | Name         | Description |
+|---------|-----------|--------------|-------------|
+| Warrior | 1         | StrongAttack | 2×d8 damage + "weakened" status on hit |
+| Rogue   | 2         | SneakAttack  | d6+d6 damage + "poisoned" status on hit |
+| Mage    | 3         | ArcaneBlast  | Auto-hit d8+INT mod + "scorched" status (ignores AC) |
+
+## Dungeon boss phased abilities
+
+The Hollow King has three combat phases tracked by `BossPhase` component on the boss entity:
+
+| Phase | HP threshold | Ability ID | Behaviour |
+|-------|-------------|-----------|-----------|
+| 1     | > 50 %      | 5         | BossRage: heavy strike + "enraged" self-buff |
+| 2     | 25–50 %     | 6         | BossFrenzy: two rapid strikes + "weakened" on target |
+| 3     | < 25 %      | 1         | StrongAttack (fallback) |
+
+Wait — boss phases use IDs 5 and 6 for Phase1 and Phase2 (which correspond to HP > 50% → ability 1 StrongAttack, 25–50% → ability 5 BossRage, < 25% → ability 6 BossFrenzy). The `DungeonPlugin` runs `tick_boss_phase_transitions` on every FixedUpdate tick to advance phases.
+
 ## Current state
 
-Basic attack (Space) → damage → death → XP loop is fully functional. StrongAttack (Q) is implemented as ability 1: same attack roll, 2×d8 damage, applies `"weakened"` status on hit. The dungeon boss ("The Hollow King") can be killed by either attack. Movement reactions (`ResolvingMovement`) are scaffolded but unimplemented.
+Basic attack (Space) → damage → death → XP loop is fully functional. StrongAttack (Q) is ability 1. Three character classes are implemented with class-appropriate modifiers and distinct abilities (ids 1–3). The dungeon boss ("The Hollow King") has phased abilities at 50% and 25% HP thresholds. Movement reactions (`ResolvingMovement`) are scaffolded but unimplemented.
