@@ -6,11 +6,16 @@
 //! the zone kind (above-ground warm brown, dungeon grey, underground near-black
 //! with a bioluminescent tint).
 //!
-//! Meshes from other zones are despawned, so the interior rendering stays
-//! local to the player's current zone. Overworld zone is rendered by the
-//! terrain chunk system; this plugin skips it.
+//! Current zone tiles are rendered on `RenderLayers::layer(0)`.
+//! 1-hop neighbor zone tiles are rendered on `RenderLayers::layer(1)`.
+//! 2-hop neighbor zone tiles are rendered on `RenderLayers::layer(2)`.
+//!
+//! Meshes from zones more than 2 hops from the player's current zone are
+//! despawned. Overworld zone is rendered by the terrain chunk system; this
+//! plugin skips it.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
@@ -18,7 +23,7 @@ use fellytip_shared::world::zone::{
     InteriorTile, ZoneId, ZoneKind, ZoneMembership, OVERWORLD_ZONE,
 };
 
-use super::zone_cache::ZoneCache;
+use super::zone_cache::{ZoneCache, ZoneNeighborCache};
 use crate::LocalPlayer;
 
 /// Side length of a single interior tile in world units.
@@ -31,6 +36,9 @@ const WALL_HEIGHT: f32 = 2.5;
 #[derive(Component)]
 pub struct ZoneMeshMarker {
     pub zone_id: ZoneId,
+    /// Hop distance from the player's current zone at the time this mesh was
+    /// spawned. 0 = current zone, 1 = 1-hop neighbor, 2 = 2-hop neighbor.
+    pub hop_distance: u8,
 }
 
 pub struct ZoneRendererPlugin;
@@ -139,36 +147,30 @@ fn classify_zone(id: ZoneId, tiles: &[InteriorTile]) -> ZoneKind {
     ZoneKind::BuildingFloor { floor: 0 }
 }
 
-/// Spawn meshes for the player's current zone when the zone changes or its
-/// cache entry arrives.
-#[allow(clippy::too_many_arguments)]
-fn spawn_zone_meshes(
-    mut commands: Commands,
-    cache: Res<ZoneCache>,
-    player_zone_q: Query<Option<&ZoneMembership>, With<LocalPlayer>>,
-    existing: Query<&ZoneMeshMarker>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+/// Spawn meshes for a zone at the given hop distance.
+fn spawn_zone(
+    zone_id: ZoneId,
+    hop_distance: u8,
+    cache: &ZoneCache,
+    existing: &Query<&ZoneMeshMarker>,
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
 ) {
-    let player_zone = player_zone_q
-        .single()
-        .ok()
-        .and_then(|opt| opt.copied())
-        .map(|z| z.0)
-        .unwrap_or(OVERWORLD_ZONE);
-
-    if player_zone == OVERWORLD_ZONE {
+    if zone_id == OVERWORLD_ZONE {
         return;
     }
 
     // Already rendered?
-    if existing.iter().any(|m| m.zone_id == player_zone) {
+    if existing.iter().any(|m| m.zone_id == zone_id) {
         return;
     }
 
-    let Some(msg) = cache.0.get(&player_zone) else {
+    let Some(msg) = cache.0.get(&zone_id) else {
         return;
     };
+
+    let render_layer = RenderLayers::layer(hop_distance as usize);
 
     let kind = classify_zone(msg.zone_id, &msg.tiles);
     let floor_mat = materials.add(StandardMaterial {
@@ -217,7 +219,8 @@ fn spawn_zone_meshes(
                         Mesh3d(floor_mesh.clone()),
                         MeshMaterial3d(floor_mat.clone()),
                         Transform::from_xyz(wx, 0.0, wz),
-                        ZoneMeshMarker { zone_id: player_zone },
+                        ZoneMeshMarker { zone_id, hop_distance },
+                        render_layer.clone(),
                     ));
                 }
                 InteriorTile::Wall | InteriorTile::Window => {
@@ -225,7 +228,8 @@ fn spawn_zone_meshes(
                         Mesh3d(wall_mesh.clone()),
                         MeshMaterial3d(wall_mat.clone()),
                         Transform::from_xyz(wx, 0.0, wz),
-                        ZoneMeshMarker { zone_id: player_zone },
+                        ZoneMeshMarker { zone_id, hop_distance },
+                        render_layer.clone(),
                     ));
                 }
                 InteriorTile::Balcony => {
@@ -234,7 +238,8 @@ fn spawn_zone_meshes(
                         MeshMaterial3d(balcony_mat.clone()),
                         // Slight elevation so it reads as a hanging ledge above a drop.
                         Transform::from_xyz(wx, 0.02, wz),
-                        ZoneMeshMarker { zone_id: player_zone },
+                        ZoneMeshMarker { zone_id, hop_distance },
+                        render_layer.clone(),
                     ));
                 }
                 InteriorTile::Roof => {
@@ -242,7 +247,8 @@ fn spawn_zone_meshes(
                         Mesh3d(floor_mesh.clone()),
                         MeshMaterial3d(roof_mat.clone()),
                         Transform::from_xyz(wx, WALL_HEIGHT, wz),
-                        ZoneMeshMarker { zone_id: player_zone },
+                        ZoneMeshMarker { zone_id, hop_distance },
+                        render_layer.clone(),
                     ));
                 }
                 InteriorTile::Void | InteriorTile::Pit => {
@@ -253,18 +259,84 @@ fn spawn_zone_meshes(
     }
 
     tracing::info!(
-        zone = ?player_zone,
+        zone = ?zone_id,
         kind = ?kind,
+        hop = hop_distance,
         tiles = msg.tiles.len(),
         "Spawned zone interior meshes"
     );
 }
 
-/// Despawn any `ZoneMeshMarker` entity whose `zone_id` differs from the
-/// player's current zone.
+/// Spawn meshes for the player's current zone and neighbor zones (up to 2 hops)
+/// when the zone changes or its cache entry arrives.
+#[allow(clippy::too_many_arguments)]
+fn spawn_zone_meshes(
+    mut commands: Commands,
+    cache: Res<ZoneCache>,
+    neighbor_cache: Res<ZoneNeighborCache>,
+    player_zone_q: Query<Option<&ZoneMembership>, With<LocalPlayer>>,
+    existing: Query<&ZoneMeshMarker>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let player_zone = player_zone_q
+        .single()
+        .ok()
+        .and_then(|opt| opt.copied())
+        .map(|z| z.0)
+        .unwrap_or(OVERWORLD_ZONE);
+
+    if player_zone == OVERWORLD_ZONE {
+        return;
+    }
+
+    // Always try to render the current zone at hop 0.
+    spawn_zone(
+        player_zone,
+        0,
+        &cache,
+        &existing,
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+    );
+
+    // Render neighbor zones based on topology from the neighbor cache.
+    let Some(ref neighbor_msg) = neighbor_cache.0 else {
+        return;
+    };
+
+    // Only act if the topology is for our current zone.
+    if neighbor_msg.current_zone != player_zone {
+        return;
+    }
+
+    for &(zone_id, hop) in &neighbor_msg.zone_hops {
+        if hop == 0 {
+            // Already handled above.
+            continue;
+        }
+        if hop > 2 {
+            continue;
+        }
+        spawn_zone(
+            zone_id,
+            hop,
+            &cache,
+            &existing,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+        );
+    }
+}
+
+/// Despawn any `ZoneMeshMarker` entity whose zone is more than 2 hops from
+/// the player's current zone, based on the neighbor cache.
 fn despawn_stale_zone_meshes(
     mut commands: Commands,
     player_zone_q: Query<Option<&ZoneMembership>, With<LocalPlayer>>,
+    neighbor_cache: Res<ZoneNeighborCache>,
     meshes: Query<(Entity, &ZoneMeshMarker)>,
 ) {
     let player_zone = player_zone_q
@@ -274,8 +346,25 @@ fn despawn_stale_zone_meshes(
         .map(|z| z.0)
         .unwrap_or(OVERWORLD_ZONE);
 
+    // Build the set of valid zone IDs (within 2 hops).
+    let valid_zones: std::collections::HashSet<ZoneId> =
+        if let Some(ref neighbor_msg) = neighbor_cache.0 {
+            if neighbor_msg.current_zone == player_zone {
+                neighbor_msg
+                    .zone_hops
+                    .iter()
+                    .map(|(z, _)| *z)
+                    .collect()
+            } else {
+                // Topology not yet updated for this zone — only keep current zone.
+                std::iter::once(player_zone).collect()
+            }
+        } else {
+            std::iter::once(player_zone).collect()
+        };
+
     for (entity, marker) in &meshes {
-        if marker.zone_id != player_zone {
+        if !valid_zones.contains(&marker.zone_id) {
             commands.entity(entity).despawn();
         }
     }

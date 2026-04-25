@@ -10,7 +10,7 @@ use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use crate::components::{EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
-use crate::world::zone::{InteriorTile, WorldId, ZoneAnchor, ZoneId};
+use crate::world::zone::{InteriorTile, Portal, WorldId, ZoneAnchor, ZoneId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -69,6 +69,30 @@ pub struct ZoneTileMessage {
     pub height: u16,
     pub tiles: Vec<InteriorTile>,
     pub anchors: Vec<ZoneAnchor>,
+}
+
+/// A single portal record as seen by the client, including which hop distance
+/// the destination zone is from the player's current zone.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ClientPortalEntry {
+    pub portal: Portal,
+    /// Hop distance from the player's current zone to `portal.from_zone`.
+    /// 0 = portal is in the current zone, 1 = one hop away, etc.
+    pub from_hop: u8,
+}
+
+/// Server → client message carrying the portal graph for the player's current
+/// zone plus all reachable zones within 2 hops.
+///
+/// Sent alongside `ZoneTileMessage` on every `PlayerZoneTransition`.
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+pub struct ZoneNeighborMessage {
+    /// The zone the player just entered (hop 0).
+    pub current_zone: ZoneId,
+    /// All portals reachable within 2 hops, with hop annotation.
+    pub portals: Vec<ClientPortalEntry>,
+    /// All zone IDs reachable within 2 hops and their hop distance.
+    pub zone_hops: Vec<(ZoneId, u8)>,
 }
 
 // ── Plugin ───────────────────────────────────────────────────────────────────

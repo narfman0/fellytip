@@ -147,6 +147,10 @@ pub struct Portal {
     pub one_way: bool,
     pub to_zone: ZoneId,
     pub to_anchor: SmolStr,
+    /// Custom portal shape vertices. `None` means use a default rectangle
+    /// sized `trigger_radius × trigger_radius * 2` (width × height).
+    #[serde(default)]
+    pub shape: Option<Vec<Vec2>>,
 }
 
 // ── Resources (Bevy) ──────────────────────────────────────────────────────────
@@ -344,6 +348,7 @@ pub fn generate_zones(
                 one_way: false,
                 to_zone: upper,
                 to_anchor: down_anchor.clone(),
+                shape: None,
             });
             next_portal_id += 1;
 
@@ -359,6 +364,7 @@ pub fn generate_zones(
                 one_way: false,
                 to_zone: lower,
                 to_anchor: up_anchor,
+                shape: None,
             });
             next_portal_id += 1;
         }
@@ -416,6 +422,7 @@ pub fn generate_zones(
         one_way: false,
         to_zone: underground_ids[0],
         to_anchor: SmolStr::new("up"),
+        shape: None,
     });
     next_portal_id += 1;
     topology.add_portal(Portal {
@@ -429,6 +436,7 @@ pub fn generate_zones(
         one_way: false,
         to_zone: overworld_id,
         to_anchor: SmolStr::new("cave_entrance"),
+        shape: None,
     });
     next_portal_id += 1;
 
@@ -447,6 +455,7 @@ pub fn generate_zones(
             one_way: false,
             to_zone: lower,
             to_anchor: SmolStr::new("up"),
+            shape: None,
         });
         next_portal_id += 1;
         topology.add_portal(Portal {
@@ -460,6 +469,7 @@ pub fn generate_zones(
             one_way: false,
             to_zone: upper,
             to_anchor: SmolStr::new("down"),
+            shape: None,
         });
         next_portal_id += 1;
     }
@@ -638,6 +648,7 @@ mod tests {
             one_way: false,
             to_zone: ZoneId(2),
             to_anchor: SmolStr::new("b"),
+            shape: None,
         });
         let exits: Vec<&Portal> = topo.exits_from(ZoneId(1)).collect();
         assert_eq!(exits.len(), 1);
@@ -660,6 +671,7 @@ mod tests {
             one_way: false,
             to_zone: ZoneId(1),
             to_anchor: SmolStr::new("b"),
+            shape: None,
         });
         topo.add_portal(Portal {
             id: 1,
@@ -672,6 +684,7 @@ mod tests {
             one_way: false,
             to_zone: ZoneId(2),
             to_anchor: SmolStr::new("b"),
+            shape: None,
         });
         assert_eq!(topo.hop_distance(ZoneId(0), ZoneId(2)), Some(2));
         assert_eq!(topo.hop_distance(ZoneId(0), ZoneId(0)), Some(0));
