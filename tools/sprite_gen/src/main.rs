@@ -143,6 +143,8 @@ fn print_prompts(entry: &BestiaryEntry, layout: &AtlasLayout, generator: &(dyn S
                         direction: dir,
                         frame,
                         tile_size: layout.tile_size,
+                        base_prompt: &entry.ai_prompt_base,
+                        style: &entry.ai_style,
                     },
                     &entry.ai_prompt_base,
                     &entry.ai_style,

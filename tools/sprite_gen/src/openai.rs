@@ -72,14 +72,7 @@ struct Datum {
 
 impl SpriteGenerator for OpenAiDalleGenerator {
     fn generate(&self, req: FrameRequest<'_>) -> Result<RgbaImage> {
-        // Prompt includes a pseudo-seed for reproducibility citation.
-        let seed = frame_seed(req.entity_id, req.direction, req.frame);
-        let prompt = format!(
-            "{}, facing direction {}/{} (sprite-grid), frame {} of `{}`. \
-             Seed={seed:016x}. Isolated subject, transparent background, \
-             centered, no UI, no text, no watermark.",
-            req.entity_id, req.direction, 7, req.frame, req.animation
-        );
+        let prompt = self.prompt_for(req, req.base_prompt, req.style);
 
         let body = Request {
             model: &self.model,

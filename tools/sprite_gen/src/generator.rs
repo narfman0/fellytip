@@ -13,6 +13,8 @@ pub struct FrameRequest<'a> {
     pub direction: u32,
     pub frame: u32,
     pub tile_size: u32,
+    pub base_prompt: &'a str,
+    pub style: &'a str,
 }
 
 pub trait SpriteGenerator {
@@ -115,6 +117,8 @@ mod tests {
                 direction: 0,
                 frame: 0,
                 tile_size: 64,
+                base_prompt: "test creature",
+                style: "pixel art",
             })
             .unwrap();
         assert_eq!(img.width(), 64);

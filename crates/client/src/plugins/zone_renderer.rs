@@ -34,8 +34,8 @@ const WALL_HEIGHT: f32 = 2.5;
 #[derive(Component)]
 pub struct ZoneMeshMarker {
     pub zone_id: ZoneId,
-    /// Hop distance from the player's current zone at the time this mesh was
-    /// spawned. 0 = current zone, 1 = 1-hop neighbor, 2 = 2-hop neighbor.
+    /// 0 = current zone, 1 = 1-hop neighbor, 2 = 2-hop neighbor.
+    #[allow(dead_code)]
     pub hop_distance: u8,
 }
 

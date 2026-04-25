@@ -40,6 +40,8 @@ pub fn assemble_atlas(
 
     let cells_owned: Vec<Cell> = cells;
     let generator_ref: &(dyn SpriteGenerator + Sync) = generator;
+    let base_prompt = entry.ai_prompt_base.clone();
+    let style = entry.ai_style.clone();
 
     let results = parallel_map(cells_owned, workers, |c| {
         let req = FrameRequest {
@@ -48,6 +50,8 @@ pub fn assemble_atlas(
             direction: c.direction,
             frame: c.frame,
             tile_size,
+            base_prompt: base_prompt.as_str(),
+            style: style.as_str(),
         };
         match generator_ref.generate(req) {
             Ok(image) => CellResult { image: Some(image) },
