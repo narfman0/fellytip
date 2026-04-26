@@ -113,6 +113,169 @@ pub fn find_path_zone_aware(
     }
 }
 
+// ── Cross-layer API ───────────────────────────────────────────────────────────
+
+/// Result of a cross-layer path query spanning surface and underground.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CrossLayerPathResult {
+    /// Path found. Each node is `(layer, x, y)` where `layer=0` is the surface
+    /// grid and `layer=1` is the cave grid.
+    Found(Vec<(u8, i32, i32)>),
+    /// No path exists.
+    NoPath,
+}
+
+/// Find a path that may cross between the surface grid (layer 0) and the cave
+/// grid (layer 1) via portal tiles.
+///
+/// * `surface_grid` — nav grid for the surface layer.
+/// * `cave_grid` — nav grid for the cave layer (same dimensions as `surface_grid`).
+/// * `portal_tiles` — `(x, y)` positions (in grid coordinates) of `CavePortal`
+///   tiles; these act as free bidirectional edges between the two layers.
+/// * `start` / `end` — `(layer, x, y)`.
+pub fn find_path_cross_layer(
+    surface_grid: &Grid<ZoneNavCell>,
+    cave_grid: &Grid<ZoneNavCell>,
+    portal_tiles: &[(usize, usize)],
+    start: (u8, i32, i32),
+    end: (u8, i32, i32),
+) -> CrossLayerPathResult {
+    let w = surface_grid.w;
+    let h = surface_grid.h;
+    assert_eq!(cave_grid.w, w);
+    assert_eq!(cave_grid.h, h);
+
+    let layer_size = w * h;
+    let total = 2 * layer_size;
+
+    let node_idx = |layer: u8, x: usize, y: usize| layer as usize * layer_size + y * w + x;
+
+    let clamp = |(lyr, x, y): (u8, i32, i32)| {
+        (lyr, x.clamp(0, w as i32 - 1) as usize, y.clamp(0, h as i32 - 1) as usize)
+    };
+
+    let (sl, sx, sy) = clamp(start);
+    let (el, ex, ey) = clamp(end);
+    let start_idx = node_idx(sl, sx, sy);
+    let end_idx = node_idx(el, ex, ey);
+
+    if start_idx == end_idx {
+        return CrossLayerPathResult::Found(vec![(el, ex as i32, ey as i32)]);
+    }
+
+    let portal_set: std::collections::HashSet<(usize, usize)> =
+        portal_tiles.iter().copied().collect();
+
+    let mut g_score = vec![f32::MAX; total];
+    let mut came_from = vec![usize::MAX; total];
+    let mut open: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::new();
+
+    g_score[start_idx] = 0.0;
+    let h_start = heuristic((sx, sy), (ex, ey)) + if sl != el { 0.0 } else { 0.0 };
+    open.push(Reverse((f32_to_ord(h_start), start_idx)));
+
+    while let Some(Reverse((_, cur_idx))) = open.pop() {
+        if cur_idx == end_idx {
+            return CrossLayerPathResult::Found(
+                reconstruct_cross_layer(&came_from, cur_idx, start_idx, w, layer_size)
+            );
+        }
+
+        let cur_layer = (cur_idx / layer_size) as u8;
+        let tile_idx = cur_idx % layer_size;
+        let cur_x = tile_idx % w;
+        let cur_y = tile_idx / w;
+        let cur_g = g_score[cur_idx];
+
+        let grid = if cur_layer == 0 { surface_grid } else { cave_grid };
+
+        for (nx, ny) in grid.neighbors_4(cur_x, cur_y) {
+            let cell = *grid.get(nx, ny);
+            let cost = cell.movement_cost();
+            if cost == f32::MAX {
+                continue;
+            }
+            let n_idx = node_idx(cur_layer, nx, ny);
+            let tentative_g = cur_g + cost;
+            if tentative_g < g_score[n_idx] {
+                g_score[n_idx] = tentative_g;
+                came_from[n_idx] = cur_idx;
+                let f = tentative_g + heuristic((nx, ny), (ex, ey));
+                open.push(Reverse((f32_to_ord(f), n_idx)));
+            }
+        }
+
+        if portal_set.contains(&(cur_x, cur_y)) {
+            let other_layer = 1 - cur_layer;
+            let p_idx = node_idx(other_layer, cur_x, cur_y);
+            let tentative_g = cur_g;
+            if tentative_g < g_score[p_idx] {
+                g_score[p_idx] = tentative_g;
+                came_from[p_idx] = cur_idx;
+                let f = tentative_g + heuristic((cur_x, cur_y), (ex, ey));
+                open.push(Reverse((f32_to_ord(f), p_idx)));
+            }
+        }
+    }
+
+    CrossLayerPathResult::NoPath
+}
+
+fn reconstruct_cross_layer(
+    came_from: &[usize],
+    mut cur: usize,
+    start: usize,
+    w: usize,
+    layer_size: usize,
+) -> Vec<(u8, i32, i32)> {
+    let goal_idx = cur;
+    let mut full: Vec<usize> = Vec::new();
+    while cur != start {
+        full.push(cur);
+        let prev = came_from[cur];
+        if prev == usize::MAX {
+            break;
+        }
+        cur = prev;
+    }
+    full.reverse();
+
+    let mut waypoints: Vec<(u8, i32, i32)> = Vec::new();
+    let mut prev_dir: Option<(i32, i32)> = None;
+    let mut prev_layer: Option<u8> = None;
+    for &cell_idx in &full {
+        let layer = (cell_idx / layer_size) as u8;
+        let tile = cell_idx % layer_size;
+        let x = (tile % w) as i32;
+        let y = (tile / w) as i32;
+        let layer_changed = prev_layer != Some(layer);
+        if layer_changed {
+            waypoints.push((layer, x, y));
+            prev_dir = None;
+            prev_layer = Some(layer);
+        } else if let Some(&(_, lx, ly)) = waypoints.last() {
+            let dir = (x - lx, y - ly);
+            if Some(dir) != prev_dir {
+                waypoints.push((layer, x, y));
+                prev_dir = Some(dir);
+            }
+        } else {
+            waypoints.push((layer, x, y));
+            prev_dir = None;
+        }
+    }
+
+    let goal_layer = (goal_idx / layer_size) as u8;
+    let goal_tile = goal_idx % layer_size;
+    let goal_x = (goal_tile % w) as i32;
+    let goal_y = (goal_tile / w) as i32;
+    if waypoints.last().copied() != Some((goal_layer, goal_x, goal_y)) {
+        waypoints.push((goal_layer, goal_x, goal_y));
+    }
+
+    waypoints
+}
+
 // ── Internal A* ──────────────────────────────────────────────────────────────
 
 /// A* on a `Grid<ZoneNavCell>`. Returns direction-change-compressed waypoints
@@ -337,5 +500,48 @@ mod tests {
         let grids = grids_with(ZONE_A, grid);
         let result = find_path_zone_aware((0, 0), (2, 0), ZONE_A, ZONE_A, &grids);
         assert!(matches!(result, PathResult::Found(_)));
+    }
+
+    fn make_cross_layer_grids(
+        w: usize,
+        h: usize,
+        surface_blocked: &[(usize, usize)],
+        cave_blocked: &[(usize, usize)],
+    ) -> (Grid<ZoneNavCell>, Grid<ZoneNavCell>) {
+        let surface = make_grid(w, h, surface_blocked);
+        let cave = make_grid(w, h, cave_blocked);
+        (surface, cave)
+    }
+
+    #[test]
+    fn path_from_underground_to_surface_via_portal() {
+        // 5×5 grids, both fully passable, portal at (2,2).
+        // Start: cave layer (1) at (0,0). End: surface layer (0) at (4,4).
+        let (surface, cave) = make_cross_layer_grids(5, 5, &[], &[]);
+        let portals = vec![(2usize, 2usize)];
+        let result = find_path_cross_layer(&surface, &cave, &portals, (1, 0, 0), (0, 4, 4));
+        match result {
+            CrossLayerPathResult::Found(waypoints) => {
+                assert!(!waypoints.is_empty(), "path must be non-empty");
+                let last = *waypoints.last().unwrap();
+                assert_eq!(last, (0, 4, 4), "path must end at surface goal");
+            }
+            CrossLayerPathResult::NoPath => panic!("expected a path, got NoPath"),
+        }
+    }
+
+    #[test]
+    fn portal_transition_included_in_path() {
+        // 5×5 grids, portal at (2,2). Verify (2,2) appears in the path.
+        let (surface, cave) = make_cross_layer_grids(5, 5, &[], &[]);
+        let portals = vec![(2usize, 2usize)];
+        let result = find_path_cross_layer(&surface, &cave, &portals, (1, 0, 0), (0, 4, 4));
+        match result {
+            CrossLayerPathResult::Found(waypoints) => {
+                let portal_in_path = waypoints.iter().any(|&(_, x, y)| x == 2 && y == 2);
+                assert!(portal_in_path, "portal tile (2,2) must appear in path; got {waypoints:?}");
+            }
+            CrossLayerPathResult::NoPath => panic!("expected a path, got NoPath"),
+        }
     }
 }

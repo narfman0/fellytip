@@ -201,6 +201,21 @@ pub fn place_cave_portals(map: &mut WorldMap, seed: u64, depth: u32, count: usiz
     }
 }
 
+/// Return all `(ix, iy)` positions that have a `CavePortal` layer at `cave_z(depth)`.
+pub fn find_portal_tiles(map: &WorldMap, depth: u32) -> Vec<(usize, usize)> {
+    let z = cave_z(depth);
+    let mut portals = Vec::new();
+    for iy in 0..map.height {
+        for ix in 0..map.width {
+            let col = &map.columns[ix + iy * map.width];
+            if col.layers.iter().any(|l| l.kind == TileKind::CavePortal && (l.z_top - z).abs() < 0.1) {
+                portals.push((ix, iy));
+            }
+        }
+    }
+    portals
+}
+
 pub fn is_cave_open(map: &WorldMap, ix: usize, iy: usize, depth: u32) -> bool {
     if ix >= map.width || iy >= map.height {
         return false;
