@@ -1,3 +1,4 @@
+pub mod cave;
 pub mod civilization;
 pub mod dungeon;
 pub mod ecology;

@@ -87,6 +87,12 @@ pub enum TileKind {
     Arctic,
     /// Surface river tile (flow accumulation ≥ river_threshold).
     River,
+    // ── Cave / underground ────────────────────────────────────────────────────
+    CaveFloor,
+    CaveWall,
+    CrystalCave,
+    LavaFloor,
+    CaveRiver,
     // ── Meta ─────────────────────────────────────────────────────────────────
     Void,
 }
@@ -111,6 +117,11 @@ impl TileKind {
         Self::PolarDesert,
         Self::Arctic,
         Self::River,
+        Self::CaveFloor,
+        Self::CaveWall,
+        Self::CrystalCave,
+        Self::LavaFloor,
+        Self::CaveRiver,
         Self::Void,
     ];
 
