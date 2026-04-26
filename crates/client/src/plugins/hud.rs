@@ -9,7 +9,7 @@
 //! Only added in windowed mode; headless builds skip this plugin entirely.
 
 use bevy::prelude::*;
-use bevy_egui::{EguiContext, EguiContexts, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui};
+use bevy_egui::{EguiContext, EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui};
 use fellytip_shared::{
     components::{Experience, Health, PlayerStandings},
     world::faction::standing_tier,
@@ -35,19 +35,30 @@ impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
             .init_resource::<CharScreen>()
-            .add_systems(PostStartup, ensure_primary_egui_context)
+            // Disable bevy_egui auto-detection and explicitly tag the Camera3d
+            // as the primary context in PostStartup (after spawn_camera runs in
+            // Startup).  This prevents duplicate PrimaryEguiContext components
+            // when Bevy internals spawn additional bare Camera entities.
+            .add_systems(PreStartup, disable_egui_auto_context)
+            .add_systems(PostStartup, tag_primary_egui_camera)
             .add_systems(Update, toggle_char_screen)
             .add_systems(EguiPrimaryContextPass, (draw_hud, draw_party_hud, draw_char_screen, draw_battle_log, draw_story_log));
     }
 }
 
-/// bevy_egui auto-setup occasionally misses the Camera3d on first frame; this guarantees it.
-fn ensure_primary_egui_context(
+/// Turn off bevy_egui's automatic primary-context creation so we can
+/// assign it explicitly to the correct Camera3d entity.
+fn disable_egui_auto_context(mut settings: ResMut<EguiGlobalSettings>) {
+    settings.auto_create_primary_context = false;
+}
+
+/// Tag the orbit Camera3d as the sole primary egui context.
+fn tag_primary_egui_camera(
     mut commands: Commands,
-    cameras: Query<Entity, (With<Camera3d>, Without<EguiContext>)>,
+    cameras: Query<Entity, With<Camera3d>>,
 ) {
-    for entity in &cameras {
-        commands.entity(entity).insert(PrimaryEguiContext);
+    if let Ok(entity) = cameras.single() {
+        commands.entity(entity).insert((EguiContext::default(), PrimaryEguiContext));
     }
 }
 

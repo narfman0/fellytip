@@ -21,6 +21,7 @@
 //! | `dm/clear_battle_history` | Drop every queued BattleRecord (test helper) |
 //! | `dm/underground_pressure` | Read the underground pressure resource snapshot |
 //! | `dm/force_underground_pressure` | Force pressure score to 1.0 for tests |
+//! | `dm/query_portals`              | List all portal trigger positions      |
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
@@ -31,6 +32,7 @@ use fellytip_shared::{
     world::{
         faction::FactionId,
         population::WAR_PARTY_SIZE,
+        zone::ZoneMembership,
     },
 };
 
@@ -38,6 +40,7 @@ use crate::plugins::{
     ai::{BattleHistory, FactionMember, FactionPopulationState, FactionRegistry, UndergroundPressure, WarPartyMember},
     ai::population::faction_npc_bundle,
     ecology::EcologyState,
+    portal::PortalTrigger,
 };
 
 // ── Parameter helpers ─────────────────────────────────────────────────────────
@@ -299,4 +302,30 @@ pub fn dm_force_underground_pressure(In(_params): In<Option<Value>>, world: &mut
     pressure.score = 1.0;
     tracing::info!("DM forced underground pressure to 1.0");
     Ok(json!({ "ok": true }))
+}
+
+// ── dm/query_portals ──────────────────────────────────────────────────────────
+
+/// Query all `PortalTrigger` entities and return their world positions and zone
+/// membership.
+///
+/// Params: `{}`
+/// Returns a JSON array of `{ "portal_id": u32, "x": f32, "y": f32, "z": f32,
+/// "zone_id": u32 }`.
+pub fn dm_query_portals(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let mut query = world.query::<(&PortalTrigger, &WorldPosition, Option<&ZoneMembership>)>();
+    let portals: Vec<Value> = query
+        .iter(world)
+        .map(|(trigger, pos, zone)| {
+            json!({
+                "portal_id": trigger.portal_id,
+                "x": pos.x,
+                "y": pos.y,
+                "z": pos.z,
+                "zone_id": zone.map(|z| z.0.0).unwrap_or(0u32),
+            })
+        })
+        .collect();
+    tracing::debug!(count = portals.len(), "DM queried portals");
+    Ok(json!(portals))
 }

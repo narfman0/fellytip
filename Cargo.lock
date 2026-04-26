@@ -2987,6 +2987,7 @@ dependencies = [
  "fellytip-shared",
  "image",
  "rand 0.10.0",
+ "serde_json",
  "smol_str 0.3.6",
  "tracing",
  "tracing-subscriber",

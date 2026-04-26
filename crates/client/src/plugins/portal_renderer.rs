@@ -40,6 +40,16 @@ const PORTAL_RT_SIZE: u32 = 256;
 /// Frame tint color: faint blue-white, barely visible.
 const PORTAL_FRAME_COLOR: Color = Color::srgba(0.8, 0.8, 1.0, 0.3);
 
+/// Debug highlight color: bright yellow-orange emissive.
+const PORTAL_DEBUG_EMISSIVE: LinearRgba = LinearRgba::new(4.0, 2.0, 0.0, 1.0);
+
+// ── Resources ─────────────────────────────────────────────────────────────────
+
+/// When `true`, all portal meshes are rendered with a bright emissive highlight
+/// so they are impossible to miss. Toggle via `dm/set_portal_debug` BRP method.
+#[derive(Resource, Default)]
+pub struct PortalDebugOverlay(pub bool);
+
 // ── Marker components ─────────────────────────────────────────────────────────
 
 /// Tags the transparent portal window mesh entity and its frame mesh.
@@ -60,10 +70,11 @@ pub struct PortalRendererPlugin;
 
 impl Plugin for PortalRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (despawn_stale_portal_meshes, spawn_portal_meshes).chain(),
-        );
+        app.init_resource::<PortalDebugOverlay>()
+            .add_systems(
+                Update,
+                (despawn_stale_portal_meshes, spawn_portal_meshes, update_portal_debug_overlay).chain(),
+            );
     }
 }
 
@@ -221,6 +232,27 @@ fn despawn_stale_portal_meshes(
     for (entity, marker) in &portal_cameras {
         if !valid_portal_ids.contains(&marker.portal_id) {
             commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Apply or remove the debug emissive highlight on all portal meshes based on
+/// the `PortalDebugOverlay` resource. Runs every frame; cheap when the overlay
+/// state hasn't changed because Bevy's change-detection skips the asset write.
+fn update_portal_debug_overlay(
+    overlay: Res<PortalDebugOverlay>,
+    portal_meshes: Query<&MeshMaterial3d<StandardMaterial>, With<PortalMeshMarker>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for mat_handle in &portal_meshes {
+        if let Some(mat) = materials.get_mut(mat_handle.id()) {
+            if overlay.0 {
+                mat.emissive = PORTAL_DEBUG_EMISSIVE;
+                mat.alpha_mode = AlphaMode::Opaque;
+            } else {
+                mat.emissive = LinearRgba::BLACK;
+                mat.alpha_mode = AlphaMode::Blend;
+            }
         }
     }
 }

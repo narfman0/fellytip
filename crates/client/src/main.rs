@@ -2,7 +2,7 @@ mod plugins;
 
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
-use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
+use bevy::remote::{BrpError, BrpResult, RemotePlugin, http::RemoteHttpPlugin};
 use fellytip_server::{
     plugins::{combat::LocalPlayerInput, perf::ClientFrameTimings},
     ServerGamePlugin,
@@ -94,6 +94,7 @@ fn main() {
         if headless {
             tracing_subscriber::fmt::init();
             app.add_plugins(MinimalPlugins)
+                .init_resource::<plugins::portal_renderer::PortalDebugOverlay>()
                 .add_plugins(
                     RemotePlugin::default()
                         .with_method("dm/spawn_npc",         fellytip_server::plugins::dm::dm_spawn_npc)
@@ -106,6 +107,8 @@ fn main() {
                         .with_method("dm/clear_battle_history", fellytip_server::plugins::dm::dm_clear_battle_history)
                         .with_method("dm/underground_pressure", fellytip_server::plugins::dm::dm_underground_pressure)
                         .with_method("dm/force_underground_pressure", fellytip_server::plugins::dm::dm_force_underground_pressure)
+                        .with_method("dm/query_portals",     fellytip_server::plugins::dm::dm_query_portals)
+                        .with_method("dm/set_portal_debug",  dm_set_portal_debug)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -409,4 +412,28 @@ fn headless_auto_move(
     }
     let dir_x: f32 = if *phase_right { 1.0 } else { -1.0 };
     pred.x += dir_x * PLAYER_SPEED * time.delta_secs();
+}
+
+// ── dm/set_portal_debug ───────────────────────────────────────────────────────
+
+/// Enable or disable the portal debug overlay (bright emissive highlight on all
+/// portal meshes so they are impossible to miss in screenshots).
+///
+/// Params: `{ "enabled": bool }`
+/// Returns `{ "ok": true, "enabled": bool }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_set_portal_debug(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let enabled = params
+        .as_ref()
+        .and_then(|p| p.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| BrpError::internal("missing required param `enabled`"))?;
+
+    let mut overlay = world.resource_mut::<plugins::portal_renderer::PortalDebugOverlay>();
+    overlay.0 = enabled;
+    tracing::info!(enabled, "DM set portal debug overlay");
+    Ok(serde_json::json!({ "ok": true, "enabled": enabled }))
 }
