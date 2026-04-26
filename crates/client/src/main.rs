@@ -3,6 +3,8 @@ mod plugins;
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, http::RemoteHttpPlugin};
+#[cfg(not(target_family = "wasm"))]
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use fellytip_server::{
     plugins::{combat::LocalPlayerInput, perf::ClientFrameTimings},
     ServerGamePlugin,
@@ -109,11 +111,29 @@ fn main() {
                         .with_method("dm/force_underground_pressure", fellytip_server::plugins::dm::dm_force_underground_pressure)
                         .with_method("dm/query_portals",     fellytip_server::plugins::dm::dm_query_portals)
                         .with_method("dm/set_portal_debug",  dm_set_portal_debug)
+                        .with_method("dm/take_screenshot",   dm_take_screenshot)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
         } else {
             add_windowed_plugins(&mut app);
+            app.add_plugins(
+                RemotePlugin::default()
+                    .with_method("dm/spawn_npc",                  fellytip_server::plugins::dm::dm_spawn_npc)
+                    .with_method("dm/kill",                       fellytip_server::plugins::dm::dm_kill)
+                    .with_method("dm/teleport",                   fellytip_server::plugins::dm::dm_teleport)
+                    .with_method("dm/set_faction",                fellytip_server::plugins::dm::dm_set_faction)
+                    .with_method("dm/trigger_war_party",          fellytip_server::plugins::dm::dm_trigger_war_party)
+                    .with_method("dm/set_ecology",                fellytip_server::plugins::dm::dm_set_ecology)
+                    .with_method("dm/battle_history",             fellytip_server::plugins::dm::dm_battle_history)
+                    .with_method("dm/clear_battle_history",       fellytip_server::plugins::dm::dm_clear_battle_history)
+                    .with_method("dm/underground_pressure",       fellytip_server::plugins::dm::dm_underground_pressure)
+                    .with_method("dm/force_underground_pressure", fellytip_server::plugins::dm::dm_force_underground_pressure)
+                    .with_method("dm/query_portals",              fellytip_server::plugins::dm::dm_query_portals)
+                    .with_method("dm/set_portal_debug",           dm_set_portal_debug)
+                    .with_method("dm/take_screenshot",            dm_take_screenshot)
+            )
+            .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
         app.add_plugins(FellytipProtocolPlugin)
             .add_plugins(ServerGamePlugin {
@@ -436,4 +456,27 @@ fn dm_set_portal_debug(
     overlay.0 = enabled;
     tracing::info!(enabled, "DM set portal debug overlay");
     Ok(serde_json::json!({ "ok": true, "enabled": enabled }))
+}
+
+/// Trigger a screenshot save to a given path (or /tmp/fellytip_screenshot.png by default).
+///
+/// Params: `{ "path": "/tmp/out.png" }` (optional)
+/// Returns `{ "ok": true, "path": "..." }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_take_screenshot(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let path = params
+        .as_ref()
+        .and_then(|p| p.get("path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("/tmp/fellytip_screenshot.png")
+        .to_owned();
+
+    world.commands().spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path.clone()));
+
+    tracing::info!(%path, "DM screenshot requested");
+    Ok(serde_json::json!({ "ok": true, "path": path }))
 }
