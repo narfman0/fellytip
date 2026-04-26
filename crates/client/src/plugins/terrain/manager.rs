@@ -13,9 +13,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use bevy::prelude::*;
 use fellytip_shared::world::map::WorldMap;
 
-use super::chunk::{build_chunk_mesh, ChunkCoord};
+use super::chunk::{build_cave_chunk_mesh, build_chunk_mesh, ChunkCoord};
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
 use crate::plugins::camera::OrbitCamera;
+use crate::{LocalPlayer, PredictedPosition};
 
 // ── Chunk lifecycle notifications ─────────────────────────────────────────────
 
@@ -71,6 +72,20 @@ impl Default for ChunkManager {
 #[derive(Resource)]
 pub struct TerrainAssets {
     pub material: Handle<StandardMaterial>,
+}
+
+/// Marker on surface terrain chunk entities (z >= 0).
+#[derive(Component)]
+pub struct SurfaceTerrain;
+
+/// Marker on cave terrain chunk entities (z < 0).
+#[derive(Component)]
+pub struct CaveTerrain;
+
+/// State for the cave chunk terrain system.
+#[derive(Resource, Default)]
+pub struct CaveChunkManager {
+    pub spawned: HashMap<ChunkCoord, Entity>,
 }
 
 // ── System 1: visibility + LOD selection ─────────────────────────────────────
@@ -246,9 +261,68 @@ pub fn apply_chunk_meshes(
                 Mesh3d(handle),
                 MeshMaterial3d(assets.material.clone()),
                 Transform::IDENTITY,
+                SurfaceTerrain,
             )).id();
             mgr.spawned.insert(coord, entity);
             lifecycle.newly_visible.push((coord, entity));
         }
+    }
+}
+
+// ── Cave chunk system ─────────────────────────────────────────────────────────
+
+use fellytip_shared::world::cave::cave_z;
+
+/// Spawn cave chunk mesh entities on first call (triggered by WorldMap resource).
+/// Cave depth 1 lives at `cave_z(1) = -10.0`.
+pub fn spawn_cave_chunks(
+    mut commands: Commands,
+    map: Res<WorldMap>,
+    assets: Res<TerrainAssets>,
+    mut cave_mgr: ResMut<CaveChunkManager>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    if !cave_mgr.spawned.is_empty() { return; }
+    if !map.is_changed() && !map.is_added() { return; }
+
+    let z = cave_z(1);
+    let n_cx = map.width.div_ceil(CHUNK_TILES) as i32;
+    let n_cy = map.height.div_ceil(CHUNK_TILES) as i32;
+
+    for cy in 0..n_cy {
+        for cx in 0..n_cx {
+            let coord = ChunkCoord { cx, cy };
+            let mesh = build_cave_chunk_mesh(&map, coord, z);
+            let handle = meshes.add(mesh);
+            let entity = commands.spawn((
+                Mesh3d(handle),
+                MeshMaterial3d(assets.material.clone()),
+                Transform::IDENTITY,
+                CaveTerrain,
+                Visibility::Hidden,
+            )).id();
+            cave_mgr.spawned.insert(coord, entity);
+        }
+    }
+}
+
+/// Show/hide surface and cave terrain layers based on the local player's z.
+///
+/// Surface layer (z >= -1.0): show surface chunks, hide cave chunks.
+/// Underground (z < -1.0): hide surface chunks, show cave chunks.
+pub fn update_layer_visibility(
+    player_q: Query<&PredictedPosition, With<LocalPlayer>>,
+    mut surface_q: Query<&mut Visibility, (With<SurfaceTerrain>, Without<CaveTerrain>)>,
+    mut cave_q: Query<&mut Visibility, (With<CaveTerrain>, Without<SurfaceTerrain>)>,
+) {
+    let Ok(pos) = player_q.single() else { return };
+    let underground = pos.z < -1.0;
+    let surface_vis = if underground { Visibility::Hidden } else { Visibility::Visible };
+    let cave_vis    = if underground { Visibility::Visible } else { Visibility::Hidden };
+    for mut v in &mut surface_q {
+        if *v != surface_vis { *v = surface_vis; }
+    }
+    for mut v in &mut cave_q {
+        if *v != cave_vis { *v = cave_vis; }
     }
 }

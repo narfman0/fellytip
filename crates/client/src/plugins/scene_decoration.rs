@@ -451,7 +451,9 @@ fn decoration_for_biome(
             Some((&deco.bushes,   20, 0.7, false)),        // ~8%
         TileKind::Plains | TileKind::Grassland =>
             Some((&deco.bushes,   13, 0.6, false)),        // ~5%
-        TileKind::Water | TileKind::River | TileKind::Void => None,
+        TileKind::Water | TileKind::River | TileKind::Void
+        | TileKind::CaveFloor | TileKind::CaveWall | TileKind::CrystalCave
+        | TileKind::LavaFloor | TileKind::CaveRiver | TileKind::CavePortal => None,
     }
 }
 

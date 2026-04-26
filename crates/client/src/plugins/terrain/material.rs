@@ -27,6 +27,12 @@ pub fn biome_color(kind: TileKind) -> Vec3 {
         TileKind::Stone               => Vec3::new(0.50, 0.48, 0.45),
         TileKind::Water               => Vec3::new(0.15, 0.40, 0.75),
         TileKind::River               => Vec3::new(0.22, 0.52, 0.88),
+        TileKind::CaveFloor           => Vec3::new(0.25, 0.25, 0.25),
+        TileKind::CaveWall            => Vec3::new(0.10, 0.10, 0.12),
+        TileKind::CrystalCave         => Vec3::new(0.20, 0.70, 0.80),
+        TileKind::LavaFloor           => Vec3::new(0.90, 0.30, 0.05),
+        TileKind::CaveRiver           => Vec3::new(0.05, 0.15, 0.60),
+        TileKind::CavePortal          => Vec3::new(0.80, 0.10, 0.90),
         TileKind::Void                => Vec3::ZERO,
     }
 }
@@ -46,7 +52,7 @@ pub fn corner_biome_color(map: &WorldMap, gx: usize, gy: usize) -> [f32; 4] {
         let iy = gy as i32 + dy;
         if ix >= 0 && iy >= 0 && (ix as usize) < map.width && (iy as usize) < map.height {
             let col = map.column(ix as usize, iy as usize);
-            if let Some(layer) = col.layers.iter().rev().find(|l| l.is_surface_kind()) {
+            if let Some(layer) = col.layers.iter().rev().find(|l| l.kind != TileKind::Void) {
                 sum += biome_color(layer.kind);
                 count += 1;
             }

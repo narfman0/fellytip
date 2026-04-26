@@ -136,6 +136,12 @@ fn tile_color(kind: TileKind) -> [u8; 4] {
         TileKind::Arctic                                       => [220, 235, 250, 255],
         TileKind::Water                                        => [ 60, 120, 200, 255],
         TileKind::River                                        => [ 80, 140, 210, 255],
+        TileKind::CaveFloor                                    => [ 64,  64,  64, 255],
+        TileKind::CaveWall                                     => [ 26,  26,  31, 255],
+        TileKind::CrystalCave                                  => [ 51, 179, 204, 255],
+        TileKind::LavaFloor                                    => [230,  77,  13, 255],
+        TileKind::CaveRiver                                    => [ 13,  38, 153, 255],
+        TileKind::CavePortal                                   => [204,  26, 230, 255],
         TileKind::Void                                         => [  8,   8,  16, 255],
     }
 }

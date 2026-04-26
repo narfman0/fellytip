@@ -24,8 +24,10 @@ use bevy::{
 };
 use fellytip_shared::world::map::WorldMap;
 
+use fellytip_shared::world::map::TileKind;
+
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
-use super::material::corner_biome_color;
+use super::material::{biome_color, corner_biome_color};
 
 // ── Chunk coordinate ──────────────────────────────────────────────────────────
 
@@ -174,6 +176,102 @@ pub fn build_chunk_mesh(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
     );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
+
+/// Build a flat mesh for a cave chunk at `z_level`.
+///
+/// Each tile gets vertex colours from `biome_color` based on the cave TileKind.
+/// CaveWall tiles produce a taller box (height 2.0); all other cave tiles are
+/// flat quads (height 0.2) at the cave z level.
+pub fn build_cave_chunk_mesh(map: &WorldMap, coord: ChunkCoord, z_level: f32) -> Mesh {
+    let half_w = (map.width  / 2) as i32;
+    let half_h = (map.height / 2) as i32;
+
+    let mut positions = Vec::<[f32; 3]>::new();
+    let mut normals   = Vec::<[f32; 3]>::new();
+    let mut colors    = Vec::<[f32; 4]>::new();
+    let mut indices   = Vec::<u32>::new();
+
+    for ty in 0..CHUNK_TILES {
+        for tx in 0..CHUNK_TILES {
+            let ix = (coord.cx as usize * CHUNK_TILES + tx).min(map.width  - 1);
+            let iy = (coord.cy as usize * CHUNK_TILES + ty).min(map.height - 1);
+
+            let col = map.column(ix, iy);
+            let cave_layer = col.layers.iter().find(|l| (l.z_top - z_level).abs() < 1.0 && l.kind != TileKind::Void);
+            let Some(layer) = cave_layer else { continue };
+
+            let kind = layer.kind;
+            let c = biome_color(kind);
+            let color = [c.x, c.y, c.z, 1.0];
+
+            let bx = ix as f32 - half_w as f32;
+            let bz = iy as f32 - half_h as f32;
+
+            let is_wall = kind == TileKind::CaveWall;
+            let height = if is_wall { 2.0_f32 } else { 0.2_f32 };
+            let y_base = z_level;
+            let y_top  = y_base + height;
+
+            let base = positions.len() as u32;
+
+            if is_wall {
+                // Emit a box: top face + 4 side faces.
+                // Top face (y = y_top, normal +Y)
+                positions.extend_from_slice(&[
+                    [bx,        y_top, bz       ],
+                    [bx + 1.0,  y_top, bz       ],
+                    [bx + 1.0,  y_top, bz + 1.0 ],
+                    [bx,        y_top, bz + 1.0 ],
+                ]);
+                normals.extend_from_slice(&[[0.,1.,0.]; 4]);
+                colors.extend_from_slice(&[color; 4]);
+                indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+
+                // Four side faces.
+                let sides: [([f32;3],[f32;3],[f32;3],[f32;3],[f32;3]); 4] = [
+                    // North (-Z): normal [0,0,-1]
+                    ([bx,1.,bz],[bx+1.,1.,bz],[bx+1.,0.,bz],[bx,0.,bz],[0.,0.,-1.]),
+                    // South (+Z): normal [0,0,+1]
+                    ([bx+1.,1.,bz+1.],[bx,1.,bz+1.],[bx,0.,bz+1.],[bx+1.,0.,bz+1.],[0.,0.,1.]),
+                    // West (-X): normal [-1,0,0]
+                    ([bx,1.,bz+1.],[bx,1.,bz],[bx,0.,bz],[bx,0.,bz+1.],[-1.,0.,0.]),
+                    // East (+X): normal [+1,0,0]
+                    ([bx+1.,1.,bz],[bx+1.,1.,bz+1.],[bx+1.,0.,bz+1.],[bx+1.,0.,bz],[1.,0.,0.]),
+                ];
+                for (a, b, c_v, d, n) in sides {
+                    let v0 = [a[0], y_base + a[1], a[2]];
+                    let v1 = [b[0], y_base + b[1], b[2]];
+                    let v2 = [c_v[0], y_base + c_v[1], c_v[2]];
+                    let v3 = [d[0], y_base + d[1], d[2]];
+                    let b2 = positions.len() as u32;
+                    positions.extend_from_slice(&[v0, v1, v2, v3]);
+                    normals.extend_from_slice(&[n; 4]);
+                    colors.extend_from_slice(&[color; 4]);
+                    indices.extend_from_slice(&[b2, b2+1, b2+2, b2, b2+2, b2+3]);
+                }
+            } else {
+                // Flat quad at y_top, normal +Y.
+                let b2 = positions.len() as u32;
+                positions.extend_from_slice(&[
+                    [bx,        y_top, bz       ],
+                    [bx + 1.0,  y_top, bz       ],
+                    [bx + 1.0,  y_top, bz + 1.0 ],
+                    [bx,        y_top, bz + 1.0 ],
+                ]);
+                normals.extend_from_slice(&[[0.,1.,0.]; 4]);
+                colors.extend_from_slice(&[color; 4]);
+                indices.extend_from_slice(&[b2, b2+1, b2+2, b2, b2+2, b2+3]);
+            }
+        }
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors);

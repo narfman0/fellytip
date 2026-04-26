@@ -97,10 +97,16 @@ pub fn seed_ecology(map: Res<WorldMap>, mut state: ResMut<EcologyState>) {
                 | TileKind::Tundra
                 | TileKind::PolarDesert
                 | TileKind::Arctic => Some((20.0, 4.0, 0.3, 50.0, 0.02, 0.4, 0.15)),
-                // Non-viable: water, impassable terrain
+                // Non-viable: water, impassable terrain, cave/underground
                 TileKind::Water
                 | TileKind::Mountain
                 | TileKind::River
+                | TileKind::CaveFloor
+                | TileKind::CaveWall
+                | TileKind::CrystalCave
+                | TileKind::LavaFloor
+                | TileKind::CaveRiver
+                | TileKind::CavePortal
                 | TileKind::Void => None,
             };
 
