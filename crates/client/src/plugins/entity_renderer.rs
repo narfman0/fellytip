@@ -493,8 +493,11 @@ type DebugOverlayItems<'a> = (
 /// - FactionNpc (Ash Covenant) → crimson
 /// - FactionNpc (Deep Tide) → teal
 /// - FactionNpc (unknown faction) → white
-/// - Wildlife → green
-/// - Other → gray
+/// - Wildlife (Bison / Dog / Horse) → green (all three variants share one color)
+/// - Settlement → skipped (building meshes provide their own visual)
+/// - BossNpc → gray fallback (server-only component, not replicated to client;
+///   the boss entity has `WorldPosition` but no `EntityKind`, so it falls here)
+/// - Everything else (remote players, unrecognised creatures) → gray
 fn draw_character_debug_overlay(
     overlay: Res<CharacterDebugOverlay>,
     mut gizmos: Gizmos,
@@ -505,6 +508,12 @@ fn draw_character_debug_overlay(
     }
     for (pos, kind, badge, local_player) in &query {
         let center = Vec3::new(pos.x, pos.z + 0.5, pos.y);
+
+        // Settlement entities have building mesh visuals — skip the debug sphere.
+        if matches!(kind, Some(EntityKind::Settlement)) {
+            continue;
+        }
+
         let color = if local_player.is_some() {
             Color::srgb(0.0, 1.0, 1.0) // cyan
         } else {
@@ -516,7 +525,13 @@ fn draw_character_debug_overlay(
                     Some("deep_tide")      => Color::srgb(0.1, 0.55, 0.55),
                     _                      => Color::WHITE,
                 },
+                // All three WildlifeKind variants (Bison, Dog, Horse) share green.
                 Some(EntityKind::Wildlife) => Color::srgb(0.0, 0.8, 0.0),
+                // Settlement is handled above with `continue`.
+                Some(EntityKind::Settlement) => unreachable!(),
+                // Gray fallback: remote players (no EntityKind), BossNpc entities
+                // (server-only component, falls through without an EntityKind tag),
+                // and any future entity kinds not yet handled here.
                 _ => Color::srgb(0.5, 0.5, 0.5),
             }
         };
