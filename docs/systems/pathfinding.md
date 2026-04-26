@@ -77,7 +77,48 @@ Frozen-zone NPCs always reach their goal — linear march is deliberately macro-
 | `Water`, `Roof`, `Window` | `Slow` |
 | `Wall`, `Void`, `Pit` | `Blocked` |
 
-The overworld zone (`OVERWORLD_ZONE = ZoneId(0)`) has an empty tile array in the registry and is deliberately skipped — its pathfinding still uses the flat 256×256 `NavGrid` above. `ZoneNavGrids` is currently a data container; zone-aware A* / flow-field pathfinding is a follow-up. See `docs/systems/zones.md` for the registry side and the overall status table.
+The overworld zone (`OVERWORLD_ZONE = ZoneId(0)`) has an empty tile array in the registry and is deliberately skipped — its pathfinding still uses the flat 256×256 `NavGrid` above. See `docs/systems/zones.md` for the registry side and the overall status table.
+
+## Zone-aware A* — `find_path_zone_aware`
+
+**Location:** `crates/shared/src/world/pathfinding.rs`
+
+Pure function (no ECS) that dispatches a path query to the correct nav grid:
+
+```rust
+pub fn find_path_zone_aware(
+    start: (i32, i32),
+    end: (i32, i32),
+    start_zone: ZoneId,
+    end_zone: ZoneId,
+    grids: &HashMap<ZoneId, Grid<ZoneNavCell>>,
+) -> PathResult
+```
+
+Returns a `PathResult` enum:
+
+| Variant | Meaning |
+|---|---|
+| `Found(Vec<(i32,i32)>)` | Path found; waypoints in zone-local tile coords (direction-change compressed) |
+| `NoPath` | Grid exists but no path (blocked) |
+| `ZoneCrossing` | `start_zone ≠ end_zone` — use the portal system |
+| `NoNavGrid` | Zone has no registered nav grid |
+| `UseOverworld` | Both zones are `OVERWORLD_ZONE` — use `NavGrid::astar` |
+
+`ZoneNavCell` is the shared counterpart to the server's `NavCell` — same three variants (`Passable`, `Slow`, `Blocked`) and the same movement costs.
+
+### `ZoneNavGrids::zone_astar` (server bridge)
+
+Because the server's `ZoneNavGrids` uses `Grid<NavCell>` (server-local type), a bridge method `zone_astar(zone, start, goal) -> Option<Vec<(u16, u16)>>` is added to `ZoneNavGrids` in `plugins/nav.rs`. It runs the same A* algorithm directly on `Grid<NavCell>`.
+
+### Wiring in `wander_npcs` (`plugins/ai.rs`)
+
+`wander_npcs` now accepts an optional `ZoneMembership` per NPC and `Option<Res<ZoneNavGrids>>`. When an NPC has a non-overworld `ZoneMembership`:
+
+1. Zone tile-local coordinates are used (interior tile coords ≈ world units relative to zone origin).
+2. `ZoneNavGrids::zone_astar` is called instead of `NavGrid::astar`.
+3. Waypoint follow-through converts waypoints back to world units using zone-local tile coords (1 tile = 1 unit).
+4. NPCs without `ZoneMembership` (the common overworld case) are unaffected — they fall through to the existing `world_to_nav` / `NavGrid::astar` path.
 
 ## Interaction with adaptive throttling
 

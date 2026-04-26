@@ -19,13 +19,14 @@ Single-story village buildings use a cheaper **roof-cutaway** shortcut: the inte
 | `ZoneTopology::hop_distance` (BFS) | `crates/shared/src/world/zone.rs` | ✅ Done | `shortest_path` helper currently lives in `ai.rs` (`shortest_zone_path`); should move to `ZoneTopology` impl |
 | `generate_zones(&buildings, seed)` pure fn | `crates/shared/src/world/zone.rs` | ✅ Done | Only multi-floor `BuildingKind`s produce zones; single-story buildings stay on overworld. Underground chain is currently a hard-coded 3 depths for testing. |
 | `PortalPlugin` — spawns `PortalTrigger` entities, handles `PlayerZoneTransition` events | `crates/server/src/plugins/portal.rs` | ✅ Done | Anchor world positions are `(0,0)` placeholder — need building world-coord propagation so intra-zone triggers are placed correctly. |
-| `ZoneNavGrids` resource + `build_zone_nav_grids` startup system | `crates/server/src/plugins/nav.rs` | ✅ Done (data container) | Zone-aware pathfinder consumption is pending; `nav.rs` still uses the flat 256×256 overworld `NavGrid` for AI. |
+| `ZoneNavGrids` resource + `build_zone_nav_grids` startup system | `crates/server/src/plugins/nav.rs` | ✅ Done | Zone-aware A* wired into `wander_npcs`; pure logic in `crates/shared/src/world/pathfinding.rs`. |
 | `UndergroundSimSchedule` (0.1 Hz) + `UndergroundPressure` resource | `crates/server/src/plugins/world_sim.rs`, `plugins/ai.rs` | ✅ Done | See `docs/systems/underground.md`. |
 | `advance_zone_parties` — zone-hopping for war-party members | `crates/server/src/plugins/ai.rs` | ✅ Done | Trigger-radius check compares to world origin until anchor world positions are wired. |
 | `spawn_underground_raid` — pressure→raid party conversion | `crates/server/src/plugins/ai.rs` | ✅ Done | — |
 | `dm/underground_pressure`, `dm/force_underground_pressure` BRP methods | `crates/server/src/plugins/dm.rs`, registered in `crates/client/src/main.rs` | ✅ Done | — |
 | `ZoneTileMessage` server→client protocol + `ZoneCache` resource | `crates/shared/src/protocol.rs`, `crates/client/src/plugins/zone_cache.rs` | ✅ Done | Message should carry an explicit `ZoneKind` field instead of the client-side tile-shape heuristic in `zone_renderer::classify_zone`. |
-| `ZoneRendererPlugin` — interior mesh spawn/despawn | `crates/client/src/plugins/zone_renderer.rs` | ✅ Done (scaffold) | One unlit quad per tile; no instancing, atlas, or lighting pass yet. Roof cutaway shader for zone-0 single-story buildings is **not** implemented. |
+| `ZoneRendererPlugin` — interior mesh spawn/despawn | `crates/client/src/plugins/zone_renderer.rs` | ✅ Done (scaffold) | One unlit quad per tile; no instancing, atlas, or lighting pass yet. |
+| `RoofTile` + `update_roof_cutaway` — visibility toggle for roof tiles | `crates/client/src/plugins/zone_renderer.rs` | ✅ Done | Simple `Visibility::Hidden`/`Inherited` toggle; no shader needed for current art pipeline. |
 | `update_zone_visibility` — client-side per-zone entity culling | `crates/client/src/plugins/entity_renderer.rs` | ✅ Done (scaffold) | Lightyear interest management per-zone is **not** yet wired; this is local visibility only. |
 | `underground_e2e` ralph scenario | `tools/ralph/src/scenarios/underground_e2e.rs` | ✅ Done | Best-effort battle assertion; would sharpen once `dm/story_events_by_tag` is added. |
 
@@ -256,7 +257,7 @@ Tile handling: `Floor`/`Stair`/`Water` → floor quad; `Wall`/`Window` → verti
 3. ✅ `ZoneNavGrids` — per-zone `Grid<NavCell>` built on startup.
 4. ✅ `PortalPlugin` — spawns trigger entities, emits `PlayerZoneTransition`, applies transitions, broadcasts `ZoneTileMessage` with neighbours.
 5. ✅ Client zone prefetch — `ZoneCache` + `ZoneTileMessage` + `ZoneRendererPlugin`.
-6. ⏳ Roof-cutaway shader for single-story buildings — deferred (no `BuildingRoof` component yet).
+6. ✅ Roof-cutaway for multi-story `BuildingFloor` zones — `RoofTile` marker + `update_roof_cutaway` system in `zone_renderer.rs`. Single-story buildings (on overworld zone 0) are a separate visual-only system not yet implemented.
 7. ✅ `advance_zone_parties` in `ai.rs` — zone-hopping at 1 Hz; converts to surface march on reaching overworld.
 8. ✅ `StoryEvent::UndergroundThreat` + hop-distance gate (≤ 3 emits; 0.4/0.7 pressure thresholds emit with synthetic hop counts).
 9. ⏳ Move `shortest_zone_path` from `ai.rs` onto `ZoneTopology` impl.

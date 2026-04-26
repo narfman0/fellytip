@@ -47,7 +47,7 @@ use uuid::Uuid;
 
 use crate::plugins::combat::{CombatParticipant, ExperienceReward};
 use crate::plugins::interest::{effective_zone, SimTier};
-use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField};
+use crate::plugins::nav::{world_to_nav, nav_to_world, NavGrid, FlowField, ZoneNavGrids};
 use crate::plugins::perf::AdaptiveScheduler;
 use crate::plugins::world_sim::{UndergroundSimSchedule, WorldSimSchedule, WorldSimTick};
 
@@ -369,18 +369,29 @@ fn update_faction_goals(mut registry: ResMut<FactionRegistry>) {
 #[allow(clippy::type_complexity)]
 fn wander_npcs(
     mut query: Query<
-        (Entity, &mut WorldPosition, &HomePosition, &FactionMember, &mut NavPath, &mut NavReplanTimer),
+        (
+            Entity,
+            &mut WorldPosition,
+            &HomePosition,
+            &FactionMember,
+            &mut NavPath,
+            &mut NavReplanTimer,
+            Option<&fellytip_shared::world::zone::ZoneMembership>,
+        ),
         (With<FactionMember>, Without<WarPartyMember>),
     >,
     temp: Res<ChunkTemperature>,
     scheduler: Res<AdaptiveScheduler>,
     nav: Option<Res<NavGrid>>,
+    zone_nav_grids: Option<Res<ZoneNavGrids>>,
     tick: Res<WorldSimTick>,
     alerts: Res<FactionAlertState>,
 ) {
     let Some(nav) = nav else { return };
 
-    for (entity, mut pos, home, faction_member, mut nav_path, mut replan_timer) in &mut query {
+    for (entity, mut pos, home, faction_member, mut nav_path, mut replan_timer, zone_membership) in
+        &mut query
+    {
         let zone = effective_zone(&pos, &temp, scheduler.level);
         let zone_speed = zone.speed();
         let alerted = alerts.is_alerted(&faction_member.0);
@@ -421,17 +432,46 @@ fn wander_npcs(
             let goal_x = home.0.x + angle.cos() * patrol_radius;
             let goal_y = home.0.y + angle.sin() * patrol_radius;
 
-            let start = world_to_nav(pos.x, pos.y);
-            let goal  = world_to_nav(goal_x, goal_y);
+            // Zone-aware pathfinding: use the per-zone nav grid when the NPC
+            // is inside a non-overworld zone (BuildingFloor, Dungeon, etc.).
+            let npc_zone_id = zone_membership
+                .map(|z| z.0)
+                .unwrap_or(fellytip_shared::world::zone::OVERWORLD_ZONE);
 
-            if let Some(waypoints) = nav.astar(start, goal) {
+            let planned = if npc_zone_id != fellytip_shared::world::zone::OVERWORLD_ZONE {
+                // NPC is inside a zone interior — use zone tile-local A*.
+                // Zone interior tiles are unit-sized; pos is already in tile units
+                // relative to zone origin, so we cast directly to tile indices.
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let start_tile = (pos.x.max(0.0) as usize, pos.y.max(0.0) as usize);
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let goal_tile = (goal_x.max(0.0) as usize, goal_y.max(0.0) as usize);
+
+                zone_nav_grids
+                    .as_deref()
+                    .and_then(|zg| zg.zone_astar(npc_zone_id, start_tile, goal_tile))
+            } else {
+                // Overworld NPC — existing 256×256 nav grid.
+                let start = world_to_nav(pos.x, pos.y);
+                let goal = world_to_nav(goal_x, goal_y);
+                nav.astar(start, goal)
+            };
+
+            if let Some(waypoints) = planned {
                 *nav_path = NavPath { waypoints, waypoint_index: 0 };
             }
         }
 
         // Follow current path: advance toward next waypoint.
         if let Some((wx, wy)) = nav_path.next_waypoint() {
-            let (target_x, target_y) = nav_to_world(wx as usize, wy as usize);
+            // Waypoint coordinate space matches the planning space used above.
+            let (target_x, target_y) =
+                if zone_membership.is_some_and(|z| z.0 != fellytip_shared::world::zone::OVERWORLD_ZONE) {
+                    // Zone interior: tile coords are world units directly.
+                    (wx as f32, wy as f32)
+                } else {
+                    nav_to_world(wx as usize, wy as usize)
+                };
             let dx = target_x - pos.x;
             let dy = target_y - pos.y;
             let dist_sq = dx * dx + dy * dy;

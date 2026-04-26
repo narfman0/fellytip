@@ -339,8 +339,7 @@ use std::collections::HashMap;
 
 /// Per-zone navigation grids, one `Grid<NavCell>` per known zone.
 ///
-/// Built at startup from `ZoneRegistry`; consumed by zone-aware path planners
-/// (implementation pending — this is just the data container for now).
+/// Built at startup from `ZoneRegistry`; consumed by zone-aware path planners.
 #[derive(Resource, Default)]
 pub struct ZoneNavGrids(pub HashMap<ZoneId, Grid<NavCell>>);
 
@@ -352,6 +351,82 @@ impl ZoneNavGrids {
     pub fn insert(&mut self, zone: ZoneId, grid: Grid<NavCell>) {
         self.0.insert(zone, grid);
     }
+
+    /// A* within a single zone's nav grid.
+    ///
+    /// `start` and `end` are zone-local tile coordinates `(x, y)`. Returns
+    /// direction-change-compressed waypoints as `(u16, u16)`, or `None` if the
+    /// zone has no nav grid or no path exists.
+    pub fn zone_astar(
+        &self,
+        zone: ZoneId,
+        start: (usize, usize),
+        goal: (usize, usize),
+    ) -> Option<Vec<(u16, u16)>> {
+        use std::collections::BinaryHeap;
+        use std::cmp::Reverse;
+
+        let grid = self.0.get(&zone)?;
+
+        if start == goal {
+            return Some(vec![(goal.0 as u16, goal.1 as u16)]);
+        }
+
+        let w = grid.w;
+        let h = grid.h;
+        let cell_count = w * h;
+        let idx = |x: usize, y: usize| x + y * w;
+
+        let mut g_score = vec![f32::MAX; cell_count];
+        let mut came_from = vec![usize::MAX; cell_count];
+        let mut open: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::new();
+
+        // Clamp inputs to grid bounds.
+        let sx = start.0.min(w - 1);
+        let sy = start.1.min(h - 1);
+        let ex = goal.0.min(w - 1);
+        let ey = goal.1.min(h - 1);
+
+        let start_idx = idx(sx, sy);
+        let h_score = zone_heuristic((sx, sy), (ex, ey));
+        g_score[start_idx] = 0.0;
+        open.push(Reverse((float_to_ord(h_score), start_idx)));
+
+        while let Some(Reverse((_, cur_idx))) = open.pop() {
+            let cur_x = cur_idx % w;
+            let cur_y = cur_idx / w;
+
+            if (cur_x, cur_y) == (ex, ey) {
+                return Some(reconstruct_path(&came_from, cur_idx, start_idx, w));
+            }
+
+            let cur_g = g_score[cur_idx];
+
+            for (nx, ny) in grid.neighbors_4(cur_x, cur_y) {
+                let cell = *grid.get(nx, ny);
+                let cost = cell.movement_cost();
+                if cost == f32::MAX {
+                    continue;
+                }
+                let n_idx = idx(nx, ny);
+                let tentative_g = cur_g + cost;
+                if tentative_g < g_score[n_idx] {
+                    g_score[n_idx] = tentative_g;
+                    came_from[n_idx] = cur_idx;
+                    let f = tentative_g + zone_heuristic((nx, ny), (ex, ey));
+                    open.push(Reverse((float_to_ord(f), n_idx)));
+                }
+            }
+        }
+
+        None
+    }
+}
+
+fn zone_heuristic(a: (usize, usize), b: (usize, usize)) -> f32 {
+    let dx = (a.0 as i32 - b.0 as i32).abs();
+    let dy = (a.1 as i32 - b.1 as i32).abs();
+    (dx + dy) as f32
 }
 
 /// Convert an `InteriorTile` to its navigation cost class.

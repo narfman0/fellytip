@@ -32,4 +32,4 @@ pub use terrain::TerrainPlugin;
 #[allow(unused_imports)]
 pub use zone_cache::{ZoneCache, ZoneCachePlugin};
 #[allow(unused_imports)]
-pub use zone_renderer::{ZoneMeshMarker, ZoneRendererPlugin};
+pub use zone_renderer::{RoofTile, ZoneMeshMarker, ZoneRendererPlugin};

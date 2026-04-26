@@ -249,6 +249,15 @@ An always-visible 180×180 px minimap anchors to the top-right corner. It rotate
 
 The `M` / `Tab` keys open a full 512×512 pan-zoom map window.
 
+## Roof Cutaway (`crates/client/src/plugins/zone_renderer.rs`)
+
+When the local player is inside a `BuildingFloor` zone, the roof tiles of that zone are hidden so the interior is visible from the camera. This uses a simple `Visibility` toggle — no shader required.
+
+- **`RoofTile { zone_id }`** — marker component added to every `InteriorTile::Roof` mesh entity spawned by `ZoneRendererPlugin`.
+- **`update_roof_cutaway`** — runs every `Update` frame. Reads the local player's `ZoneMembership`, then sets `Visibility::Hidden` on all `RoofTile` entities whose `zone_id` matches the player's current zone and `Visibility::Inherited` on all others.
+- On zone exit (player's `ZoneMembership` changes back to overworld or another zone) the roofs are automatically restored because the system re-evaluates every frame.
+- `RoofTile` is re-exported from `crates/client/src/plugins/mod.rs` for external access.
+
 ## Upgrade path
 
 ### Textures

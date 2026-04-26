@@ -40,11 +40,22 @@ pub struct ZoneMeshMarker {
     pub hop_distance: u8,
 }
 
+/// Marker component for roof-tile mesh entities spawned inside a
+/// `BuildingFloor` zone. Toggled hidden when the local player occupies the
+/// same zone (roof cutaway), and restored to `Inherited` when they leave.
+#[derive(Component)]
+pub struct RoofTile {
+    pub zone_id: ZoneId,
+}
+
 pub struct ZoneRendererPlugin;
 
 impl Plugin for ZoneRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (spawn_zone_meshes, despawn_stale_zone_meshes));
+        app.add_systems(
+            Update,
+            (spawn_zone_meshes, despawn_stale_zone_meshes, update_roof_cutaway),
+        );
     }
 }
 
@@ -230,6 +241,7 @@ fn spawn_zone(
                         MeshMaterial3d(roof_mat.clone()),
                         Transform::from_xyz(wx, WALL_HEIGHT, wz),
                         ZoneMeshMarker { zone_id, hop_distance },
+                        RoofTile { zone_id },
                         render_layer.clone(),
                     ));
                 }
@@ -310,6 +322,33 @@ fn spawn_zone_meshes(
             &mut meshes,
             &mut materials,
         );
+    }
+}
+
+/// Hide roof tiles for the zone the local player currently occupies (cutaway),
+/// and restore `Visibility::Inherited` for all other zones.
+///
+/// This runs every frame on `Update` so the change is immediate on zone entry/exit.
+fn update_roof_cutaway(
+    player_zone_q: Query<Option<&ZoneMembership>, With<LocalPlayer>>,
+    mut roofs: Query<(&RoofTile, &mut Visibility)>,
+) {
+    let player_zone = player_zone_q
+        .single()
+        .ok()
+        .and_then(|opt| opt.copied())
+        .map(|z| z.0)
+        .unwrap_or(OVERWORLD_ZONE);
+
+    for (roof, mut vis) in &mut roofs {
+        let desired = if roof.zone_id == player_zone {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *vis != desired {
+            *vis = desired;
+        }
     }
 }
 
