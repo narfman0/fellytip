@@ -97,6 +97,7 @@ fn main() {
             tracing_subscriber::fmt::init();
             app.add_plugins(MinimalPlugins)
                 .init_resource::<plugins::portal_renderer::PortalDebugOverlay>()
+                .init_resource::<plugins::entity_renderer::CharacterDebugOverlay>()
                 .add_plugins(
                     RemotePlugin::default()
                         .with_method("dm/spawn_npc",         fellytip_server::plugins::dm::dm_spawn_npc)
@@ -114,6 +115,7 @@ fn main() {
                         .with_method("dm/take_screenshot",        dm_take_screenshot)
                         .with_method("dm/set_camera_distance",    dm_set_camera_distance)
                         .with_method("dm/teleport_player",        dm_teleport_player)
+                        .with_method("dm/set_character_debug",    dm_set_character_debug)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -136,6 +138,7 @@ fn main() {
                     .with_method("dm/take_screenshot",            dm_take_screenshot)
                     .with_method("dm/set_camera_distance",        dm_set_camera_distance)
                     .with_method("dm/teleport_player",            dm_teleport_player)
+                    .with_method("dm/set_character_debug",        dm_set_character_debug)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
@@ -508,6 +511,28 @@ fn dm_teleport_player(
     wpos.x = x; wpos.y = y; wpos.z = z;
     tracing::info!(x, y, z, "DM teleport player (PredictedPosition)");
     Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Enable or disable the character debug overlay (gizmo sphere at every entity
+/// with `WorldPosition` so NPCs are visible even when GLB meshes aren't loaded).
+///
+/// Params: `{ "enabled": bool }`
+/// Returns `{ "ok": true, "enabled": bool }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_set_character_debug(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let enabled = params
+        .as_ref()
+        .and_then(|p| p.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| BrpError::internal("missing required param `enabled`"))?;
+
+    let mut overlay = world.resource_mut::<plugins::entity_renderer::CharacterDebugOverlay>();
+    overlay.0 = enabled;
+    tracing::info!(enabled, "DM set character debug overlay");
+    Ok(serde_json::json!({ "ok": true, "enabled": enabled }))
 }
 
 /// Set the orbit camera distance (zoom).

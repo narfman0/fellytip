@@ -35,11 +35,18 @@ use fellytip_shared::world::zone::{ZoneMembership, OVERWORLD_ZONE};
 use super::billboard_sprite::{atlas_id_for_entity, BillboardSprites};
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
 
+/// When `true`, draw a gizmo sphere at every entity with `WorldPosition` so NPCs
+/// are visible even when their GLB meshes haven't loaded yet.
+/// Toggle via the `dm/set_character_debug` BRP method.
+#[derive(Resource, Default)]
+pub struct CharacterDebugOverlay(pub bool);
+
 pub struct EntityRendererPlugin;
 
 impl Plugin for EntityRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (setup_entity_assets, setup_building_assets))
+        app.init_resource::<CharacterDebugOverlay>()
+            .add_systems(Startup, (setup_entity_assets, setup_building_assets))
             .add_systems(
                 Update,
                 (
@@ -51,6 +58,7 @@ impl Plugin for EntityRendererPlugin {
                     sync_growth_stage_scale,
                     update_zone_visibility,
                     sync_local_player_transform.in_set(ClientSet::SyncVisuals),
+                    draw_character_debug_overlay,
                 ),
             );
     }
@@ -467,6 +475,52 @@ fn sync_local_player_transform(
 ) {
     for (pred, mut transform, _char_anim) in &mut query {
         transform.translation = Vec3::new(pred.x, pred.z, pred.y);
+    }
+}
+
+type DebugOverlayItems<'a> = (
+    &'a WorldPosition,
+    Option<&'a EntityKind>,
+    Option<&'a FactionBadge>,
+    Option<&'a crate::LocalPlayer>,
+);
+
+/// Draw a gizmo sphere at every entity with `WorldPosition` when the
+/// `CharacterDebugOverlay` resource is enabled. Colour encodes entity type:
+/// - Local player → cyan
+/// - FactionNpc (Iron Wolves) → steel blue
+/// - FactionNpc (Merchant Guild) → amber
+/// - FactionNpc (Ash Covenant) → crimson
+/// - FactionNpc (Deep Tide) → teal
+/// - FactionNpc (unknown faction) → white
+/// - Wildlife → green
+/// - Other → gray
+fn draw_character_debug_overlay(
+    overlay: Res<CharacterDebugOverlay>,
+    mut gizmos: Gizmos,
+    query: Query<DebugOverlayItems>,
+) {
+    if !overlay.0 {
+        return;
+    }
+    for (pos, kind, badge, local_player) in &query {
+        let center = Vec3::new(pos.x, pos.z + 0.5, pos.y);
+        let color = if local_player.is_some() {
+            Color::srgb(0.0, 1.0, 1.0) // cyan
+        } else {
+            match kind {
+                Some(EntityKind::FactionNpc) => match badge.map(|b| b.faction_id.as_str()) {
+                    Some("iron_wolves")    => Color::srgb(0.29, 0.5, 0.65),
+                    Some("merchant_guild") => Color::srgb(0.83, 0.63, 0.09),
+                    Some("ash_covenant")   => Color::srgb(0.55, 0.1, 0.1),
+                    Some("deep_tide")      => Color::srgb(0.1, 0.55, 0.55),
+                    _                      => Color::WHITE,
+                },
+                Some(EntityKind::Wildlife) => Color::srgb(0.0, 0.8, 0.0),
+                _ => Color::srgb(0.5, 0.5, 0.5),
+            }
+        };
+        gizmos.sphere(Isometry3d::from_translation(center), 0.5, color);
     }
 }
 
