@@ -289,7 +289,7 @@ pub struct ZoneMembership(pub ZoneId);
 
 // ── Zone generation ───────────────────────────────────────────────────────────
 
-use crate::world::civilization::{Building, BuildingKind};
+use crate::world::civilization::Building;
 
 /// Generate zone graph from a list of buildings plus a seeded underground chain.
 ///
@@ -512,151 +512,9 @@ pub fn generate_zones(
     (registry, topology)
 }
 
-/// How many BuildingFloor zones does this kind produce. 0/1 = no interior zones.
-fn building_floor_count(kind: BuildingKind) -> u8 {
-    match kind {
-        BuildingKind::Tavern | BuildingKind::Barracks => 2,
-        BuildingKind::Tower => 4,
-        BuildingKind::Keep => 3,
-        _ => 0,
-    }
-}
-
-/// Produce (width, height, tiles, anchors) for a given building floor.
-fn build_floor_tiles(
-    kind: BuildingKind,
-    floor: u8,
-) -> (u16, u16, Vec<InteriorTile>, Vec<ZoneAnchor>) {
-    match kind {
-        BuildingKind::Tavern => tavern_floor(floor),
-        BuildingKind::Barracks => barracks_floor(floor),
-        BuildingKind::Tower => tower_floor(floor, 6),
-        BuildingKind::Keep => tower_floor(floor, 10),
-        _ => (0, 0, Vec::new(), Vec::new()),
-    }
-}
-
-fn tavern_floor(floor: u8) -> (u16, u16, Vec<InteriorTile>, Vec<ZoneAnchor>) {
-    let w: u16 = 8;
-    let h: u16 = 8;
-    let mut tiles = vec![InteriorTile::Floor; (w * h) as usize];
-    let mut anchors = Vec::new();
-    let stair_pos = Vec2::new(3.0, 3.0);
-    let stair_idx = (stair_pos.y as usize) * w as usize + (stair_pos.x as usize);
-    tiles[stair_idx] = InteriorTile::Stair;
-
-    match floor {
-        0 => {
-            anchors.push(ZoneAnchor {
-                name: SmolStr::new("entrance"),
-                pos: Vec2::new(0.0, 4.0),
-            });
-            anchors.push(ZoneAnchor {
-                name: SmolStr::new("stair_up_0"),
-                pos: stair_pos,
-            });
-        }
-        _ => {
-            // Upper floor: add a balcony tile + stair_down anchor.
-            let balcony_idx = 5 * w as usize + 5;
-            tiles[balcony_idx] = InteriorTile::Balcony;
-            anchors.push(ZoneAnchor {
-                name: SmolStr::new("stair_down_1"),
-                pos: stair_pos,
-            });
-        }
-    }
-
-    (w, h, tiles, anchors)
-}
-
-fn barracks_floor(floor: u8) -> (u16, u16, Vec<InteriorTile>, Vec<ZoneAnchor>) {
-    let w: u16 = 8;
-    let h: u16 = 8;
-    let mut tiles = vec![InteriorTile::Floor; (w * h) as usize];
-    let stair_pos = Vec2::new(3.0, 3.0);
-    let stair_idx = (stair_pos.y as usize) * w as usize + (stair_pos.x as usize);
-    tiles[stair_idx] = InteriorTile::Stair;
-
-    let mut anchors = Vec::new();
-    match floor {
-        0 => {
-            anchors.push(ZoneAnchor {
-                name: SmolStr::new("entrance"),
-                pos: Vec2::new(0.0, 4.0),
-            });
-            anchors.push(ZoneAnchor {
-                name: SmolStr::new("stair_up_0"),
-                pos: stair_pos,
-            });
-        }
-        _ => {
-            // Upper floor: west-wall windows (x = 0, rows 1..h-1).
-            for y in 1..(h as usize - 1) {
-                tiles[y * w as usize] = InteriorTile::Window;
-            }
-            anchors.push(ZoneAnchor {
-                name: SmolStr::new("stair_down_1"),
-                pos: stair_pos,
-            });
-        }
-    }
-    (w, h, tiles, anchors)
-}
-
-/// Tower / Keep. `size` is side length (6 for Tower, 10 for Keep battlements).
-fn tower_floor(floor: u8, size: u16) -> (u16, u16, Vec<InteriorTile>, Vec<ZoneAnchor>) {
-    // Tower always uses 6×6 for interior floors; keep uses 6×6 for interior
-    // floors and 10×10 for battlements — but the issue spec says
-    // "Keep: same as Tower but floor 3 = battlements 10×10". So interior
-    // floors are 6×6 for both; only the battlements dimension changes.
-    let is_battlement = floor >= 3; // floors 0..=2 interior, floor 3 = battlements
-    let (w, h): (u16, u16) = if is_battlement { (size, size) } else { (6, 6) };
-    let mut tiles = vec![InteriorTile::Floor; (w * h) as usize];
-    let mut anchors = Vec::new();
-
-    let stair_pos = Vec2::new(2.0, 2.0);
-    let stair_idx = (stair_pos.y as usize) * w as usize + (stair_pos.x as usize);
-    if (stair_idx) < tiles.len() {
-        tiles[stair_idx] = InteriorTile::Stair;
-    }
-
-    if floor == 0 {
-        anchors.push(ZoneAnchor {
-            name: SmolStr::new("entrance"),
-            pos: Vec2::new(0.0, w as f32 / 2.0),
-        });
-    }
-
-    if is_battlement {
-        // Roof tiles around perimeter.
-        for y in 0..h as usize {
-            for x in 0..w as usize {
-                if x == 0 || y == 0 || x == (w as usize - 1) || y == (h as usize - 1) {
-                    tiles[y * w as usize + x] = InteriorTile::Roof;
-                }
-            }
-        }
-        anchors.push(ZoneAnchor {
-            name: SmolStr::new(format!("stair_down_{floor}")),
-            pos: stair_pos,
-        });
-    } else {
-        // Regular interior floor — add both up and down stairs where applicable.
-        if floor > 0 {
-            anchors.push(ZoneAnchor {
-                name: SmolStr::new(format!("stair_down_{floor}")),
-                pos: stair_pos,
-            });
-        }
-        anchors.push(ZoneAnchor {
-            name: SmolStr::new(format!("stair_up_{floor}")),
-            pos: stair_pos,
-        });
-    }
-
-    (w, h, tiles, anchors)
-}
+// Tile generation helpers have been moved to `super::dungeon` (shared/world/dungeon.rs)
+// so both server and client can call them. Import them here for use by `generate_zones`.
+use super::dungeon::{build_floor_tiles, building_floor_count};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

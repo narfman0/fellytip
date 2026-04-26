@@ -1,4 +1,5 @@
 pub mod civilization;
+pub mod dungeon;
 pub mod ecology;
 pub mod faction;
 pub mod grid;
