@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::world::cave::{cave_z, find_cave_capital_site, generate_cave_layer};
+use crate::world::cave::{cave_z, find_cave_capital_site, generate_cave_layer, place_cave_portals};
 use crate::world::map::{TileKind, WorldMap};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -247,6 +247,7 @@ pub fn generate_underground_civilization(map: &mut WorldMap, seed: u64) -> Optio
 
     const DEPTH: u32 = 1;
     generate_cave_layer(map, seed, DEPTH);
+    place_cave_portals(map, seed, DEPTH, 3);
 
     let (ix, iy) = find_cave_capital_site(map, seed, DEPTH)?;
 

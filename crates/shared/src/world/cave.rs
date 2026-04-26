@@ -132,6 +132,75 @@ pub fn find_cave_capital_site(map: &WorldMap, seed: u64, depth: u32) -> Option<(
         .map(|(_, &pos)| pos)
 }
 
+/// Place `count` portal tiles distributed across the cave layer at `depth`.
+///
+/// Subdivides the map into a grid of cells and picks one open cave floor tile
+/// per cell (up to `count` cells). Sets the cave layer tile and the
+/// corresponding surface tile at the same (ix, iy) to `TileKind::CavePortal`.
+pub fn place_cave_portals(map: &mut WorldMap, seed: u64, depth: u32, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let width = map.width;
+    let height = map.height;
+    let cave_z_val = cave_z(depth);
+
+    let cells_per_axis = (count as f64).sqrt().ceil() as usize + 1;
+    let cell_w = (width + cells_per_axis - 1) / cells_per_axis;
+    let cell_h = (height + cells_per_axis - 1) / cells_per_axis;
+
+    let portal_seed = seed.wrapping_add(0xFEED_FACE_CAFE_BABE);
+    let mut placed = 0usize;
+
+    'outer: for cy in 0..cells_per_axis {
+        for cx in 0..cells_per_axis {
+            if placed >= count {
+                break 'outer;
+            }
+            let x0 = cx * cell_w;
+            let y0 = cy * cell_h;
+            let x1 = (x0 + cell_w).min(width);
+            let y1 = (y0 + cell_h).min(height);
+
+            let cell_idx = cy * cells_per_axis + cx;
+            let cell_seed = portal_seed.wrapping_add((cell_idx as u64).wrapping_mul(0x9E3779B97F4A7C15));
+            let rand_off_x = (cell_seed.wrapping_mul(2654435761) >> 32) as usize;
+            let rand_off_y = (cell_seed.wrapping_mul(805459861) >> 32) as usize;
+            let span_x = if x1 > x0 { x1 - x0 } else { 1 };
+            let span_y = if y1 > y0 { y1 - y0 } else { 1 };
+            let start_x = x0 + rand_off_x % span_x;
+            let start_y = y0 + rand_off_y % span_y;
+
+            'cell: for dy in 0..span_y {
+                for dx in 0..span_x {
+                    let ix = x0 + (start_x - x0 + dx) % span_x;
+                    let iy = y0 + (start_y - y0 + dy) % span_y;
+                    if !is_cave_open(map, ix, iy, depth) {
+                        continue;
+                    }
+                    let idx = ix + iy * width;
+                    if let Some(layer) = map.columns[idx]
+                        .layers
+                        .iter_mut()
+                        .find(|l| (l.z_top - cave_z_val).abs() < 0.1 && l.walkable)
+                    {
+                        layer.kind = TileKind::CavePortal;
+                    }
+                    if let Some(surface_layer) = map.columns[idx]
+                        .layers
+                        .iter_mut()
+                        .find(|l| l.is_surface_kind() && l.walkable)
+                    {
+                        surface_layer.kind = TileKind::CavePortal;
+                    }
+                    placed += 1;
+                    break 'cell;
+                }
+            }
+        }
+    }
+}
+
 pub fn is_cave_open(map: &WorldMap, ix: usize, iy: usize, depth: u32) -> bool {
     if ix >= map.width || iy >= map.height {
         return false;
@@ -228,6 +297,42 @@ mod tests {
         assert!(!is_cave_open(&map, 1, 0, 1));
         assert!(is_cave_open(&map, 2, 0, 1));
         assert!(is_cave_open(&map, 3, 0, 1));
+    }
+
+    #[test]
+    fn place_cave_portals_creates_portal_tiles() {
+        let mut map = empty_map(64, 64);
+        generate_cave_layer(&mut map, 42, 1);
+        place_cave_portals(&mut map, 42, 1, 3);
+        let z = cave_z(1);
+        let portal_count = map.columns.iter().flat_map(|c| c.layers.iter()).filter(|l| {
+            l.kind == TileKind::CavePortal && (l.z_top - z).abs() < 0.1
+        }).count();
+        assert!(portal_count >= 1, "expected >=1 cave portal tiles at cave z, got {portal_count}");
+    }
+
+    #[test]
+    fn portal_exists_on_surface_and_underground() {
+        use crate::world::map::{MAP_WIDTH, MAP_HEIGHT, generate_map};
+        let mut map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        generate_cave_layer(&mut map, 42, 1);
+        place_cave_portals(&mut map, 42, 1, 3);
+        let cave_z_val = cave_z(1);
+        let mut found_pair = false;
+        for i in 0..map.columns.len() {
+            let col = &map.columns[i];
+            let has_cave_portal = col.layers.iter().any(|l| {
+                l.kind == TileKind::CavePortal && (l.z_top - cave_z_val).abs() < 0.1
+            });
+            let has_surface_portal = col.layers.iter().any(|l| {
+                l.kind == TileKind::CavePortal && l.z_top >= 0.0
+            });
+            if has_cave_portal && has_surface_portal {
+                found_pair = true;
+                break;
+            }
+        }
+        assert!(found_pair, "expected at least one (ix,iy) with CavePortal at both z=0 and z=cave_z");
     }
 
     #[test]

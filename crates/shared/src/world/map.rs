@@ -95,6 +95,7 @@ pub enum TileKind {
     CaveRiver,
     // ── Meta ─────────────────────────────────────────────────────────────────
     Void,
+    CavePortal,
 }
 
 impl TileKind {
@@ -123,6 +124,7 @@ impl TileKind {
         Self::LavaFloor,
         Self::CaveRiver,
         Self::Void,
+        Self::CavePortal,
     ];
 
 }
