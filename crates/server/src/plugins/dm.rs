@@ -26,11 +26,8 @@ use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use uuid::Uuid;
-
 use fellytip_shared::{
-    combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
-    components::{EntityKind, GrowthStage, Health, WorldPosition},
+    components::{GrowthStage, WorldPosition},
     world::{
         faction::FactionId,
         population::WAR_PARTY_SIZE,
@@ -38,11 +35,10 @@ use fellytip_shared::{
 };
 
 use crate::plugins::{
-    ai::{BattleHistory, CurrentGoal, FactionMember, FactionNpcRank, FactionPopulationState, FactionRegistry, HomePosition, UndergroundPressure, WarPartyMember},
-    combat::{CombatParticipant, ExperienceReward},
+    ai::{BattleHistory, FactionMember, FactionPopulationState, FactionRegistry, UndergroundPressure, WarPartyMember},
+    ai::population::faction_npc_bundle,
     ecology::EcologyState,
 };
-use fellytip_shared::world::faction::NpcRank;
 
 // ── Parameter helpers ─────────────────────────────────────────────────────────
 
@@ -80,24 +76,8 @@ pub fn dm_spawn_npc(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
 
     let pos = WorldPosition { x, y, z };
     let entity = world.spawn((
-        pos.clone(),
-        Health { current: 20, max: 20 },
-        CombatParticipant {
-            id: CombatantId(Uuid::new_v4()),
-            interrupt_stack: InterruptStack::default(),
-            class: CharacterClass::Warrior,
-            level,
-            armor_class: 11,
-            strength: 10,
-            dexterity: 10,
-            constitution: 10,
-        },
-        ExperienceReward(50),
-        FactionMember(FactionId(faction.as_str().into())),
-        FactionNpcRank(NpcRank::Grunt),
-        CurrentGoal(None),
-        HomePosition(pos),
-        EntityKind::FactionNpc,
+        faction_npc_bundle(FactionId(faction.as_str().into()), pos, level),
+        // Mark as instant adult so the NPC is immediately combat-ready.
         GrowthStage(1.0),
     )).id();
 

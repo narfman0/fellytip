@@ -90,6 +90,44 @@ fn npc_spawn_offsets(n: usize) -> Vec<(f32, f32)> {
     (0..n).map(|i| ((i % 3) as f32 * 2.0, (i / 3) as f32 * 2.0)).collect()
 }
 
+/// Core ECS bundle for a faction NPC — shared by both `spawn_faction_npcs` and
+/// `dm_spawn_npc` so the stat block stays in sync.
+///
+/// Callers are responsible for inserting any additional components they need:
+/// - `spawn_faction_npcs` also inserts `NavPath`, `NavReplanTimer`, `FactionBadge`
+/// - `dm_spawn_npc` also inserts `GrowthStage(1.0)` (instant adult)
+///
+/// `level` is clamped to `u32` at the call site (DM handler receives `u32`);
+/// we store it as `u32` here matching `CombatParticipant`.
+pub(crate) fn faction_npc_bundle(
+    faction_id: FactionId,
+    pos: WorldPosition,
+    level: u32,
+) -> impl Bundle {
+    (
+        pos.clone(),
+        Health { current: 20, max: 20 },
+        crate::plugins::combat::CombatParticipant {
+            id: CombatantId(Uuid::new_v4()),
+            interrupt_stack: InterruptStack::default(),
+            class: CharacterClass::Warrior,
+            level,
+            // Leather armour, DEX 10 → AC 11 (SRD: 11 + DEX mod)
+            armor_class: 11,
+            strength: 10,
+            dexterity: 10,
+            constitution: 10,
+        },
+        // CR 1/4 = 50 XP (docs/dnd5e-srd-reference.md)
+        crate::plugins::combat::ExperienceReward(50),
+        FactionMember(faction_id.clone()),
+        FactionNpcRank(NpcRank::Grunt),
+        CurrentGoal(None),
+        HomePosition(pos),
+        EntityKind::FactionNpc,
+    )
+}
+
 // ── Public startup systems ────────────────────────────────────────────────────
 
 /// Seed the faction registry with four canonical factions.
@@ -182,27 +220,8 @@ pub fn spawn_faction_npcs(
                 z: settlement.z,
             };
             commands.spawn((
-                pos.clone(),
-                Health { current: 20, max: 20 },
-                CombatParticipant {
-                    id: CombatantId(Uuid::new_v4()),
-                    interrupt_stack: InterruptStack::default(),
-                    class: CharacterClass::Warrior,
-                    level: 1,
-                    // Leather armour, DEX 10 → AC 11 (SRD: 11 + DEX mod)
-                    armor_class: 11,
-                    strength: 10,
-                    dexterity: 10,
-                    constitution: 10,
-                },
-                // CR 1/4 = 50 XP (docs/dnd5e-srd-reference.md)
-                ExperienceReward(50),
-                FactionMember(faction.id.clone()),
-                FactionNpcRank(NpcRank::Grunt),
+                faction_npc_bundle(faction.id.clone(), pos, 1),
                 FactionBadge { faction_id: faction.id.0.to_string(), rank: NpcRank::Grunt },
-                CurrentGoal(None),
-                HomePosition(pos),
-                EntityKind::FactionNpc,
                 NavPath::default(),
                 NavReplanTimer::default(),
             ));
