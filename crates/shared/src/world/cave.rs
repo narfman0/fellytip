@@ -99,6 +99,39 @@ pub fn generate_cave_layer(map: &mut WorldMap, seed: u64, depth: u32) {
     }
 }
 
+/// Find a suitable capital site within the cave layer at `depth`.
+///
+/// Scans all open cave floor tiles and returns the tile closest to the
+/// centroid of all open tiles (a cheap "center of mass" approximation),
+/// seeded for tie-breaking. Returns `None` if no open tiles exist.
+pub fn find_cave_capital_site(map: &WorldMap, seed: u64, depth: u32) -> Option<(usize, usize)> {
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    for iy in 0..map.height {
+        for ix in 0..map.width {
+            if is_cave_open(map, ix, iy, depth) {
+                open.push((ix, iy));
+            }
+        }
+    }
+    if open.is_empty() {
+        return None;
+    }
+    let sum_x: u64 = open.iter().map(|&(x, _)| x as u64).sum();
+    let sum_y: u64 = open.iter().map(|&(_, y)| y as u64).sum();
+    let cx = (sum_x / open.len() as u64) as usize;
+    let cy = (sum_y / open.len() as u64) as usize;
+    let tiebreak = seed.wrapping_mul(0x9E3779B97F4A7C15);
+    open.iter()
+        .enumerate()
+        .min_by_key(|&(i, &(ix, iy))| {
+            let dx = ix as i64 - cx as i64;
+            let dy = iy as i64 - cy as i64;
+            let dist_sq = dx * dx + dy * dy;
+            (dist_sq, (i as u64).wrapping_mul(tiebreak) as i64)
+        })
+        .map(|(_, &pos)| pos)
+}
+
 pub fn is_cave_open(map: &WorldMap, ix: usize, iy: usize, depth: u32) -> bool {
     if ix >= map.width || iy >= map.height {
         return false;

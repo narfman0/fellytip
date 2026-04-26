@@ -4,7 +4,7 @@
 //! Call order expected by the server:
 //! ```text
 //! let map        = generate_map(seed);
-//! let civs       = generate_settlements(&map, seed);
+//! let civs       = generate_settlements_full(&mut map, seed);
 //! assign_territories(&map, &civs);
 //! generate_roads(&mut map, &civs);
 //! let buildings  = generate_buildings(&civs, &map, seed);
@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
+use crate::world::cave::{cave_z, find_cave_capital_site, generate_cave_layer};
 use crate::world::map::{TileKind, WorldMap};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -91,6 +92,13 @@ pub struct Building {
 #[derive(Resource, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Buildings(pub Vec<Building>);
 
+/// A procedurally generated civilization grouping one or more settlements.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Civilization {
+    pub name: SmolStr,
+    pub settlements: Vec<Settlement>,
+}
+
 /// Territory map: one optional settlement-index per tile column (flat row-major).
 ///
 /// `territory[ix + iy * MAP_WIDTH] = Some(settlement_idx)` means the tile
@@ -126,13 +134,26 @@ const GRID_CELL: usize = 64;
 /// Fraction of cells that become Capitals (~1 in 8).
 const CAPITAL_PROB: f32 = 0.12;
 
-/// Generate all settlements deterministically from `seed`.
+/// Generate all surface settlements deterministically from `seed`.
 ///
 /// Uses a Poisson-disk grid approximation: divides the map into
 /// `GRID_CELL×GRID_CELL` cells, picks the most habitable walkable tile in each,
 /// rejects candidates too close to existing settlements.
 pub fn generate_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
     surface_settlements(map, seed)
+}
+
+/// Generate surface and underground settlements, stamping cave layers into `map`.
+///
+/// Extends the surface settlement list with exactly one underground capital.
+/// The map is mutated to add depth-1 cave layers required for cave building
+/// placement and movement queries.
+pub fn generate_settlements_full(map: &mut WorldMap, seed: u64) -> Vec<Settlement> {
+    let mut settlements = surface_settlements(map, seed);
+    if let Some(civ) = generate_underground_civilization(map, seed) {
+        settlements.extend(civ.settlements);
+    }
+    settlements
 }
 
 fn surface_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
@@ -217,6 +238,43 @@ fn surface_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
     }
 
     placed
+}
+
+/// Generate one underground civilization with a capital settlement at depth 1.
+pub fn generate_underground_civilization(map: &mut WorldMap, seed: u64) -> Option<Civilization> {
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    const DEPTH: u32 = 1;
+    generate_cave_layer(map, seed, DEPTH);
+
+    let (ix, iy) = find_cave_capital_site(map, seed, DEPTH)?;
+
+    let z = cave_z(DEPTH);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(0xCAFE_BABE_DEAD_BEEFu64));
+    let id = deterministic_uuid(&mut rng);
+
+    let name_idx = seed % 4;
+    let civ_name = match name_idx {
+        0 => SmolStr::new("Underdark Realm"),
+        1 => SmolStr::new("The Deep Dominion"),
+        2 => SmolStr::new("Subterran Empire"),
+        _ => SmolStr::new("Cavern Sovereignty"),
+    };
+
+    let capital = Settlement {
+        id,
+        name: SmolStr::new("Underground Capital"),
+        kind: SettlementKind::Capital,
+        x: ix as f32 + 0.5,
+        y: iy as f32 + 0.5,
+        z,
+    };
+
+    Some(Civilization {
+        name: civ_name,
+        settlements: vec![capital],
+    })
 }
 
 // ── Territory assignment ───────────────────────────────────────────────────────
@@ -435,23 +493,33 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
     for settlement in settlements {
         let cx = settlement.x as u32;
         let cy = settlement.y as u32;
+        let is_underground = settlement.z < 0.0;
 
         // Track occupied tiles across this settlement to prevent overlap.
         let mut occupied: HashSet<(u32, u32)> = HashSet::new();
         // Reserve the settlement center tile.
         occupied.insert((cx, cy));
 
+        let buildable = |map: &WorldMap, tx: u32, ty: u32| {
+            if is_underground {
+                is_cave_buildable(map, tx, ty)
+            } else {
+                is_tile_buildable(map, tx, ty)
+            }
+        };
+        let make = |rng: &mut _, sid, kind, tx, ty, map: &WorldMap| {
+            if is_underground {
+                make_cave_building(rng, sid, kind, tx, ty, map)
+            } else {
+                make_building(rng, sid, kind, tx, ty, map)
+            }
+        };
+
         match settlement.kind {
             SettlementKind::Capital => {
                 // Always place a fountain at the exact center.
-                if is_tile_buildable(map, cx, cy) {
-                    all.push(make_building(
-                        &mut rng,
-                        settlement.id,
-                        CAPITAL_CENTER,
-                        cx, cy,
-                        map,
-                    ));
+                if buildable(map, cx, cy) {
+                    all.push(make(&mut rng, settlement.id, CAPITAL_CENTER, cx, cy, map));
                 }
 
                 // Place a CapitalTower offset north-west from the settlement center
@@ -459,9 +527,9 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                 // market stalls placed in the inner rings.
                 let tower_tx = cx.saturating_sub(8);
                 let tower_ty = cy.saturating_sub(8);
-                if !occupied.contains(&(tower_tx, tower_ty)) && is_tile_buildable(map, tower_tx, tower_ty) {
+                if !occupied.contains(&(tower_tx, tower_ty)) && buildable(map, tower_tx, tower_ty) {
                     occupied.insert((tower_tx, tower_ty));
-                    all.push(make_building(
+                    all.push(make(
                         &mut rng,
                         settlement.id,
                         BuildingKind::CapitalTower,
@@ -472,7 +540,7 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                 }
 
                 let count = 7 + (rng.random::<u32>() % 6) as usize; // 7–12
-                place_ring_buildings(
+                place_ring_buildings_ex(
                     &mut rng,
                     &mut all,
                     &mut occupied,
@@ -481,17 +549,18 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                     CAPITAL_POOL,
                     CAPITAL_RADII,
                     count,
+                    is_underground,
                 );
             }
 
             SettlementKind::Town => {
                 // Always place a campfire at the center.
-                if is_tile_buildable(map, cx, cy) {
-                    all.push(make_building(&mut rng, settlement.id, TOWN_CENTER, cx, cy, map));
+                if buildable(map, cx, cy) {
+                    all.push(make(&mut rng, settlement.id, TOWN_CENTER, cx, cy, map));
                 }
 
                 let count = 3 + (rng.random::<u32>() % 3) as usize; // 3–5
-                place_ring_buildings(
+                place_ring_buildings_ex(
                     &mut rng,
                     &mut all,
                     &mut occupied,
@@ -500,6 +569,7 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                     TOWN_POOL,
                     TOWN_RADII,
                     count,
+                    is_underground,
                 );
             }
         }
@@ -512,7 +582,7 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
 }
 
 /// Place up to `count` buildings in concentric rings around the settlement center.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, dead_code)]
 fn place_ring_buildings(
     rng: &mut impl rand::RngExt,
     output: &mut Vec<Building>,
@@ -522,6 +592,22 @@ fn place_ring_buildings(
     pool: &[BuildingKind],
     radii: &[u32],
     count: usize,
+) {
+    place_ring_buildings_ex(rng, output, occupied, settlement, map, pool, radii, count, false);
+}
+
+/// Extended ring-building placement supporting both surface and underground settlements.
+#[allow(clippy::too_many_arguments)]
+fn place_ring_buildings_ex(
+    rng: &mut impl rand::RngExt,
+    output: &mut Vec<Building>,
+    occupied: &mut std::collections::HashSet<(u32, u32)>,
+    settlement: &Settlement,
+    map: &WorldMap,
+    pool: &[BuildingKind],
+    radii: &[u32],
+    count: usize,
+    is_underground: bool,
 ) {
     use std::f32::consts::TAU;
 
@@ -553,11 +639,21 @@ fn place_ring_buildings(
     for (tx, ty) in candidates {
         if placed >= count { break; }
         if occupied.contains(&(tx, ty)) { continue; }
-        if !is_tile_buildable(map, tx, ty) { continue; }
+        let ok = if is_underground {
+            is_cave_buildable(map, tx, ty)
+        } else {
+            is_tile_buildable(map, tx, ty)
+        };
+        if !ok { continue; }
         occupied.insert((tx, ty));
         let kind = pool[pool_idx % pool.len()];
         pool_idx += 1;
-        output.push(make_building(rng, settlement.id, kind, tx, ty, map));
+        let b = if is_underground {
+            make_cave_building(rng, settlement.id, kind, tx, ty, map)
+        } else {
+            make_building(rng, settlement.id, kind, tx, ty, map)
+        };
+        output.push(b);
         placed += 1;
     }
 }
@@ -567,6 +663,16 @@ fn is_tile_buildable(map: &WorldMap, tx: u32, ty: u32) -> bool {
     if tx as usize >= map.width || ty as usize >= map.height { return false; }
     let col = map.column(tx as usize, ty as usize);
     col.layers.iter().any(|l| l.is_surface_kind() && l.walkable)
+}
+
+/// Returns `true` if tile `(tx, ty)` has a walkable CaveFloor (or CrystalCave) layer.
+/// LavaFloor and CaveRiver are excluded — buildings cannot be placed on them.
+fn is_cave_buildable(map: &WorldMap, tx: u32, ty: u32) -> bool {
+    if tx as usize >= map.width || ty as usize >= map.height { return false; }
+    let col = map.column(tx as usize, ty as usize);
+    col.layers.iter().any(|l| {
+        l.walkable && matches!(l.kind, TileKind::CaveFloor | TileKind::CrystalCave)
+    })
 }
 
 /// Construct a [`Building`] at the given tile position, sampling the surface Z.
@@ -583,6 +689,33 @@ fn make_building(
         .layers
         .iter()
         .filter(|l| l.is_surface_kind() && l.walkable)
+        .map(|l| l.z_top)
+        .fold(f32::NEG_INFINITY, f32::max);
+    Building {
+        id: deterministic_uuid(rng),
+        settlement_id,
+        kind,
+        tx,
+        ty,
+        z,
+        rotation: (rng.random::<u8>() % 4),
+    }
+}
+
+/// Construct a [`Building`] at the given tile position, sampling the cave layer Z.
+fn make_cave_building(
+    rng: &mut impl rand::RngExt,
+    settlement_id: Uuid,
+    kind: BuildingKind,
+    tx: u32,
+    ty: u32,
+    map: &WorldMap,
+) -> Building {
+    let z = map
+        .column(tx as usize, ty as usize)
+        .layers
+        .iter()
+        .filter(|l| l.walkable && matches!(l.kind, TileKind::CaveFloor | TileKind::CrystalCave))
         .map(|l| l.z_top)
         .fold(f32::NEG_INFINITY, f32::max);
     Building {
@@ -706,9 +839,8 @@ mod tests {
 
     #[test]
     fn roads_are_written_to_map() {
-        let map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
+        let mut map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 5);
-        let mut map = map;
         generate_roads(&mut map, &settlements);
 
         let road_count = map.road_tiles.iter().filter(|&&r| r).count();
@@ -719,10 +851,11 @@ mod tests {
     fn min_settlement_distance_respected() {
         let map = generate_map(3, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 3);
-        for i in 0..settlements.len() {
-            for j in (i + 1)..settlements.len() {
-                let si = &settlements[i];
-                let sj = &settlements[j];
+        let surface: Vec<_> = settlements.iter().filter(|s| s.z >= 0.0).collect();
+        for i in 0..surface.len() {
+            for j in (i + 1)..surface.len() {
+                let si = surface[i];
+                let sj = surface[j];
                 let dx = si.x - sj.x;
                 let dy = si.y - sj.y;
                 let dist = (dx * dx + dy * dy).sqrt();
@@ -820,7 +953,7 @@ mod tests {
         let settlements = generate_settlements(&map, 42);
         let buildings = generate_buildings(&settlements, &map, 42);
 
-        for s in settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Capital)) {
+        for s in settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Capital) && s.z >= 0.0) {
             let count = buildings.iter().filter(|b| b.settlement_id == s.id).count();
             // +1 for the center fountain, +1 for the CapitalTower = 9–14 total
             assert!(
@@ -867,10 +1000,9 @@ mod tests {
 
     #[test]
     fn apply_building_tiles_marks_impassable() {
-        let map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
+        let mut map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 5);
         let buildings = generate_buildings(&settlements, &map, 5);
-        let mut map = map;
         apply_building_tiles(&buildings, &mut map);
 
         assert!(map.buildings_stamped, "buildings_stamped must be true after apply");
@@ -899,10 +1031,9 @@ mod tests {
     #[test]
     fn tower_stair_layers_are_reachable() {
         use crate::world::map::STEP_HEIGHT;
-        let map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
+        let mut map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 5);
         let buildings = generate_buildings(&settlements, &map, 5);
-        let mut map = map;
         apply_building_tiles(&buildings, &mut map);
 
         let tower = buildings.iter().find(|b| b.kind == BuildingKind::CapitalTower);
@@ -921,6 +1052,48 @@ mod tests {
                 z = layer.z_top;
             }
         }
+    }
+
+    #[test]
+    fn underground_civilization_has_capital() {
+        let mut map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements_full(&mut map, 42);
+        let underground_capitals: Vec<_> = settlements
+            .iter()
+            .filter(|s| matches!(s.kind, SettlementKind::Capital) && s.z < 0.0)
+            .collect();
+        assert_eq!(
+            underground_capitals.len(), 1,
+            "expected exactly 1 underground capital, got {}", underground_capitals.len()
+        );
+    }
+
+    #[test]
+    fn underground_capital_is_at_negative_z() {
+        let mut map = generate_map(7, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements_full(&mut map, 7);
+        let cap = settlements
+            .iter()
+            .find(|s| matches!(s.kind, SettlementKind::Capital) && s.z < 0.0)
+            .expect("should have an underground capital");
+        assert!(cap.z < 0.0, "underground capital z={} should be negative", cap.z);
+        assert!(
+            (cap.z - crate::world::cave::cave_z(1)).abs() < 0.5,
+            "underground capital z={} should be near cave depth 1 ({})", cap.z, crate::world::cave::cave_z(1)
+        );
+    }
+
+    #[test]
+    fn underground_capital_has_buildings() {
+        let mut map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements_full(&mut map, 42);
+        let buildings = generate_buildings(&settlements, &map, 42);
+        let cap = settlements
+            .iter()
+            .find(|s| matches!(s.kind, SettlementKind::Capital) && s.z < 0.0)
+            .expect("should have an underground capital");
+        let count = buildings.iter().filter(|b| b.settlement_id == cap.id).count();
+        assert!(count >= 1, "underground capital should have at least 1 building, got {count}");
     }
 
 }
