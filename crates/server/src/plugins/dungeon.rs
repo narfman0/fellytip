@@ -120,9 +120,9 @@ fn tick_boss_phase_transitions(
             0.0
         };
 
-        let new_phase = if pct <= 0.25 {
+        let new_phase = if pct <= 1.0 / 3.0 {
             BossPhase::Phase3
-        } else if pct <= 0.50 {
+        } else if pct <= 2.0 / 3.0 {
             BossPhase::Phase2
         } else {
             BossPhase::Phase1
@@ -152,40 +152,31 @@ mod tests {
     }
 
     #[test]
-    fn phase1_above_50_pct() {
-        // 300/500 = 60 % → Phase1
-        assert_eq!(
-            phase_for_hp(&health(300, 500)),
-            BossPhase::Phase1
-        );
+    fn phase1_above_two_thirds() {
+        // 401/600 ≈ 66.8 % → Phase1 (less than 1/3 HP lost)
+        assert_eq!(phase_for_hp(&health(401, 600)), BossPhase::Phase1);
+        // 700/900 ≈ 77.8 % → Phase1
+        assert_eq!(phase_for_hp(&health(700, 900)), BossPhase::Phase1);
     }
 
     #[test]
-    fn phase2_between_25_and_50_pct() {
-        // 200/500 = 40 % → Phase2
-        assert_eq!(
-            phase_for_hp(&health(200, 500)),
-            BossPhase::Phase2
-        );
-        // Exactly 50 % → Phase2 (boundary inclusive)
-        assert_eq!(
-            phase_for_hp(&health(250, 500)),
-            BossPhase::Phase2
-        );
+    fn phase2_between_one_third_and_two_thirds() {
+        // 300/600 = 50 % → Phase2
+        assert_eq!(phase_for_hp(&health(300, 600)), BossPhase::Phase2);
+        // Exactly 2/3 boundary (400/600) is inclusive → Phase2
+        assert_eq!(phase_for_hp(&health(400, 600)), BossPhase::Phase2);
+        // Just above 2/3 → Phase1
+        assert_eq!(phase_for_hp(&health(401, 600)), BossPhase::Phase1);
     }
 
     #[test]
-    fn phase3_below_25_pct() {
-        // 100/500 = 20 % → Phase3
-        assert_eq!(
-            phase_for_hp(&health(100, 500)),
-            BossPhase::Phase3
-        );
-        // Exactly 25 % → Phase3 (boundary inclusive)
-        assert_eq!(
-            phase_for_hp(&health(125, 500)),
-            BossPhase::Phase3
-        );
+    fn phase3_below_one_third() {
+        // 150/600 = 25 % → Phase3 (more than 2/3 HP lost)
+        assert_eq!(phase_for_hp(&health(150, 600)), BossPhase::Phase3);
+        // Exactly 1/3 boundary (200/600) is inclusive → Phase3
+        assert_eq!(phase_for_hp(&health(200, 600)), BossPhase::Phase3);
+        // Just above 1/3 → Phase2
+        assert_eq!(phase_for_hp(&health(201, 600)), BossPhase::Phase2);
     }
 
     #[test]
@@ -202,9 +193,9 @@ mod tests {
         } else {
             0.0
         };
-        if pct <= 0.25 {
+        if pct <= 1.0 / 3.0 {
             BossPhase::Phase3
-        } else if pct <= 0.50 {
+        } else if pct <= 2.0 / 3.0 {
             BossPhase::Phase2
         } else {
             BossPhase::Phase1
