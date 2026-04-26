@@ -6694,6 +6694,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "color_quant",
+ "eframe",
  "fellytip-shared",
  "image",
  "reqwest",
@@ -6704,6 +6705,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

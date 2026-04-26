@@ -3,6 +3,14 @@ name    = "sprite_gen"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "sprite_gen"
+path = "src/main.rs"
+
+[[bin]]
+name = "sprite_studio"
+path = "src/ui_main.rs"
+
 [dependencies]
 fellytip-shared = { workspace = true }
 anyhow          = { workspace = true }
@@ -13,9 +21,11 @@ serde_json      = { workspace = true }
 smol_str        = { workspace = true }
 image           = { workspace = true }
 ron             = { workspace = true }
-color_quant     = { workspace = true }
-reqwest         = { workspace = true }
-base64          = "0.22"
+color_quant        = { workspace = true }
+reqwest            = { workspace = true }
+base64             = "0.22"
+eframe             = { version = "0.33", default-features = false, features = ["glow", "default_fonts"] }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

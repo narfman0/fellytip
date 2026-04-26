@@ -37,6 +37,14 @@ impl OpenAiDalleGenerator {
                  or keep the default --backend mock."
             )
         })?;
+        Self::from_key(api_key)
+    }
+
+    /// Construct a backend from an explicit API key (e.g. from a UI field).
+    pub fn from_key(api_key: String) -> Result<Self> {
+        if api_key.is_empty() {
+            return Err(anyhow!("API key is empty"));
+        }
         let endpoint = std::env::var("SPRITE_GEN_ENDPOINT")
             .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
         let model = std::env::var("SPRITE_GEN_MODEL")
