@@ -64,6 +64,7 @@ impl Plugin for EntityRendererPlugin {
                     spawn_building_visuals,
                     apply_faction_tint,
                     flicker_lantern_lights,
+                    occlude_fade_system,
                     sync_remote_transforms,
                     sync_growth_stage_scale,
                     update_zone_visibility,
@@ -84,6 +85,10 @@ fn configure_debug_gizmos(mut store: ResMut<GizmoConfigStore>) {
 struct LanternFlicker {
     phase: f32,
 }
+
+/// Marker for wall panels that should fade when they occlude the player's view.
+#[derive(Component)]
+struct OccludeFade;
 
 // ── Assets ────────────────────────────────────────────────────────────────────
 
@@ -124,6 +129,7 @@ struct BuildingVisual;
 #[derive(Resource)]
 struct TowerMaterials {
     wall_mat: Handle<StandardMaterial>,
+    wall_fade_mat: Handle<StandardMaterial>,
     roof_mat: Handle<StandardMaterial>,
 }
 
@@ -241,12 +247,23 @@ fn setup_tower_assets(
         metallic: 0.0,
         ..default()
     });
+    let stone_fade_tex = generate_stone_texture(&mut images);
+    let wall_fade_mat = materials.add(StandardMaterial {
+        base_color_texture: Some(stone_fade_tex),
+        base_color: Color::srgba(1.0, 1.0, 1.0, 0.15),
+        alpha_mode: AlphaMode::Blend,
+        perceptual_roughness: 0.9,
+        metallic: 0.0,
+        cull_mode: None,
+        double_sided: true,
+        ..default()
+    });
     let roof_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.3, 0.28, 0.25),
         perceptual_roughness: 0.85,
         ..default()
     });
-    commands.insert_resource(TowerMaterials { wall_mat, roof_mat });
+    commands.insert_resource(TowerMaterials { wall_mat, wall_fade_mat, roof_mat });
 }
 
 fn tower_params(kind: BuildingKind, id_bytes: &[u8; 16]) -> (u32, f32) {
@@ -347,7 +364,7 @@ fn build_tiled_box_mesh(w: f32, h: f32, d: f32, tile_size: f32) -> Mesh {
     mesh
 }
 
-fn spawn_tower_mesh(
+fn spawn_hollow_tower(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     wx: f32,
@@ -361,19 +378,55 @@ fn spawn_tower_mesh(
     const TAPER: f32 = 0.06;
     const FLOOR_H: f32 = 3.0;
     const TILE_SIZE: f32 = 2.0;
+    const WALL_T: f32 = 0.2;
 
     for floor in 0..floors {
         let w = (base_width * (1.0 - TAPER * floor as f32)).max(1.0);
+        let hw = w * 0.5;
         let center_y = base_z + floor as f32 * FLOOR_H + FLOOR_H * 0.5;
-        let mesh = meshes.add(build_tiled_box_mesh(w, FLOOR_H, w, TILE_SIZE));
-        commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(tower_mats.wall_mat.clone()),
-            Transform::from_translation(Vec3::new(wx, center_y, wy)),
-            BuildingVisual,
-        ));
+
+        // North (+Z), South (-Z, entrance on floor 0), East (+X), West (-X)
+        let panel_specs: [(f32, f32, bool); 4] = [
+            (0.0,   hw,  false),
+            (0.0,  -hw,  true ),  // south = entrance
+            ( hw,  0.0,  false),
+            (-hw,  0.0,  false),
+        ];
+
+        for (dx, dz, is_south) in panel_specs {
+            if is_south && floor == 0 { continue; }
+            let (mesh_w, mesh_d) = if dz.abs() > dx.abs() {
+                (w, WALL_T)
+            } else {
+                (WALL_T, w)
+            };
+            let mesh = meshes.add(build_tiled_box_mesh(mesh_w, FLOOR_H, mesh_d, TILE_SIZE));
+            commands.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(tower_mats.wall_mat.clone()),
+                Transform::from_translation(Vec3::new(wx + dx, center_y, wy + dz)),
+                BuildingVisual,
+                OccludeFade,
+            ));
+        }
+
+        if floor > 0 {
+            let slab_y = base_z + floor as f32 * FLOOR_H;
+            let slab_mesh = meshes.add(build_tiled_box_mesh(
+                (w - WALL_T * 2.0).max(0.2),
+                0.15,
+                (w - WALL_T * 2.0).max(0.2),
+                TILE_SIZE,
+            ));
+            commands.spawn((
+                Mesh3d(slab_mesh),
+                MeshMaterial3d(tower_mats.roof_mat.clone()),
+                Transform::from_translation(Vec3::new(wx, slab_y, wy)),
+                BuildingVisual,
+            ));
+        }
     }
-    // Battlement cap: slightly wider flat slab on top
+
     let top_w = (base_width * (1.0 - TAPER * floors as f32) * 1.15).max(1.2);
     let cap_y = base_z + floors as f32 * FLOOR_H + 0.4;
     let cap_mesh = meshes.add(build_tiled_box_mesh(top_w, 0.8, top_w, TILE_SIZE));
@@ -410,7 +463,7 @@ fn spawn_building_visuals(
         let rotation = Quat::from_rotation_y(b.rotation as f32 * FRAC_PI_2);
 
         if matches!(b.kind, BuildingKind::CapitalTower | BuildingKind::Tower | BuildingKind::Keep | BuildingKind::Tavern | BuildingKind::Barracks) {
-            spawn_tower_mesh(&mut commands, &mut meshes, wx, wy, b.z, b.kind, b.id.as_bytes(), &tower_mats);
+            spawn_hollow_tower(&mut commands, &mut meshes, wx, wy, b.z, b.kind, b.id.as_bytes(), &tower_mats);
             continue;
         }
 
@@ -510,6 +563,41 @@ fn flicker_lantern_lights(
         let fast = f32::sin(t * 17.1 + flicker.phase * 1.9) * 0.06;
         let scale = (1.0 + slow + fast).clamp(0.7, 1.3);
         light.intensity = 1_200.0 * scale;
+    }
+}
+
+fn occlude_fade_system(
+    camera_q: Query<&Transform, With<crate::plugins::camera::OrbitCamera>>,
+    player_q: Query<&Transform, With<crate::LocalPlayer>>,
+    mut wall_q: Query<(&Transform, &mut MeshMaterial3d<StandardMaterial>), With<OccludeFade>>,
+    tower_mats: Res<TowerMaterials>,
+) {
+    let Ok(cam_t) = camera_q.single() else { return };
+    let Ok(player_t) = player_q.single() else { return };
+
+    let cam_pos = cam_t.translation;
+    let player_pos = player_t.translation;
+    let seg = player_pos - cam_pos;
+    let seg_len_sq = seg.length_squared();
+
+    for (wall_t, mut mat) in &mut wall_q {
+        let to_wall = wall_t.translation - cam_pos;
+        let t = if seg_len_sq > 0.001 {
+            to_wall.dot(seg) / seg_len_sq
+        } else {
+            0.0
+        };
+        let proj = cam_pos + seg * t.clamp(0.0, 1.0);
+        let perp_dist = (wall_t.translation - proj).length();
+        let should_fade = t > 0.05 && t < 0.98 && perp_dist < 3.0;
+        let target = if should_fade {
+            tower_mats.wall_fade_mat.clone()
+        } else {
+            tower_mats.wall_mat.clone()
+        };
+        if mat.0 != target {
+            mat.0 = target;
+        }
     }
 }
 
