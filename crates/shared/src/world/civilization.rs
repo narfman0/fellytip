@@ -68,6 +68,7 @@ pub enum BuildingKind {
     Barracks,       // 2-floor interior zone (hall + bunks)
     Tower,          // 4-floor interior zone (3 interior + battlements)
     Keep,           // 3-floor interior zone + 10×10 battlements floor
+    CapitalTower,   // 5-floor interior zone (20×20 circular, capital landmark)
 }
 
 /// A single procedurally-placed building belonging to a settlement.
@@ -395,6 +396,23 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                         settlement.id,
                         CAPITAL_CENTER,
                         cx, cy,
+                        map,
+                    ));
+                }
+
+                // Place a CapitalTower offset north-west from the settlement center
+                // (8 tiles north + 8 tiles west) to avoid overlapping the fountain and
+                // market stalls placed in the inner rings.
+                let tower_tx = cx.saturating_sub(8);
+                let tower_ty = cy.saturating_sub(8);
+                if !occupied.contains(&(tower_tx, tower_ty)) && is_tile_buildable(map, tower_tx, tower_ty) {
+                    occupied.insert((tower_tx, tower_ty));
+                    all.push(make_building(
+                        &mut rng,
+                        settlement.id,
+                        BuildingKind::CapitalTower,
+                        tower_tx,
+                        tower_ty,
                         map,
                     ));
                 }
@@ -739,10 +757,10 @@ mod tests {
 
         for s in settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Capital)) {
             let count = buildings.iter().filter(|b| b.settlement_id == s.id).count();
-            // +1 for the center fountain
+            // +1 for the center fountain, +1 for the CapitalTower = 9–14 total
             assert!(
-                (8..=13).contains(&count),
-                "Capital '{}' has {count} buildings, expected 8–13", s.name
+                (9..=14).contains(&count),
+                "Capital '{}' has {count} buildings, expected 9–14", s.name
             );
         }
     }

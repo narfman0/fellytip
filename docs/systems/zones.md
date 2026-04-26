@@ -4,7 +4,7 @@
 
 The zone graph is the substrate for all interior traversal (buildings, dungeons) and the underground simulation (the Sunken Realm in lore). The overworld is zone 0; every interior space is a named child zone. Zones are nodes; portals are directed edges. The client prefetches 1-hop neighbors so transitions are effectively seamless.
 
-Single-story village buildings use a cheaper **roof-cutaway** shortcut: the interior is still on zone 0, and the client just fades the roof mesh when the player walks under the building's AABB. A real child zone is only created when the space needs its own nav grid — multi-floor buildings (`Tavern`, `Barracks`, `Tower`, `Keep`), dungeons, and everything underground.
+Single-story village buildings use a cheaper **roof-cutaway** shortcut: the interior is still on zone 0, and the client just fades the roof mesh when the player walks under the building's AABB. A real child zone is only created when the space needs its own nav grid — multi-floor buildings (`Tavern`, `Barracks`, `Tower`, `Keep`, `CapitalTower`), dungeons, and everything underground.
 
 ---
 
@@ -164,6 +164,7 @@ Building floor layouts (per `zone.rs`):
 - **Barracks**: 8×8 floors. Upper floor's west wall replaced with `Window` tiles.
 - **Tower**: 6×6 interior floors 0–2 with a `Stair` at (2,2); floor 3 = 6×6 roof battlements (perimeter `Roof` tiles).
 - **Keep**: 6×6 interior floors 0–1; floor 2 = 10×10 battlements. (Entrance anchor on floor 0.)
+- **CapitalTower**: 5-floor, 20×20 circular building placed at Capital settlements. Circular footprint (radius ~9.5); interior `Floor` tiles at distance < 8.5 from center, perimeter `Wall` tiles at distance 8.5–9.5, exterior `Void`. 3×3 `Stair` column at center (9..12, 9..12). Floor 0 has a south-wall doorway entrance at x=10. Floor 4 (roof) uses `Roof` tiles for the perimeter battlement ring. Rendered client-side as 5 stacked Tower GLB scenes, each offset 4.0 units vertically.
 
 ---
 

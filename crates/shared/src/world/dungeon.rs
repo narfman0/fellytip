@@ -26,6 +26,7 @@ pub fn building_floor_count(kind: BuildingKind) -> u8 {
         BuildingKind::Tavern | BuildingKind::Barracks => 2,
         BuildingKind::Tower => 4,
         BuildingKind::Keep => 3,
+        BuildingKind::CapitalTower => 5,
         _ => 0,
     }
 }
@@ -40,6 +41,7 @@ pub fn build_floor_tiles(
         BuildingKind::Barracks => barracks_floor(floor),
         BuildingKind::Tower => tower_floor(floor, 6),
         BuildingKind::Keep => tower_floor(floor, 10),
+        BuildingKind::CapitalTower => capital_tower_floor(floor),
         _ => (0, 0, Vec::new(), Vec::new()),
     }
 }
@@ -178,9 +180,146 @@ pub fn tower_floor(floor: u8, size: u16) -> (u16, u16, Vec<InteriorTile>, Vec<Zo
     (w, h, tiles, anchors)
 }
 
+/// Tile layout for a Capital Tower floor (20×20 circular grid).
+///
+/// The tower occupies a 20×20 grid centered at `(10, 10)` with a circular
+/// footprint (radius ~9.5). Interior tiles at distance < 8.5 are `Floor`;
+/// perimeter tiles at 8.5 ≤ distance ≤ 9.5 are `Wall`; exterior tiles
+/// (distance > 9.5) are `Void`.
+///
+/// A 3×3 stair column at center `(9..12, 9..12)` holds `Stair` tiles on
+/// floors 0–3, plus `Stair` (down) on floor 4. Floor 0 has a doorway
+/// entrance gap in the south wall at x=10. Floor 4 (roof/battlements) uses
+/// `Roof` tiles for the outer ring.
+pub fn capital_tower_floor(floor: u8) -> (u16, u16, Vec<InteriorTile>, Vec<ZoneAnchor>) {
+    let w: u16 = 20;
+    let h: u16 = 20;
+    let cx = 10.0_f32;
+    let cz = 10.0_f32;
+    let is_roof = floor >= 4;
+
+    let mut tiles = vec![InteriorTile::Void; (w * h) as usize];
+    let mut anchors = Vec::new();
+
+    for z in 0..h as usize {
+        for x in 0..w as usize {
+            let dx = x as f32 + 0.5 - cx;
+            let dz = z as f32 + 0.5 - cz;
+            let dist = (dx * dx + dz * dz).sqrt();
+
+            let tile = if dist > 9.5 {
+                InteriorTile::Void
+            } else if dist >= 8.5 {
+                // Perimeter wall — roof floor uses Roof tiles for battlements.
+                if is_roof {
+                    InteriorTile::Roof
+                } else {
+                    InteriorTile::Wall
+                }
+            } else {
+                InteriorTile::Floor
+            };
+
+            tiles[z * w as usize + x] = tile;
+        }
+    }
+
+    // Stair column at center (x: 9..12, z: 9..12).
+    let stair_pos = Vec2::new(10.0, 10.0);
+    for sz in 9..12usize {
+        for sx in 9..12usize {
+            let idx = sz * w as usize + sx;
+            tiles[idx] = InteriorTile::Stair;
+        }
+    }
+
+    // Floor 0: south wall entrance gap at x=10 (doorway at z=19 and z=18).
+    if floor == 0 {
+        for entrance_z in [18usize, 19usize] {
+            let idx = entrance_z * w as usize + 10;
+            tiles[idx] = InteriorTile::Floor;
+        }
+        anchors.push(ZoneAnchor {
+            name: SmolStr::new("entrance"),
+            pos: Vec2::new(10.0, 19.0),
+        });
+    }
+
+    // Stair anchors.
+    if floor < 4 {
+        anchors.push(ZoneAnchor {
+            name: SmolStr::new(format!("stair_up_{floor}")),
+            pos: stair_pos,
+        });
+    }
+    if floor > 0 {
+        anchors.push(ZoneAnchor {
+            name: SmolStr::new(format!("stair_down_{floor}")),
+            pos: stair_pos,
+        });
+    }
+
+    (w, h, tiles, anchors)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capital_tower_has_five_floors() {
+        assert_eq!(building_floor_count(BuildingKind::CapitalTower), 5);
+    }
+
+    #[test]
+    fn capital_tower_floor0_returns_tiles() {
+        let (w, h, tiles, anchors) = capital_tower_floor(0);
+        assert_eq!(w, 20);
+        assert_eq!(h, 20);
+        assert_eq!(tiles.len(), 400);
+        // Must have some Floor tiles and some Wall tiles.
+        assert!(tiles.iter().any(|t| *t == InteriorTile::Floor));
+        assert!(tiles.iter().any(|t| *t == InteriorTile::Wall));
+        // Floor 0 must have an entrance anchor.
+        assert!(anchors.iter().any(|a| a.name == "entrance"));
+        assert!(anchors.iter().any(|a| a.name == "stair_up_0"));
+    }
+
+    #[test]
+    fn capital_tower_stair_tiles_at_center() {
+        let (w, _, tiles, _) = capital_tower_floor(0);
+        // Stair column is at grid positions (9..12, 9..12).
+        for sz in 9..12usize {
+            for sx in 9..12usize {
+                assert_eq!(
+                    tiles[sz * w as usize + sx],
+                    InteriorTile::Stair,
+                    "expected Stair at ({sx}, {sz})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capital_tower_roof_floor_has_roof_tiles() {
+        let (_, _, tiles, anchors) = capital_tower_floor(4);
+        // Floor 4 is the roof — perimeter ring must be Roof tiles.
+        assert!(tiles.iter().any(|t| *t == InteriorTile::Roof));
+        // No entrance anchor on roof floor.
+        assert!(!anchors.iter().any(|a| a.name == "entrance"));
+        // Stair-down anchor must exist.
+        assert!(anchors.iter().any(|a| a.name == "stair_down_4"));
+    }
+
+    #[test]
+    fn capital_tower_all_floors_build_via_dispatch() {
+        for floor in 0..5u8 {
+            let (w, h, tiles, _) = build_floor_tiles(BuildingKind::CapitalTower, floor);
+            assert_eq!(w, 20, "floor {floor} width");
+            assert_eq!(h, 20, "floor {floor} height");
+            assert!(!tiles.is_empty(), "floor {floor} tiles should not be empty");
+        }
+    }
 
     #[test]
     fn tavern_has_two_floors() {
