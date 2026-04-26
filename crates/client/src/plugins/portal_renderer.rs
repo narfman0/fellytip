@@ -308,9 +308,9 @@ fn spawn_portal_meshes(
             None => portal_rect_verts(portal.trigger_radius).to_vec(),
         };
 
-        // Position: from-anchor position (Vec3::ZERO for Phase 1 — anchor world-space
-        // positions will be wired in Phase 2).
-        let anchor_pos = Vec3::ZERO;
+        // Position: from-anchor world-space position from the server's ZoneRegistry lookup.
+        // Falls back to Vec3::ZERO if the anchor position wasn't resolved (e.g. new zone).
+        let anchor_pos = entry.from_world_pos;
 
         // Spawn window mesh with render target material.
         if let Some(window_mesh) = portal_window_mesh(&verts) {
@@ -359,8 +359,8 @@ fn spawn_portal_meshes(
                 let dest_hop = entry.from_hop + 1;
                 let camera_layer = dest_hop.min(2);
 
-                // Portal camera positioned at to_anchor (Vec3::ZERO for Phase 1).
-                let camera_pos = Vec3::ZERO;
+                // Portal camera positioned at to_anchor world-space position.
+                let camera_pos = entry.to_world_pos;
 
                 commands.spawn((
                     Camera3d::default(),

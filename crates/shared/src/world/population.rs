@@ -5,7 +5,6 @@
 //! fractional accumulator for births (same technique as Lotka-Volterra in
 //! `ecology.rs`) so no dice are needed.
 
-use crate::world::cave::is_cave_open;
 use crate::world::faction::FactionId;
 use crate::world::map::{TileKind, WorldMap};
 use crate::world::zone::WorldId;

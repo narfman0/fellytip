@@ -135,6 +135,10 @@ fn check_portal_triggers(
 
 /// Apply queued zone transitions: update `ZoneMembership` and move the
 /// entity to the destination anchor (as stored in `ZoneRegistry`).
+///
+/// On world-crossing portals (e.g. surface ↔ Sunken Realm), the entity's z
+/// coordinate is reset to 0.0 so it enters the flat destination world at
+/// ground level rather than retaining an elevation from the source world.
 fn apply_zone_transitions(
     mut events: MessageReader<PlayerZoneTransition>,
     topology: Option<Res<ZoneTopology>>,
@@ -157,6 +161,9 @@ fn apply_zone_transitions(
             continue;
         }
 
+        // Detect world crossing before updating zone membership.
+        let crosses_world = topology.is_world_crossing(portal, &registry);
+
         zone.0 = portal.to_zone;
 
         // Move to the destination anchor's stored position. For overworld
@@ -173,6 +180,19 @@ fn apply_zone_transitions(
         } else {
             pos.x = 0.0;
             pos.y = 0.0;
+        }
+
+        // On world crossings, reset elevation so the entity enters the
+        // destination world at ground level (z = 0.0 in the new coordinate
+        // space).
+        if crosses_world {
+            pos.z = 0.0;
+            tracing::info!(
+                entity = ?ev.entity,
+                portal_id = portal.id,
+                to_zone = ?portal.to_zone,
+                "World-crossing portal traversal — z reset to 0.0"
+            );
         }
     }
 }
@@ -221,14 +241,41 @@ fn send_zone_tiles(
     }
 }
 
+/// Look up a portal anchor's world-space position from the zone registry.
+///
+/// For overworld-facing portals, the anchor pos is already in world-space.
+/// For intra-zone portals (staircases, etc.) the anchor pos is zone-local tile
+/// coordinates. Returns `Vec3::ZERO` when the anchor is not found.
+fn portal_anchor_world_pos(
+    zone_id: ZoneId,
+    anchor_name: &str,
+    registry: &ZoneRegistry,
+) -> Vec3 {
+    registry
+        .get(zone_id)
+        .and_then(|zone| {
+            zone.anchors
+                .iter()
+                .find(|a| a.name == anchor_name)
+                .map(|a| Vec3::new(a.pos.x, 0.0, a.pos.y))
+        })
+        .unwrap_or(Vec3::ZERO)
+}
+
 /// Broadcast portal/topology information for the current zone and all
 /// zones within 2 hops for each `PlayerZoneTransition`.
+///
+/// The `from_world_pos` and `to_world_pos` fields in `ClientPortalEntry` are
+/// now populated from `ZoneRegistry` anchor positions so the portal renderer
+/// can place portal meshes at correct world-space locations.
 fn send_zone_neighbors(
     mut events: MessageReader<PlayerZoneTransition>,
     topology: Option<Res<ZoneTopology>>,
+    registry: Option<Res<ZoneRegistry>>,
     mut writer: MessageWriter<ZoneNeighborMessage>,
 ) {
     let Some(topology) = topology else { return };
+    let Some(registry) = registry else { return };
 
     for ev in events.read() {
         let Some(transit_portal) = topology.portals.iter().find(|p| p.id == ev.portal_id) else {
@@ -242,11 +289,21 @@ fn send_zone_neighbors(
 
         // Hop 0: portals in current zone.
         for portal in topology.exits_from(current_zone) {
+            let from_world_pos = portal_anchor_world_pos(
+                portal.from_zone,
+                &portal.from_anchor,
+                &registry,
+            );
+            let to_world_pos = portal_anchor_world_pos(
+                portal.to_zone,
+                &portal.to_anchor,
+                &registry,
+            );
             portals.push(ClientPortalEntry {
                 portal: portal.clone(),
                 from_hop: 0,
-                from_world_pos: Vec3::ZERO,
-                to_world_pos: Vec3::ZERO,
+                from_world_pos,
+                to_world_pos,
             });
         }
 
@@ -257,11 +314,21 @@ fn send_zone_neighbors(
             for portal in topology.exits_from(zone1) {
                 // Avoid duplicating portals already in the list.
                 if !portals.iter().any(|e| e.portal.id == portal.id) {
+                    let from_world_pos = portal_anchor_world_pos(
+                        portal.from_zone,
+                        &portal.from_anchor,
+                        &registry,
+                    );
+                    let to_world_pos = portal_anchor_world_pos(
+                        portal.to_zone,
+                        &portal.to_anchor,
+                        &registry,
+                    );
                     portals.push(ClientPortalEntry {
                         portal: portal.clone(),
                         from_hop: 1,
-                        from_world_pos: Vec3::ZERO,
-                        to_world_pos: Vec3::ZERO,
+                        from_world_pos,
+                        to_world_pos,
                     });
                 }
             }
@@ -277,11 +344,21 @@ fn send_zone_neighbors(
                 zone_hops.push((zone2, 2));
                 for portal in topology.exits_from(zone2) {
                     if !portals.iter().any(|e| e.portal.id == portal.id) {
+                        let from_world_pos = portal_anchor_world_pos(
+                            portal.from_zone,
+                            &portal.from_anchor,
+                            &registry,
+                        );
+                        let to_world_pos = portal_anchor_world_pos(
+                            portal.to_zone,
+                            &portal.to_anchor,
+                            &registry,
+                        );
                         portals.push(ClientPortalEntry {
                             portal: portal.clone(),
                             from_hop: 2,
-                            from_world_pos: Vec3::ZERO,
-                            to_world_pos: Vec3::ZERO,
+                            from_world_pos,
+                            to_world_pos,
                         });
                     }
                 }

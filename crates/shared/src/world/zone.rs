@@ -33,12 +33,48 @@ pub struct ZoneId(pub u32);
 /// WorldId(0) = The Surface (main world)
 /// WorldId(1) = The Sunken Realm (underground)
 /// WorldId(2) = The Mycelium (extra-cosmological fungi world, separate universe)
+/// WorldId(3+) = Dynamically allocated player/procedural worlds
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub struct WorldId(pub u32);
 
 pub const WORLD_SURFACE: WorldId = WorldId(0);
 pub const WORLD_SUNKEN_REALM: WorldId = WorldId(1);
 pub const WORLD_MYCELIUM: WorldId = WorldId(2);
+
+/// First dynamically allocated world ID. IDs below this are reserved for
+/// well-known worlds (Surface, Sunken Realm, Mycelium).
+pub const WORLD_DYNAMIC_START: u32 = 3;
+
+/// Registry for world IDs — tracks the next available dynamic world ID so
+/// player-owned or procedurally generated worlds can be allocated at runtime
+/// without colliding with the reserved well-known IDs.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct WorldRegistry {
+    /// Next ID to hand out when `alloc_world_id()` is called. Starts at
+    /// `WORLD_DYNAMIC_START` so reserved IDs (0-2) are never reused.
+    pub next_dynamic_id: u32,
+}
+
+impl WorldRegistry {
+    pub fn new() -> Self {
+        Self {
+            next_dynamic_id: WORLD_DYNAMIC_START,
+        }
+    }
+
+    /// Allocate a new unique world ID. IDs are monotonically increasing and
+    /// never reuse a previously allocated value.
+    pub fn alloc_world_id(&mut self) -> WorldId {
+        let id = WorldId(self.next_dynamic_id);
+        self.next_dynamic_id += 1;
+        id
+    }
+
+    /// Returns `true` if the given WorldId is one of the reserved well-known worlds.
+    pub fn is_reserved(id: WorldId) -> bool {
+        id.0 < WORLD_DYNAMIC_START
+    }
+}
 
 /// What category of zone this is (overworld, building floor, dungeon, etc.).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

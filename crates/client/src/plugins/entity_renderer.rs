@@ -34,7 +34,7 @@ use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
 use fellytip_shared::world::civilization::{BuildingKind, Buildings, SettlementKind};
 use fellytip_shared::world::map::{MAP_HALF_HEIGHT, MAP_HALF_WIDTH};
-use fellytip_shared::world::zone::{ZoneMembership, OVERWORLD_ZONE};
+use fellytip_shared::world::zone::{ZoneMembership, ZoneRegistry, OVERWORLD_ZONE, WORLD_SUNKEN_REALM};
 
 use super::billboard_sprite::{atlas_id_for_entity, BillboardSprites};
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
@@ -68,6 +68,7 @@ impl Plugin for EntityRendererPlugin {
                     sync_remote_transforms,
                     sync_growth_stage_scale,
                     update_zone_visibility,
+                    update_building_visibility,
                     sync_local_player_transform.in_set(ClientSet::SyncVisuals),
                     draw_character_debug_overlay,
                 ),
@@ -857,6 +858,31 @@ fn draw_character_debug_overlay(
             }
         };
         gizmos.sphere(Isometry3d::from_translation(center), 0.5, color);
+    }
+}
+
+/// Hides all [`BuildingVisual`] entities when the local player is in the Sunken
+/// Realm (WORLD_SUNKEN_REALM). Uses world_id from ZoneMembership → ZoneRegistry
+/// rather than a z-coordinate check, so the underground is a truly separate world.
+fn update_building_visibility(
+    player_q: Query<(&PredictedPosition, Option<&ZoneMembership>), With<LocalPlayer>>,
+    zone_registry: Option<Res<ZoneRegistry>>,
+    mut buildings: Query<&mut Visibility, With<BuildingVisual>>,
+) {
+    let Ok((pos, zone_membership)) = player_q.single() else { return };
+
+    // Determine if the player is underground using world_id, falling back to z-check.
+    let is_underground = if let (Some(registry), Some(membership)) = (&zone_registry, zone_membership) {
+        registry.get(membership.0)
+            .map(|z| z.world_id == WORLD_SUNKEN_REALM)
+            .unwrap_or(false)
+    } else {
+        pos.z < -1.0
+    };
+
+    let desired = if is_underground { Visibility::Hidden } else { Visibility::Inherited };
+    for mut vis in &mut buildings {
+        if *vis != desired { *vis = desired; }
     }
 }
 

@@ -17,6 +17,7 @@ use fellytip_shared::{
         civilization::{Settlement, SettlementKind, Settlements},
         faction::{standing_tier, StandingTier},
         map::{TileKind, WorldMap},
+        zone::{ZoneMembership, ZoneRegistry, OVERWORLD_ZONE, WORLD_SUNKEN_REALM},
     },
 };
 
@@ -78,9 +79,14 @@ impl Default for MapWindow {
     }
 }
 
-/// One-shot cached terrain texture id.
+/// Cached terrain texture ids, one per world.
 #[derive(Resource, Default)]
-struct TerrainTex(Option<egui::TextureId>);
+struct TerrainTex {
+    /// Surface world (WorldId 0) terrain texture.
+    surface: Option<egui::TextureId>,
+    /// Sunken Realm world (WorldId 1) terrain texture (cave tile colours).
+    sunken_realm: Option<egui::TextureId>,
+}
 
 // ── Plugin ────────────────────────────────────────────────────────────────────
 
@@ -146,50 +152,108 @@ fn tile_color(kind: TileKind) -> [u8; 4] {
     }
 }
 
-/// Generates and registers the 512×512 terrain texture once `WorldMap` exists.
+/// Generates and registers the 512×512 terrain textures once `WorldMap` exists.
 /// Y-flipped so texture V=0 = north (high world-Y), V=1 = south.
+///
+/// Produces two textures:
+/// - `surface`: samples the topmost layer (surface biomes).
+/// - `sunken_realm`: cave-palette placeholder using cave tile colours.
 fn build_terrain_texture(
     world_map: Option<Res<WorldMap>>,
     mut tex: ResMut<TerrainTex>,
     mut images: ResMut<Assets<Image>>,
     mut user_textures: ResMut<EguiUserTextures>,
 ) {
-    if tex.0.is_some() {
+    if tex.surface.is_some() && tex.sunken_realm.is_some() {
         return;
     }
     let Some(map) = world_map else { return };
 
-    let mut data = vec![0u8; TEX_SIZE * TEX_SIZE * 4];
-    for ty in 0..TEX_SIZE {
-        for tx in 0..TEX_SIZE {
-            let ix = (tx * 2).min(map.width.saturating_sub(1));
-            // Flip Y: ty=0 → northernmost tile row.
-            let iy = (map.height.saturating_sub(1)).saturating_sub(ty * 2);
-            let kind = map
-                .column(ix, iy)
-                .layers
-                .last()
-                .map(|l| l.kind)
-                .unwrap_or(TileKind::Void);
-            let color = tile_color(kind);
-            let idx = (ty * TEX_SIZE + tx) * 4;
-            data[idx..idx + 4].copy_from_slice(&color);
+    // ── Surface texture ───────────────────────────────────────────────────────
+    if tex.surface.is_none() {
+        let mut data = vec![0u8; TEX_SIZE * TEX_SIZE * 4];
+        for ty in 0..TEX_SIZE {
+            for tx in 0..TEX_SIZE {
+                let ix = (tx * 2).min(map.width.saturating_sub(1));
+                // Flip Y: ty=0 → northernmost tile row.
+                let iy = (map.height.saturating_sub(1)).saturating_sub(ty * 2);
+                let kind = map
+                    .column(ix, iy)
+                    .layers
+                    .last()
+                    .map(|l| l.kind)
+                    .unwrap_or(TileKind::Void);
+                let color = tile_color(kind);
+                let idx = (ty * TEX_SIZE + tx) * 4;
+                data[idx..idx + 4].copy_from_slice(&color);
+            }
         }
+        let image = Image::new(
+            Extent3d {
+                width: TEX_SIZE as u32,
+                height: TEX_SIZE as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            data,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        let handle = images.add(image);
+        tex.surface = Some(user_textures.add_image(EguiTextureHandle::Strong(handle)));
     }
 
-    let image = Image::new(
-        Extent3d {
-            width: TEX_SIZE as u32,
-            height: TEX_SIZE as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    let handle = images.add(image);
-    tex.0 = Some(user_textures.add_image(EguiTextureHandle::Strong(handle)));
+    // ── Sunken Realm texture ──────────────────────────────────────────────────
+    // Generate a cave-palette texture by sampling only cave tile kinds from the
+    // surface WorldMap. Tiles whose topmost layer is a surface biome are rendered
+    // as CaveFloor (grey), while cave-specific tiles keep their colours.
+    if tex.sunken_realm.is_none() {
+        let cave_kinds = [
+            TileKind::CaveFloor,
+            TileKind::CaveWall,
+            TileKind::CrystalCave,
+            TileKind::LavaFloor,
+            TileKind::CaveRiver,
+            TileKind::CavePortal,
+            TileKind::Void,
+        ];
+        let mut data = vec![0u8; TEX_SIZE * TEX_SIZE * 4];
+        for ty in 0..TEX_SIZE {
+            for tx in 0..TEX_SIZE {
+                let ix = (tx * 2).min(map.width.saturating_sub(1));
+                let iy = (map.height.saturating_sub(1)).saturating_sub(ty * 2);
+                let kind = map
+                    .column(ix, iy)
+                    .layers
+                    .last()
+                    .map(|l| l.kind)
+                    .unwrap_or(TileKind::Void);
+                // If the tile is already a cave kind, use its colour directly;
+                // otherwise render as generic cave floor.
+                let cave_kind = if cave_kinds.contains(&kind) {
+                    kind
+                } else {
+                    TileKind::CaveFloor
+                };
+                let color = tile_color(cave_kind);
+                let idx = (ty * TEX_SIZE + tx) * 4;
+                data[idx..idx + 4].copy_from_slice(&color);
+            }
+        }
+        let image = Image::new(
+            Extent3d {
+                width: TEX_SIZE as u32,
+                height: TEX_SIZE as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            data,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        let handle = images.add(image);
+        tex.sunken_realm = Some(user_textures.add_image(EguiTextureHandle::Strong(handle)));
+    }
 }
 
 // ── Map window ────────────────────────────────────────────────────────────────
@@ -204,7 +268,7 @@ fn draw_map(
     if !map_win.open {
         return Ok(());
     }
-    let Some(terrain_id) = tex.0 else { return Ok(()) };
+    let Some(terrain_id) = tex.surface else { return Ok(()) };
 
     let egui_ctx = ctx.ctx_mut()?;
 
@@ -380,21 +444,43 @@ fn nearest_within(pos: Vec2, settlements: &Settlements, radius: f32) -> Option<&
 /// Always-visible minimap anchored top-right showing terrain around the player,
 /// settlement dots, facing direction arrow, coordinates, and nearby town name.
 /// The map rotates so the player's forward direction is always at the top.
+/// Selects the surface or Sunken Realm texture based on the player's world_id.
 fn draw_minimap(
     mut ctx: EguiContexts,
     tex: Res<TerrainTex>,
-    player_q: Query<&PredictedPosition, With<LocalPlayer>>,
+    player_q: Query<(&PredictedPosition, Option<&ZoneMembership>), With<LocalPlayer>>,
     camera_q: Query<&OrbitCamera>,
     settlements: Option<Res<Settlements>>,
     console: Option<Res<DebugConsole>>,
     pause_menu: Option<Res<PauseMenu>>,
+    zone_registry: Option<Res<ZoneRegistry>>,
 ) -> Result {
     // Hide behind other overlays.
     if console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open) {
         return Ok(());
     }
-    let Some(terrain_id) = tex.0 else { return Ok(()) };
-    let Ok(pos) = player_q.single() else { return Ok(()) };
+    let Ok((pos, zone_membership)) = player_q.single() else { return Ok(()) };
+
+    // Select terrain texture based on which world the player is in.
+    // Uses world_id from ZoneMembership → ZoneRegistry; falls back to z-check.
+    let is_underground = if let (Some(registry), Some(membership)) = (&zone_registry, zone_membership) {
+        registry.get(membership.0)
+            .map(|z| z.world_id == WORLD_SUNKEN_REALM)
+            .unwrap_or(false)
+    } else {
+        // Fallback: check for non-overworld zone membership or z-coordinate
+        zone_membership
+            .map(|z| z.0 != OVERWORLD_ZONE)
+            .unwrap_or(false)
+            || pos.z < -1.0
+    };
+
+    let terrain_id = if is_underground {
+        tex.sunken_realm.or(tex.surface)
+    } else {
+        tex.surface
+    };
+    let Some(terrain_id) = terrain_id else { return Ok(()) };
 
     let px = pos.x;
     let py = pos.y;
@@ -507,8 +593,17 @@ fn draw_minimap(
             // Minimap border.
             painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(80, 80, 80)), egui::StrokeKind::Inside);
 
-            // Coordinates and nearby settlement below the canvas.
+            // Coordinates, world label, and nearby settlement below the canvas.
             ui.label(egui::RichText::new(format!("X {:.0}  Y {:.0}", px, py)).small());
+            {
+                let world_label = if is_underground { "Sunken Realm" } else { "Surface" };
+                let world_color = if is_underground {
+                    egui::Color32::from_rgb(130, 100, 200)
+                } else {
+                    egui::Color32::from_rgb(120, 200, 120)
+                };
+                ui.label(egui::RichText::new(world_label).small().color(world_color));
+            }
             if let Some(setts) = settlements {
                 if let Some(near) = nearest_within(Vec2::new(px, py), &setts, NEAR_RADIUS) {
                     ui.label(

@@ -188,6 +188,10 @@ pub fn build_chunk_mesh(
 /// Each tile gets vertex colours from `biome_color` based on the cave TileKind.
 /// CaveWall tiles produce a taller box (height 2.0); all other cave tiles are
 /// flat quads (height 0.2) at the cave z level.
+///
+/// Retained for future use — underground terrain is currently rendered via
+/// `zone_renderer.rs` tile meshes rather than full-world cave chunks.
+#[allow(dead_code)]
 pub fn build_cave_chunk_mesh(map: &WorldMap, coord: ChunkCoord, z_level: f32) -> Mesh {
     let half_w = (map.width  / 2) as i32;
     let half_h = (map.height / 2) as i32;

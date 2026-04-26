@@ -9,7 +9,7 @@
 //! Defaults: seed=42, map 1024×1024, display size=80x40
 
 use fellytip_shared::world::{
-    civilization::{generate_settlements, generate_roads, SettlementKind},
+    civilization::{generate_settlements_full, generate_roads, SettlementKind},
     map::{generate_map, TileKind, MAP_HEIGHT, MAP_WIDTH},
 };
 
@@ -26,7 +26,7 @@ fn main() {
 
     // ── Generate world ────────────────────────────────────────────────────────
     let mut map = generate_map(seed, map_width, map_height);
-    let settlements = generate_settlements(&map, seed);
+    let settlements = generate_settlements_full(&mut map, seed);
     generate_roads(&mut map, &settlements);
 
     // ── Tile statistics ────────────────────────────────────────────────────────
@@ -164,6 +164,12 @@ fn tile_char(kind: TileKind) -> char {
         TileKind::PolarDesert     => 'p',
         TileKind::Arctic          => '*',
         TileKind::River           => '=',
+        TileKind::CaveFloor       => 'c',
+        TileKind::CaveWall        => 'w',
+        TileKind::CrystalCave     => 'C',
+        TileKind::LavaFloor       => 'L',
+        TileKind::CaveRiver       => 'r',
+        TileKind::CavePortal      => 'P',
         TileKind::Void            => ' ',
     }
 }

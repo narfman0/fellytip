@@ -24,8 +24,8 @@ use fellytip_shared::{
     },
 };
 use manager::{
-    apply_chunk_meshes, rebuild_dirty_chunks, spawn_cave_chunks, update_chunk_visibility,
-    update_layer_visibility, CaveChunkManager, ChunkManager, TerrainAssets,
+    apply_chunk_meshes, rebuild_dirty_chunks, update_chunk_visibility,
+    update_layer_visibility, ChunkManager, TerrainAssets,
 };
 use material::create_terrain_material;
 
@@ -34,7 +34,6 @@ pub struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ChunkLifecycle>()
-            .init_resource::<CaveChunkManager>()
             .add_systems(Startup, setup_terrain_assets)
             .add_systems(
                 Update,
@@ -43,7 +42,6 @@ impl Plugin for TerrainPlugin {
                     update_chunk_visibility,
                     rebuild_dirty_chunks,
                     apply_chunk_meshes,
-                    spawn_cave_chunks,
                     update_layer_visibility,
                 )
                     .chain(),
