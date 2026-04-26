@@ -98,7 +98,16 @@ pub fn build_chunk_mesh(
             let bx = gx as i32 as f32 - half_w as f32;
             let bz = gy as i32 as f32 - half_h as f32;
             positions.push([bx, h, bz]);
-            colors.push(corner_biome_color(map, gx, gy));
+
+            // Biome base color, then apply per-vertex noise + height shading.
+            let base = corner_biome_color(map, gx, gy);
+            let tx = gx as i32;
+            let tz = gy as i32;
+            let height_factor = (0.85 + (h / 20.0).clamp(0.0, 1.0) * 0.30).clamp(0.85, 1.15);
+            let r = (base[0] + tile_color_noise(tx, tz, 0)) * height_factor;
+            let g = (base[1] + tile_color_noise(tx, tz, 1)) * height_factor;
+            let b = (base[2] + tile_color_noise(tx, tz, 2)) * height_factor;
+            colors.push([r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0), base[3]]);
         }
     }
 
@@ -170,6 +179,24 @@ pub fn build_chunk_mesh(
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors);
     mesh.insert_indices(Indices::U32(indices));
     mesh
+}
+
+// ── Color helpers ─────────────────────────────────────────────────────────────
+
+/// Deterministic per-vertex color noise based on tile coordinates and channel.
+///
+/// Returns a value in `[-0.08, +0.08]` — roughly ±8% brightness variation.
+/// Uses only integer arithmetic until the final float conversion, so the result
+/// is identical every time the same tile is processed (chunk rebuilds are stable).
+fn tile_color_noise(tile_x: i32, tile_z: i32, channel: u32) -> f32 {
+    let h = tile_x
+        .wrapping_mul(127)
+        .wrapping_add(tile_z.wrapping_mul(311))
+        .wrapping_add(channel.wrapping_mul(17) as i32) as u32;
+    let h = h ^ (h >> 16);
+    let h = h.wrapping_mul(0x45d9f3b);
+    let h = h ^ (h >> 16);
+    (h & 0xFF) as f32 / 255.0 * 0.16 - 0.08
 }
 
 // ── Height helper ─────────────────────────────────────────────────────────────
