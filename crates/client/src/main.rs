@@ -111,7 +111,8 @@ fn main() {
                         .with_method("dm/force_underground_pressure", fellytip_server::plugins::dm::dm_force_underground_pressure)
                         .with_method("dm/query_portals",     fellytip_server::plugins::dm::dm_query_portals)
                         .with_method("dm/set_portal_debug",  dm_set_portal_debug)
-                        .with_method("dm/take_screenshot",   dm_take_screenshot)
+                        .with_method("dm/take_screenshot",        dm_take_screenshot)
+                        .with_method("dm/set_camera_distance",    dm_set_camera_distance)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -132,6 +133,7 @@ fn main() {
                     .with_method("dm/query_portals",              fellytip_server::plugins::dm::dm_query_portals)
                     .with_method("dm/set_portal_debug",           dm_set_portal_debug)
                     .with_method("dm/take_screenshot",            dm_take_screenshot)
+                    .with_method("dm/set_camera_distance",        dm_set_camera_distance)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
@@ -479,4 +481,28 @@ fn dm_take_screenshot(
 
     tracing::info!(%path, "DM screenshot requested");
     Ok(serde_json::json!({ "ok": true, "path": path }))
+}
+
+/// Set the orbit camera distance (zoom).
+///
+/// Params: `{ "distance": f32 }` — clamped to [min_distance, max_distance].
+/// Returns `{ "ok": true, "distance": f32 }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_set_camera_distance(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let distance = params
+        .as_ref()
+        .and_then(|p| p.get("distance"))
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| BrpError::internal("missing required param `distance`"))? as f32;
+
+    let mut q = world.query::<&mut plugins::camera::OrbitCamera>();
+    let mut cam = q.single_mut(world)
+        .map_err(|_| BrpError::internal("no OrbitCamera entity found"))?;
+    let clamped = distance.clamp(cam.min_distance, cam.max_distance);
+    cam.distance = clamped;
+    tracing::info!(distance = clamped, "DM camera distance set");
+    Ok(serde_json::json!({ "ok": true, "distance": clamped }))
 }
