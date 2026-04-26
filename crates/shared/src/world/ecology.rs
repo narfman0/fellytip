@@ -135,6 +135,25 @@ pub fn tick_ecology(state: RegionEcology) -> (RegionEcology, Vec<EcologyEvent>) 
     (next, events)
 }
 
+// ── Cave ecology ─────────────────────────────────────────────────────────────
+
+/// Carrying capacity for prey species based on the dominant cave biome near a
+/// settlement.  Callers sample nearby tiles and pass the most common open kind.
+///
+/// - `CaveFloor`   — moderate food/resource density → standard capacity.
+/// - `CrystalCave` — rich bioluminescent resources → elevated capacity.
+/// - `LavaFloor`   — hostile heat, sparse life → reduced capacity.
+/// - anything else — treated as a sealed wall → minimal capacity.
+pub fn cave_carrying_capacity(dominant_kind: crate::world::map::TileKind) -> f64 {
+    use crate::world::map::TileKind;
+    match dominant_kind {
+        TileKind::CaveFloor  => 100.0,
+        TileKind::CrystalCave => 150.0,
+        TileKind::LavaFloor  => 40.0,
+        _                    => 10.0,
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -374,7 +374,7 @@ pub fn tick_population_system(
     }
 
     // Build faction-id → hostile settlement positions map.
-    let faction_hostile_targets: HashMap<FactionId, Vec<(Uuid, f32, f32)>> = registry.factions
+    let faction_hostile_targets: HashMap<FactionId, Vec<(Uuid, f32, f32, f32)>> = registry.factions
         .iter()
         .map(|f| {
             let hostile_faction_ids: Vec<&FactionId> = f.disposition
@@ -382,10 +382,10 @@ pub fn tick_population_system(
                 .filter(|(_, d)| **d == Disposition::Hostile)
                 .map(|(id, _)| id)
                 .collect();
-            let targets: Vec<(Uuid, f32, f32)> = pop.settlements
+            let targets: Vec<(Uuid, f32, f32, f32)> = pop.settlements
                 .values()
                 .filter(|s| hostile_faction_ids.contains(&&s.faction_id))
-                .map(|s| (s.settlement_id, s.home_x, s.home_y))
+                .map(|s| (s.settlement_id, s.home_x, s.home_y, s.home_z))
                 .collect();
             (f.id.clone(), targets)
         })
@@ -403,7 +403,7 @@ pub fn tick_population_system(
             .map(|f| f.resources.military_strength)
             .unwrap_or(0.0);
         let targets = faction_hostile_targets.get(&state.faction_id).map(|v| v.as_slice()).unwrap_or(&[]);
-        let (next, effects) = tick_population(state, targets);
+        let (next, effects) = tick_population(state, targets, None);
 
         for effect in effects {
             match effect {

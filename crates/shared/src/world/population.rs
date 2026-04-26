@@ -5,7 +5,9 @@
 //! fractional accumulator for births (same technique as Lotka-Volterra in
 //! `ecology.rs`) so no dice are needed.
 
+use crate::world::cave::is_cave_open;
 use crate::world::faction::FactionId;
+use crate::world::map::{TileKind, WorldMap};
 use crate::world::zone::WorldId;
 use uuid::Uuid;
 
@@ -88,20 +90,36 @@ pub enum PopulationEffect {
 
 /// Advance one settlement's population by one tick.
 ///
-/// `hostile_targets` — list of `(settlement_id, world_x, world_y)` belonging
+/// `hostile_targets` — list of `(settlement_id, world_x, world_y, world_z)` belonging
 /// to factions marked `Disposition::Hostile` toward this settlement's faction.
 /// Supplied by the caller from ECS data so this function stays pure.
+///
+/// `map` — optional reference to the world map used to compute a cave growth
+/// modifier for underground settlements. Pass `None` to skip the modifier.
 ///
 /// Returns the updated state and any effects to apply.
 pub fn tick_population(
     mut state: SettlementPopulation,
-    hostile_targets: &[(Uuid, f32, f32)],
+    hostile_targets: &[(Uuid, f32, f32, f32)],
+    map: Option<&WorldMap>,
 ) -> (SettlementPopulation, Vec<PopulationEffect>) {
     let mut effects = Vec::new();
 
     // ── Birth accumulation (integer counter — no floating-point drift) ────────
+    // Underground settlements use a modified birth period based on cave biome.
+    let effective_period = if state.home_z < 0.0 {
+        if let Some(m) = map {
+            let modifier = cave_growth_modifier(m, state.home_x, state.home_y);
+            ((BIRTH_PERIOD as f32) / (1.0 + modifier)).round().max(1.0) as u32
+        } else {
+            BIRTH_PERIOD
+        }
+    } else {
+        BIRTH_PERIOD
+    };
+
     state.birth_ticks += 1;
-    if state.birth_ticks >= BIRTH_PERIOD {
+    if state.birth_ticks >= effective_period {
         state.birth_ticks = 0;
         // Only spawn if the settlement is below its population cap.
         if state.adult_count + state.child_count < MAX_SETTLEMENT_POP {
@@ -122,7 +140,9 @@ pub fn tick_population(
     } else if state.adult_count >= WAR_PARTY_THRESHOLD
         && state.military_strength >= WAR_PARTY_MILITARY_MIN
     {
-        if let Some(&(target_id, tx, ty)) = nearest_target(state.home_x, state.home_y, hostile_targets) {
+        if let Some(&(target_id, tx, ty, _tz)) =
+            nearest_target(state.home_x, state.home_y, state.home_z, hostile_targets)
+        {
             effects.push(PopulationEffect::FormWarParty {
                 attacker_faction: state.faction_id.clone(),
                 target_settlement_id: target_id,
@@ -139,10 +159,50 @@ pub fn tick_population(
     (state, effects)
 }
 
-fn nearest_target(hx: f32, hy: f32, targets: &[(Uuid, f32, f32)]) -> Option<&(Uuid, f32, f32)> {
+/// Returns a growth rate modifier `[-0.03, +0.05]` based on adjacent cave tiles.
+///
+/// Samples a 3×3 neighbourhood around the settlement home tile (clamped to the
+/// cave layer at depth 1). CrystalCave tiles add +5% each; LavaFloor tiles
+/// subtract 3% each. The contributions are clamped to `[-0.2, +0.2]` to
+/// prevent runaway values from dense biomes.
+pub fn cave_growth_modifier(map: &WorldMap, hx: f32, hy: f32) -> f32 {
+    let cx = hx as usize;
+    let cy = hy as usize;
+    let mut modifier = 0.0f32;
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let nx = cx as i32 + dx;
+            let ny = cy as i32 + dy;
+            if nx < 0 || ny < 0 || nx as usize >= map.width || ny as usize >= map.height {
+                continue;
+            }
+            let col = &map.columns[nx as usize + ny as usize * map.width];
+            for layer in &col.layers {
+                if layer.z_top >= 0.0 {
+                    continue;
+                }
+                match layer.kind {
+                    TileKind::CrystalCave => modifier += 0.05,
+                    TileKind::LavaFloor   => modifier -= 0.03,
+                    _ => {}
+                }
+            }
+        }
+    }
+    modifier.clamp(-0.2, 0.2)
+}
+
+fn nearest_target<'a>(
+    hx: f32,
+    hy: f32,
+    hz: f32,
+    targets: &'a [(Uuid, f32, f32, f32)],
+) -> Option<&'a (Uuid, f32, f32, f32)> {
     targets.iter().min_by(|a, b| {
-        let da = (a.1 - hx).powi(2) + (a.2 - hy).powi(2);
-        let db = (b.1 - hx).powi(2) + (b.2 - hy).powi(2);
+        let z_penalty_a = (a.3 - hz).abs() / 10.0;
+        let z_penalty_b = (b.3 - hz).abs() / 10.0;
+        let da = ((a.1 - hx).powi(2) + (a.2 - hy).powi(2)).sqrt() + z_penalty_a;
+        let db = ((b.1 - hx).powi(2) + (b.2 - hy).powi(2)).sqrt() + z_penalty_b;
         da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
     })
 }
@@ -152,6 +212,8 @@ fn nearest_target(hx: f32, hy: f32, targets: &[(Uuid, f32, f32)]) -> Option<&(Uu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::cave::generate_cave_layer;
+    use crate::world::map::{TileColumn, TileLayer, TileKind};
     use crate::world::zone::WORLD_SURFACE;
 
     fn make_pop(adult_count: u32) -> SettlementPopulation {
@@ -170,12 +232,40 @@ mod tests {
         }
     }
 
+    fn make_pop_underground(adult_count: u32) -> SettlementPopulation {
+        SettlementPopulation {
+            settlement_id: Uuid::nil(),
+            faction_id: FactionId("test_cave".into()),
+            world_id: WORLD_SURFACE,
+            birth_ticks: 0,
+            adult_count,
+            child_count: 0,
+            home_x: 5.0,
+            home_y: 5.0,
+            home_z: -10.0,
+            war_party_cooldown: 0,
+            military_strength: WAR_PARTY_MILITARY_MIN,
+        }
+    }
+
+    fn empty_map(width: usize, height: usize) -> WorldMap {
+        WorldMap {
+            columns: vec![TileColumn::default(); width * height],
+            width,
+            height,
+            seed: 0,
+            road_tiles: vec![false; width * height],
+            spawn_points: Vec::new(),
+            buildings_stamped: false,
+        }
+    }
+
     #[test]
     fn birth_acc_accumulates_deterministically() {
         let mut state = make_pop(3);
         let mut spawn_count = 0u32;
         for _ in 0..300 {
-            let (next, effects) = tick_population(state, &[]);
+            let (next, effects) = tick_population(state, &[], None);
             state = next;
             spawn_count += effects.iter()
                 .filter(|e| matches!(e, PopulationEffect::SpawnChild { .. }))
@@ -188,7 +278,7 @@ mod tests {
     fn birth_acc_remainder_carried() {
         let mut state = make_pop(3);
         for _ in 0..150 {
-            let (next, effects) = tick_population(state, &[]);
+            let (next, effects) = tick_population(state, &[], None);
             state = next;
             assert!(
                 effects.iter().all(|e| !matches!(e, PopulationEffect::SpawnChild { .. })),
@@ -201,9 +291,9 @@ mod tests {
 
     #[test]
     fn war_party_threshold_at_exactly_15() {
-        let target = (Uuid::new_v4(), 100.0f32, 100.0f32);
+        let target = (Uuid::new_v4(), 100.0f32, 100.0f32, 0.0f32);
         let state = make_pop(WAR_PARTY_THRESHOLD);
-        let (_, effects) = tick_population(state, &[target]);
+        let (_, effects) = tick_population(state, &[target], None);
         assert!(
             effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
             "war party formed at threshold"
@@ -212,9 +302,9 @@ mod tests {
 
     #[test]
     fn war_party_not_formed_below_threshold() {
-        let target = (Uuid::new_v4(), 100.0f32, 100.0f32);
+        let target = (Uuid::new_v4(), 100.0f32, 100.0f32, 0.0f32);
         let state = make_pop(WAR_PARTY_THRESHOLD - 1);
-        let (_, effects) = tick_population(state, &[target]);
+        let (_, effects) = tick_population(state, &[target], None);
         assert!(
             !effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
             "war party should not form below threshold"
@@ -225,7 +315,7 @@ mod tests {
     fn war_party_requires_hostile_target() {
         // No targets: war party never forms even if adults >= threshold.
         let state = make_pop(WAR_PARTY_THRESHOLD + 5);
-        let (_, effects) = tick_population(state, &[]);
+        let (_, effects) = tick_population(state, &[], None);
         assert!(
             !effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. }))
         );
@@ -233,12 +323,12 @@ mod tests {
 
     #[test]
     fn war_party_cooldown_prevents_immediate_repeat() {
-        let target = (Uuid::new_v4(), 100.0f32, 100.0f32);
+        let target = (Uuid::new_v4(), 100.0f32, 100.0f32, 0.0f32);
         let state = make_pop(WAR_PARTY_THRESHOLD + WAR_PARTY_SIZE); // enough for two
-        let (state, effects) = tick_population(state, &[target]);
+        let (state, effects) = tick_population(state, &[target], None);
         assert!(effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })));
         // Next tick: cooldown active, no second war party.
-        let (_, effects2) = tick_population(state, &[target]);
+        let (_, effects2) = tick_population(state, &[target], None);
         assert!(!effects2.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })));
     }
 
@@ -246,8 +336,8 @@ mod tests {
     fn deterministic_same_input() {
         let state1 = make_pop(5);
         let state2 = make_pop(5);
-        let (r1, e1) = tick_population(state1, &[]);
-        let (r2, e2) = tick_population(state2, &[]);
+        let (r1, e1) = tick_population(state1, &[], None);
+        let (r2, e2) = tick_population(state2, &[], None);
         assert_eq!(r1.birth_ticks, r2.birth_ticks);
         assert_eq!(e1, e2);
     }
@@ -259,7 +349,7 @@ mod tests {
         state.child_count = MAX_SETTLEMENT_POP - state.adult_count;
         let mut spawn_count = 0u32;
         for _ in 0..300 {
-            let (next, effects) = tick_population(state, &[]);
+            let (next, effects) = tick_population(state, &[], None);
             state = next;
             spawn_count += effects.iter()
                 .filter(|e| matches!(e, PopulationEffect::SpawnChild { .. }))
@@ -275,7 +365,7 @@ mod tests {
         state.child_count = MAX_SETTLEMENT_POP - state.adult_count - 1;
         let mut spawn_count = 0u32;
         for _ in 0..300 {
-            let (next, effects) = tick_population(state, &[]);
+            let (next, effects) = tick_population(state, &[], None);
             state = next;
             spawn_count += effects.iter()
                 .filter(|e| matches!(e, PopulationEffect::SpawnChild { .. }))
@@ -286,12 +376,12 @@ mod tests {
 
     #[test]
     fn war_party_requires_military_strength() {
-        let target = (Uuid::new_v4(), 100.0f32, 100.0f32);
+        let target = (Uuid::new_v4(), 100.0f32, 100.0f32, 0.0f32);
 
         // Below military threshold: no war party.
         let mut low_mil = make_pop(WAR_PARTY_THRESHOLD);
         low_mil.military_strength = WAR_PARTY_MILITARY_MIN - 1.0;
-        let (_, effects) = tick_population(low_mil, &[target]);
+        let (_, effects) = tick_population(low_mil, &[target], None);
         assert!(
             !effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
             "war party should not form below military threshold"
@@ -299,10 +389,58 @@ mod tests {
 
         // At military threshold: war party forms.
         let high_mil = make_pop(WAR_PARTY_THRESHOLD);
-        let (_, effects) = tick_population(high_mil, &[target]);
+        let (_, effects) = tick_population(high_mil, &[target], None);
         assert!(
             effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
             "war party should form at military threshold"
+        );
+    }
+
+    #[test]
+    fn underground_population_grows() {
+        let mut state = make_pop_underground(3);
+        let mut spawn_count = 0u32;
+        for _ in 0..300 {
+            let (next, effects) = tick_population(state, &[], None);
+            state = next;
+            spawn_count += effects.iter()
+                .filter(|e| matches!(e, PopulationEffect::SpawnChild { .. }))
+                .count() as u32;
+        }
+        assert!(spawn_count >= 1, "underground settlement should produce at least one birth in 300 ticks");
+    }
+
+    #[test]
+    fn crystal_cave_gives_growth_bonus() {
+        let mut map = empty_map(16, 16);
+        let z = crate::world::cave::cave_z(1);
+        let cx = 5usize;
+        let cy = 5usize;
+        // Place CrystalCave tile at the settlement position.
+        let idx = cx + cy * map.width;
+        map.columns[idx].layers.push(TileLayer {
+            z_base: z - 0.5,
+            z_top: z,
+            kind: TileKind::CrystalCave,
+            walkable: true,
+            corner_offsets: [0.0; 4],
+        });
+        let modifier = cave_growth_modifier(&map, cx as f32 + 0.5, cy as f32 + 0.5);
+        assert!(modifier > 0.0, "CrystalCave adjacent tile should give positive growth modifier, got {modifier}");
+    }
+
+    #[test]
+    fn underground_civ_can_raid_surface() {
+        // Underground settlement at z=-10, surface target at z=0.
+        let mut state = make_pop_underground(WAR_PARTY_THRESHOLD + WAR_PARTY_SIZE);
+        state.home_x = 50.0;
+        state.home_y = 50.0;
+        // Surface target: nearby in x/y but different z layer.
+        let surface_target = (Uuid::new_v4(), 60.0f32, 60.0f32, 0.0f32);
+        let (_, effects) = tick_population(state, &[surface_target], None);
+        assert!(
+            effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
+            "underground civ should be able to raid surface settlement"
         );
     }
 }

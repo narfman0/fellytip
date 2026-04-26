@@ -106,9 +106,9 @@ fn make_combat_state(
 /// when adult population is above the threshold.
 #[test]
 fn military_depletion_blocks_war_party() {
-    let target = (Uuid::new_v4(), 100.0f32, 100.0f32);
+    let target = (Uuid::new_v4(), 100.0f32, 100.0f32, 0.0f32);
     let state = make_pop(WAR_PARTY_THRESHOLD, WAR_PARTY_MILITARY_MIN - 0.1);
-    let (_, effects) = tick_population(state, &[target]);
+    let (_, effects) = tick_population(state, &[target], None);
     assert!(
         !effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
         "depleted military should block war party formation"
@@ -120,11 +120,11 @@ fn military_depletion_blocks_war_party() {
 /// must form until military is replenished.
 #[test]
 fn famine_stops_war_party_dispatch_until_recovery() {
-    let target = (Uuid::new_v4(), 100.0f32, 100.0f32);
+    let target = (Uuid::new_v4(), 100.0f32, 100.0f32, 0.0f32);
 
     // Pre-famine: comfortable military — war party forms.
     let pre_famine = make_pop(20, 50.0);
-    let (_, effects) = tick_population(pre_famine, &[target]);
+    let (_, effects) = tick_population(pre_famine, &[target], None);
     assert!(
         effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
         "war party should form before famine"
@@ -132,7 +132,7 @@ fn famine_stops_war_party_dispatch_until_recovery() {
 
     // Famine wipes out military capacity entirely.
     let post_famine = make_pop(20, 0.0);
-    let (_, effects) = tick_population(post_famine, &[target]);
+    let (_, effects) = tick_population(post_famine, &[target], None);
     assert!(
         !effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
         "war party must NOT form after famine wipes out military"
@@ -140,7 +140,7 @@ fn famine_stops_war_party_dispatch_until_recovery() {
 
     // Recovery: military restored to threshold — war party can form again.
     let recovered = make_pop(20, WAR_PARTY_MILITARY_MIN);
-    let (_, effects) = tick_population(recovered, &[target]);
+    let (_, effects) = tick_population(recovered, &[target], None);
     assert!(
         effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
         "war party should form again after military recovery"
@@ -325,9 +325,9 @@ fn resource_sink_drives_raid_over_diplomacy() {
 
     // Population level: military=25 ≥ WAR_PARTY_MILITARY_MIN (15.0) and
     // adults ≥ WAR_PARTY_THRESHOLD → war party dispatched toward hostile target.
-    let target = (Uuid::new_v4(), 200.0f32, 200.0f32);
+    let target = (Uuid::new_v4(), 200.0f32, 200.0f32, 0.0f32);
     let pop = make_pop(WAR_PARTY_THRESHOLD, 25.0);
-    let (_, effects) = tick_population(pop, &[target]);
+    let (_, effects) = tick_population(pop, &[target], None);
     assert!(
         effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
         "starving but militarily capable settlement should dispatch war party"
