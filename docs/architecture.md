@@ -115,3 +115,7 @@ Messages (`BattleStartMsg`, `BattleEndMsg`, `BattleAttackMsg`, `StoryMsg`) flow 
 | `EcologyState` | Per-region predator/prey population counts |
 | `StoryLog` | In-memory ordered event log; flushed to SQLite periodically |
 | `WorldSimTick` | Monotonic counter incremented each 1 Hz world-sim tick |
+| `ZoneRegistry` | All registered zones and templates; populated at startup from `generate_zones()` |
+| `ZoneTopology` | Portal adjacency graph; used for BFS hop-distance and zone-hopping |
+| `ZoneNavGrids` | Per-zone `Grid<NavCell>` nav grids for interior pathfinding |
+| `FactionAlertState` | Per-faction alert level and decay counter; raised on `BattleEndMsg`; decays after 300 ticks |

@@ -2,7 +2,7 @@
 
 Multiplayer action RPG in Rust/Bevy where the world simulates itself independent of player presence.
 
-**Status:** Core systems complete through Milestone 4 scaffold. Fully procedural world with fBm terrain, Whittaker biomes, rivers, settlements, territory, road networks, and 200-tick history pre-simulation before players join.
+**Status:** Core systems complete through Milestone 4 (classes, boss phases, faction alerts, party HUD, roof cutaway, zone-aware A*). Remaining M4 items: dungeon room transitions (surface portals + populated tile layouts) and 2-hour load test. Fully procedural world with fBm terrain, Whittaker biomes, rivers, settlements, territory, road networks, and 200-tick history pre-simulation before players join.
 
 ## Prerequisites
 
@@ -64,7 +64,12 @@ cargo clippy --workspace -- -D warnings
 | Combat ECS bridge | `FixedUpdate` interrupt stack; dice injected at boundary |
 | Fluid movement | Z follows terrain via bilinear height interpolation + lerp |
 | Party system | Up to 4 clients; `PartyRegistry` resource |
-| Dungeon | Boss NPC spawned; `BossNpc` + `InDungeon` markers |
+| Dungeon | Boss NPC spawned; `BossNpc` + `InDungeon` markers; `BossPhase` 3-phase combat |
+| **Character classes** | Warrior (STR), Rogue (DEX + SneakAttack/poison), Mage (INT + ArcaneBlast/auto-hit/scorched) |
+| **Faction alert system** | `FactionAlertState` raises NPC patrol radius 2× and speed 1.5× for 300 ticks after any battle |
+| **Party HUD** | egui health bars for all party members; updates from replicated `Health` components |
+| **Roof cutaway** | `RoofTile` + `update_roof_cutaway` hides interior roof tiles when player is in a `BuildingFloor` zone |
+| **Zone-aware A*** | `find_path_zone_aware` in shared; `ZoneNavGrids::zone_astar` bridge; wired into NPC wander |
 
 ## Crates
 

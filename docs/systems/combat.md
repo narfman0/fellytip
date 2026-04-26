@@ -90,16 +90,16 @@ Three classes are implemented in `CharacterClass` (Warrior, Rogue, Mage). Each c
 
 ## Dungeon boss phased abilities
 
-The Hollow King has three combat phases tracked by `BossPhase` component on the boss entity:
+The Hollow King has three combat phases tracked by `BossPhase` component on the boss entity. Transitions are strictly one-way (Phase1 → Phase2 → Phase3) and logged as warnings. `DungeonPlugin` runs `tick_boss_phase_transitions` on every `FixedUpdate` tick.
 
 | Phase | HP threshold | Ability ID | Behaviour |
 |-------|-------------|-----------|-----------|
-| 1     | > 50 %      | 5         | BossRage: heavy strike + "enraged" self-buff |
-| 2     | 25–50 %     | 6         | BossFrenzy: two rapid strikes + "weakened" on target |
-| 3     | < 25 %      | 1         | StrongAttack (fallback) |
+| 1     | > 50 %      | 1         | StrongAttack: 2×d8 + "weakened" on target |
+| 2     | 25–50 %     | 5         | BossRage: d10+3 heavy strike + "enraged" self-buff |
+| 3     | < 25 %      | 6         | BossFrenzy: two d6 strikes + "weakened" on target if any damage landed |
 
-Wait — boss phases use IDs 5 and 6 for Phase1 and Phase2 (which correspond to HP > 50% → ability 1 StrongAttack, 25–50% → ability 5 BossRage, < 25% → ability 6 BossFrenzy). The `DungeonPlugin` runs `tick_boss_phase_transitions` on every FixedUpdate tick to advance phases.
+`BossPhase::ability_id()` maps each phase variant to its ability ID. The ECS bridge reads this during `initiate_attacks` to route the boss to the correct `resolve_ability` branch.
 
 ## Current state
 
-Basic attack (Space) → damage → death → XP loop is fully functional. StrongAttack (Q) is ability 1. Three character classes are implemented with class-appropriate modifiers and distinct abilities (ids 1–3). The dungeon boss ("The Hollow King") has phased abilities at 50% and 25% HP thresholds. Movement reactions (`ResolvingMovement`) are scaffolded but unimplemented.
+Basic attack (Space) → damage → death → XP loop is fully functional. StrongAttack (Q) is ability 1. Three character classes are implemented with class-appropriate modifiers and distinct abilities (ids 1–3). The dungeon boss ("The Hollow King") has phased abilities at 50% and 25% HP thresholds. Movement reactions (`ResolvingMovement`) are scaffolded but unimplemented. Faction alert state (`FactionAlertState`) raises NPC patrol radius and speed after any battle; see `docs/systems/factions.md`.

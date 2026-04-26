@@ -180,17 +180,15 @@ When a player's `ZoneMembership` changes:
 
 ---
 
-## Roof Cutaway (Single-Story Shortcut) — designed, not yet implemented
+## Roof Cutaway (Multi-Story Zones)
 
-Buildings that never need stairs or a basement should use a visual shortcut instead of a portal:
+For zones with a `BuildingFloor` kind (multi-floor buildings), roof tiles are hidden when the local player is inside to reveal the interior. This is implemented as a simple `Visibility` toggle — no shader required.
 
-- Interior stays on zone 0 — entities inside are overworld entities.
-- A `BuildingRoof` entity (PBR mesh) with a shader that reads a `PlayerProximity` buffer.
-- When any local player's position is inside the building's AABB (world-space footprint + margin), the roof's opacity lerps to 0.
-- No zone transition occurs; nav grid, interest management, and replication are unchanged.
-- Upgrade path: if a building later needs a basement, convert to a multi-floor `BuildingKind` — `generate_zones()` will emit child zones and portals automatically.
+- **`RoofTile { zone_id }`** — marker component on every `InteriorTile::Roof` mesh entity spawned by `ZoneRendererPlugin`.
+- **`update_roof_cutaway`** — runs every `Update` frame; reads the local player's `ZoneMembership` and sets `Visibility::Hidden` on matching `RoofTile` entities, `Visibility::Inherited` on all others.
+- On zone exit the roofs are automatically restored because the system re-evaluates every frame.
 
-As of this milestone, `generate_zones()` already honours this by skipping single-story `BuildingKind`s (`TentDetailed`, `Fountain`, stalls, etc.). The shader/fade system is still TODO — no `BuildingRoof` component exists yet.
+Single-story village buildings (on overworld zone 0) do not yet have a roof-fade shortcut — those would need a separate AABB-proximity check. They are currently opaque.
 
 ---
 
@@ -206,7 +204,7 @@ Mapping is in `plugins/nav.rs::interior_tile_to_nav_cell`:
 | Water, Roof, Window | Slow |
 | Wall, Void, Pit | Blocked |
 
-The overworld `NavGrid` still uses the existing 256×256 downsampled tile grid — zone-aware A* / flow-field consumption of `ZoneNavGrids` is a follow-up. The container is in place so the algorithms can land next without a data migration.
+The overworld `NavGrid` still uses the existing 256×256 downsampled tile grid. Zone-aware A* is now implemented: `find_path_zone_aware()` in `crates/shared/src/world/pathfinding.rs` dispatches to the correct per-zone grid, and `ZoneNavGrids::zone_astar` is the server bridge method. `wander_npcs` in `ai.rs` uses zone-local coords and `zone_astar` for NPCs with a non-overworld `ZoneMembership`. See `docs/systems/pathfinding.md` for full details.
 
 War-party routing across zones: `advance_zone_parties` (WorldSimSchedule, 1 Hz) advances members one zone per tick based on their precomputed `zone_route: Vec<ZoneId>`. Intra-zone movement stays on `FixedUpdate` via `march_war_parties` once the party reaches the overworld.
 
@@ -260,7 +258,8 @@ Tile handling: `Floor`/`Stair`/`Water` → floor quad; `Wall`/`Window` → verti
 6. ✅ Roof-cutaway for multi-story `BuildingFloor` zones — `RoofTile` marker + `update_roof_cutaway` system in `zone_renderer.rs`. Single-story buildings (on overworld zone 0) are a separate visual-only system not yet implemented.
 7. ✅ `advance_zone_parties` in `ai.rs` — zone-hopping at 1 Hz; converts to surface march on reaching overworld.
 8. ✅ `StoryEvent::UndergroundThreat` + hop-distance gate (≤ 3 emits; 0.4/0.7 pressure thresholds emit with synthetic hop counts).
-9. ⏳ Move `shortest_zone_path` from `ai.rs` onto `ZoneTopology` impl.
-10. ⏳ Wire Lightyear interest groups per zone.
-11. ⏳ Propagate building world-coords into portal anchors so `trigger_radius` checks are real.
-12. ⏳ Give `ZoneTileMessage` an explicit `ZoneKind` field.
+9. ✅ Zone-aware A* — `find_path_zone_aware` pure fn in `crates/shared/src/world/pathfinding.rs`; `ZoneNavGrids::zone_astar` server bridge; wired into `wander_npcs` in `ai.rs`.
+10. ⏳ Move `shortest_zone_path` from `ai.rs` onto `ZoneTopology` impl.
+11. ⏳ Wire Lightyear interest groups per zone.
+12. ⏳ Propagate building world-coords into portal anchors so `trigger_radius` checks are real.
+13. ⏳ Give `ZoneTileMessage` an explicit `ZoneKind` field.

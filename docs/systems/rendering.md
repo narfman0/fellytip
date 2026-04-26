@@ -224,6 +224,7 @@ Messages are received via the lightyear client `MessageReceiver<T>` pattern on t
 | Panel | Trigger | Anchor | Contents |
 |---|---|---|---|
 | `##stats` | always | Bottom-left | HP bar + XP progress bar + level |
+| `##party` | always | Top-left (below Battle Log) | HP bar per party member from replicated `Health` components |
 | `Battle Log` | always | Top-left | Last 20 battle events from `BattleLog` |
 | `World Events` | always | Bottom-right | Last 10 story events from `ClientStoryLog` |
 | `Character` | `C` key toggle | Centre | Detailed stats grid + faction standings |
