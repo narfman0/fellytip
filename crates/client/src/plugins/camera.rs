@@ -3,11 +3,10 @@
 //! Default angle: yaw=45°, pitch=35.3° (classic isometric).  The target starts
 //! at the centre of the world map so the player sees terrain immediately.
 //!
-//! With the `locked_iso` cargo feature enabled, drag-to-orbit is disabled —
-//! yaw and pitch stay at the dimetric iso angles and only scroll zoom is live.
+//! Drag-to-orbit is disabled by default (`free_orbit: false`); set `free_orbit`
+//! to `true` (e.g. via the `dm/set_camera_free` BRP method) to enable it.
 
 use bevy::input::mouse::AccumulatedMouseScroll;
-#[cfg(not(feature = "locked_iso"))]
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use fellytip_shared::world::map::WorldMap;
@@ -34,7 +33,6 @@ impl Plugin for OrbitCameraPlugin {
 
 /// Logical orbit state.  The Bevy `Transform` is recomputed every frame.
 #[derive(Component)]
-#[cfg_attr(feature = "locked_iso", allow(dead_code))]
 pub struct OrbitCamera {
     /// World-space point the camera orbits around (Bevy Y-up coordinates).
     pub target: Vec3,
@@ -53,6 +51,10 @@ pub struct OrbitCamera {
     pub orbit_speed: f32,
     /// World units per scroll line (approximately).
     pub zoom_speed: f32,
+    /// When `false` (default), yaw/pitch are locked to the ISO angles and
+    /// right/middle-click drag has no effect.  Set to `true` to enable
+    /// free-orbit mode (e.g. via `dm/set_camera_free`).
+    pub free_orbit: bool,
 }
 
 impl Default for OrbitCamera {
@@ -61,15 +63,16 @@ impl Default for OrbitCamera {
             // World-space origin (0, 8, 0) = centre of the map; y≈8 is typical surface elevation
             // with Z_SCALE=20.0 and moderate terrain height.
             target: Vec3::new(0.0, 8.0, 0.0),
-            distance: 14.0,
+            distance: 7.0,
             yaw: ISO_YAW,
             pitch: ISO_PITCH,
             min_pitch: 0.40,
             max_pitch: PI * 0.5 - 0.02,
-            min_distance: 2.0,
-            max_distance: 22.0,
+            min_distance: 1.0,
+            max_distance: 11.0,
             orbit_speed: 0.005,
             zoom_speed: 4.0,
+            free_orbit: false,
         }
     }
 }
@@ -93,8 +96,8 @@ fn spawn_camera(mut commands: Commands) {
 
 fn update_orbit_camera(
     mut query: Query<(&mut OrbitCamera, &mut Transform)>,
-    #[cfg(not(feature = "locked_iso"))] buttons: Res<ButtonInput<MouseButton>>,
-    #[cfg(not(feature = "locked_iso"))] motion: Res<AccumulatedMouseMotion>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     // Follow the local player's predicted position — updated every frame on
     // input so the camera tracks the visual mesh with zero lag.
@@ -111,9 +114,10 @@ fn update_orbit_camera(
         orbit.target = Vec3::new(pos.x, pos.z, pos.y);
     }
 
-    // Right-click or middle-click drag to orbit — disabled under `locked_iso`.
-    #[cfg(not(feature = "locked_iso"))]
-    if buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle) {
+    // Right-click or middle-click drag to orbit — only active in free_orbit mode.
+    if orbit.free_orbit
+        && (buttons.pressed(MouseButton::Right) || buttons.pressed(MouseButton::Middle))
+    {
         orbit.yaw -= motion.delta.x * orbit.orbit_speed;
         orbit.pitch = (orbit.pitch + motion.delta.y * orbit.orbit_speed)
             .clamp(orbit.min_pitch, orbit.max_pitch);

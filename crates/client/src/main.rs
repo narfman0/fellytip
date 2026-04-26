@@ -129,6 +129,7 @@ fn main() {
                         .with_method("dm/set_camera_distance",    dm_set_camera_distance)
                         .with_method("dm/teleport_player",        dm_teleport_player)
                         .with_method("dm/set_character_debug",    dm_set_character_debug)
+                        .with_method("dm/set_camera_free",        dm_set_camera_free)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -153,6 +154,7 @@ fn main() {
                     .with_method("dm/set_camera_distance",        dm_set_camera_distance)
                     .with_method("dm/teleport_player",            dm_teleport_player)
                     .with_method("dm/set_character_debug",        dm_set_character_debug)
+                    .with_method("dm/set_camera_free",            dm_set_camera_free)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
@@ -573,4 +575,27 @@ fn dm_set_camera_distance(
     cam.distance = clamped;
     tracing::info!(distance = clamped, "DM camera distance set");
     Ok(serde_json::json!({ "ok": true, "distance": clamped }))
+}
+
+/// Toggle free-orbit mode on the camera.
+///
+/// Params: `{ "free": bool }` (defaults to `false` if omitted)
+/// Returns `{ "free": bool }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_set_camera_free(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let free = params
+        .as_ref()
+        .and_then(|p| p.get("free"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let mut q = world.query::<&mut plugins::camera::OrbitCamera>();
+    let mut cam = q.single_mut(world)
+        .map_err(|_| BrpError::internal("no OrbitCamera entity found"))?;
+    cam.free_orbit = free;
+    tracing::info!(free, "DM camera free_orbit set");
+    Ok(serde_json::json!({ "free": free }))
 }
