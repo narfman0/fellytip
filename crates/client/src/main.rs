@@ -113,6 +113,7 @@ fn main() {
                         .with_method("dm/set_portal_debug",  dm_set_portal_debug)
                         .with_method("dm/take_screenshot",        dm_take_screenshot)
                         .with_method("dm/set_camera_distance",    dm_set_camera_distance)
+                        .with_method("dm/teleport_player",        dm_teleport_player)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -134,6 +135,7 @@ fn main() {
                     .with_method("dm/set_portal_debug",           dm_set_portal_debug)
                     .with_method("dm/take_screenshot",            dm_take_screenshot)
                     .with_method("dm/set_camera_distance",        dm_set_camera_distance)
+                    .with_method("dm/teleport_player",            dm_teleport_player)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
@@ -481,6 +483,31 @@ fn dm_take_screenshot(
 
     tracing::info!(%path, "DM screenshot requested");
     Ok(serde_json::json!({ "ok": true, "path": path }))
+}
+
+/// Teleport the local player by writing PredictedPosition (and WorldPosition),
+/// bypassing the normal PredictedPosition→WorldPosition copy that makes
+/// dm/teleport no-op for the local player.
+///
+/// Params: `{ "x": f32, "y": f32, "z": f32 }` (z optional, defaults to current)
+/// Returns `{ "ok": true }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_teleport_player(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let p = params.as_ref().ok_or_else(|| BrpError::internal("missing params"))?;
+    let x = p.get("x").and_then(|v| v.as_f64()).ok_or_else(|| BrpError::internal("missing x"))? as f32;
+    let y = p.get("y").and_then(|v| v.as_f64()).ok_or_else(|| BrpError::internal("missing y"))? as f32;
+
+    let mut q = world.query_filtered::<(&mut PredictedPosition, &mut WorldPosition), With<LocalPlayer>>();
+    let (mut pred, mut wpos) = q.single_mut(world)
+        .map_err(|_| BrpError::internal("no local player found"))?;
+    let z = p.get("z").and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(pred.z);
+    pred.x = x; pred.y = y; pred.z = z; pred.z_vel = 0.0; pred.grounded = false;
+    wpos.x = x; wpos.y = y; wpos.z = z;
+    tracing::info!(x, y, z, "DM teleport player (PredictedPosition)");
+    Ok(serde_json::json!({ "ok": true }))
 }
 
 /// Set the orbit camera distance (zoom).
