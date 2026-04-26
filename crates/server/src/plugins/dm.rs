@@ -22,24 +22,29 @@
 //! | `dm/underground_pressure` | Read the underground pressure resource snapshot |
 //! | `dm/force_underground_pressure` | Force pressure score to 1.0 for tests |
 //! | `dm/query_portals`              | List all portal trigger positions      |
+//! | `dm/spawn_wildlife`             | Spawn a wildlife entity at a world position |
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use fellytip_shared::{
-    components::{GrowthStage, WorldPosition},
+    combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
+    components::{EntityKind, GrowthStage, Health, WildlifeKind, WorldPosition},
     world::{
+        ecology::RegionId,
         faction::FactionId,
         population::WAR_PARTY_SIZE,
         zone::ZoneMembership,
     },
 };
+use uuid::Uuid;
 
 use crate::plugins::{
     ai::{BattleHistory, FactionMember, FactionPopulationState, FactionRegistry, UndergroundPressure, WarPartyMember},
     ai::population::faction_npc_bundle,
-    ecology::EcologyState,
+    combat::{CombatParticipant, ExperienceReward},
+    ecology::{EcologyState, WildlifeNpc},
     portal::PortalTrigger,
 };
 
@@ -85,6 +90,55 @@ pub fn dm_spawn_npc(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
     )).id();
 
     tracing::info!(faction = %faction, x, y, z, entity = ?entity, "DM spawned NPC");
+    Ok(json!({ "ok": true, "entity": entity.to_bits() }))
+}
+
+// ── dm/spawn_wildlife ─────────────────────────────────────────────────────────
+
+/// Spawn a wildlife entity at the given world position.
+///
+/// Params: `{ x: f64, y: f64, z?: f64, kind?: "Bison"|"Horse"|"Dog" }`
+/// Defaults: `z = 10.0`, `kind = "Horse"`.
+///
+/// Returns `{ ok: true, entity: u64 }`.
+pub fn dm_spawn_wildlife(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let x: f64 = require(&params, "x")?;
+    let y: f64 = require(&params, "y")?;
+    let z: f64 = opt(&params, "z").unwrap_or(10.0);
+    let kind_str: String = opt(&params, "kind").unwrap_or_else(|| "Horse".to_string());
+
+    let wildlife_kind = match kind_str.as_str() {
+        "Bison" => WildlifeKind::Bison,
+        "Dog"   => WildlifeKind::Dog,
+        "Horse" => WildlifeKind::Horse,
+        other   => return Err(BrpError::internal(format!(
+            "unknown wildlife kind `{other}`; valid values: Bison, Horse, Dog"
+        ))),
+    };
+
+    #[allow(clippy::cast_possible_truncation)]
+    let pos = WorldPosition { x: x as f32, y: y as f32, z: z as f32 };
+
+    let entity = world.spawn((
+        pos,
+        Health { current: 15, max: 15 },
+        CombatParticipant {
+            id: CombatantId(Uuid::new_v4()),
+            interrupt_stack: InterruptStack::default(),
+            class: CharacterClass::Rogue,
+            level: 1,
+            armor_class: 10,
+            strength: 8,
+            dexterity: 12,
+            constitution: 10,
+        },
+        ExperienceReward(25),
+        WildlifeNpc { region: RegionId("dm_spawned".into()) },
+        EntityKind::Wildlife,
+        wildlife_kind,
+    )).id();
+
+    tracing::info!(kind = %kind_str, x, y, z, entity = ?entity, "DM spawned wildlife");
     Ok(json!({ "ok": true, "entity": entity.to_bits() }))
 }
 

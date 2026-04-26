@@ -123,6 +123,7 @@ fn main() {
                         .with_method("dm/underground_pressure", fellytip_server::plugins::dm::dm_underground_pressure)
                         .with_method("dm/force_underground_pressure", fellytip_server::plugins::dm::dm_force_underground_pressure)
                         .with_method("dm/query_portals",     fellytip_server::plugins::dm::dm_query_portals)
+                        .with_method("dm/spawn_wildlife",    fellytip_server::plugins::dm::dm_spawn_wildlife)
                         .with_method("dm/set_portal_debug",  dm_set_portal_debug)
                         .with_method("dm/take_screenshot",        dm_take_screenshot)
                         .with_method("dm/set_camera_distance",    dm_set_camera_distance)
@@ -146,6 +147,7 @@ fn main() {
                     .with_method("dm/underground_pressure",       fellytip_server::plugins::dm::dm_underground_pressure)
                     .with_method("dm/force_underground_pressure", fellytip_server::plugins::dm::dm_force_underground_pressure)
                     .with_method("dm/query_portals",              fellytip_server::plugins::dm::dm_query_portals)
+                    .with_method("dm/spawn_wildlife",             fellytip_server::plugins::dm::dm_spawn_wildlife)
                     .with_method("dm/set_portal_debug",           dm_set_portal_debug)
                     .with_method("dm/take_screenshot",            dm_take_screenshot)
                     .with_method("dm/set_camera_distance",        dm_set_camera_distance)
@@ -519,7 +521,9 @@ fn dm_teleport_player(
     let (mut pred, mut wpos) = q.single_mut(world)
         .map_err(|_| BrpError::internal("no local player found"))?;
     let z = p.get("z").and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(pred.z);
-    pred.x = x; pred.y = y; pred.z = z; pred.z_vel = 0.0; pred.grounded = false;
+    // grounded=true lets the physics system snap z to terrain height next tick,
+    // preventing the player from free-falling when terrain hasn't loaded yet.
+    pred.x = x; pred.y = y; pred.z = z; pred.z_vel = 0.0; pred.grounded = true;
     wpos.x = x; wpos.y = y; wpos.z = z;
     tracing::info!(x, y, z, "DM teleport player (PredictedPosition)");
     Ok(serde_json::json!({ "ok": true }))
