@@ -26,6 +26,7 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 
 use bevy::prelude::*;
+use bevy::gizmos::config::GizmoConfigStore;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
 use fellytip_shared::world::civilization::{BuildingKind, Buildings, SettlementKind};
@@ -41,12 +42,18 @@ use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_
 #[derive(Resource, Default)]
 pub struct CharacterDebugOverlay(pub bool);
 
+/// Custom gizmo group for character debug spheres so they render always-on-top
+/// (depth_bias = -1.0) without affecting other gizmos.
+#[derive(GizmoConfigGroup, Default, Reflect)]
+pub struct CharacterDebugGizmos;
+
 pub struct EntityRendererPlugin;
 
 impl Plugin for EntityRendererPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CharacterDebugOverlay>()
-            .add_systems(Startup, (setup_entity_assets, setup_building_assets))
+            .init_gizmo_group::<CharacterDebugGizmos>()
+            .add_systems(Startup, (configure_debug_gizmos, setup_entity_assets, setup_building_assets))
             .add_systems(
                 Update,
                 (
@@ -62,6 +69,11 @@ impl Plugin for EntityRendererPlugin {
                 ),
             );
     }
+}
+
+fn configure_debug_gizmos(mut store: ResMut<GizmoConfigStore>) {
+    let (config, _) = store.config_mut::<CharacterDebugGizmos>();
+    config.depth_bias = -1.0;
 }
 
 /// Per-lantern flicker state: unique phase offset so each lantern flickers independently.
@@ -500,7 +512,7 @@ type DebugOverlayItems<'a> = (
 /// - Everything else (remote players, unrecognised creatures) → gray
 fn draw_character_debug_overlay(
     overlay: Res<CharacterDebugOverlay>,
-    mut gizmos: Gizmos,
+    mut gizmos: Gizmos<CharacterDebugGizmos>,
     query: Query<DebugOverlayItems>,
 ) {
     if !overlay.0 {
