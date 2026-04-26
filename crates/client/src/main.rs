@@ -50,15 +50,27 @@ pub struct PredictedPosition {
 #[cfg(not(target_family = "wasm"))]
 const BRP_PORT: u16 = 15702;
 
+// Absolute path to the assets directory baked in at compile time so the
+// binary finds its assets regardless of the working directory it's launched from.
+#[cfg(debug_assertions)]
+const ASSET_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
+#[cfg(not(debug_assertions))]
+const ASSET_PATH: &str = "assets";
+
 fn add_windowed_plugins(app: &mut App) {
     app.add_plugins(
-        DefaultPlugins.build().set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Fellytip".into(),
+        DefaultPlugins.build()
+            .set(AssetPlugin {
+                file_path: ASSET_PATH.into(),
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Fellytip".into(),
+                    ..default()
+                }),
                 ..default()
             }),
-            ..default()
-        }),
     )
     .add_systems(Update, track_frame_time)
     .add_plugins(plugins::SceneLightingPlugin)
