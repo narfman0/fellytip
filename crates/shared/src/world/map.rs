@@ -245,6 +245,25 @@ impl WorldMap {
         }
     }
 
+    /// Add a walkable stair/floor layer at the given tile position and z height.
+    /// Skips silently if a walkable layer already exists within 0.1 world units of z_top.
+    /// Inserts the new layer in sorted order by z_base.
+    pub fn add_stair_layer(&mut self, ix: usize, iy: usize, z_top: f32, kind: TileKind) {
+        if ix >= self.width || iy >= self.height { return; }
+        let idx = ix + iy * self.width;
+        let col = &mut self.columns[idx];
+        if col.layers.iter().any(|l| l.walkable && (l.z_top - z_top).abs() < 0.1) { return; }
+        let new_layer = TileLayer {
+            z_base: (z_top - 0.5).max(0.0),
+            z_top,
+            kind,
+            walkable: true,
+            corner_offsets: [0.0; 4],
+        };
+        let pos = col.layers.partition_point(|l| l.z_base < new_layer.z_base);
+        col.layers.insert(pos, new_layer);
+    }
+
     /// Returns `None` if `(x, y)` is outside the map bounds.
     ///
     /// `x` and `y` are world-space coordinates centered on (0, 0): the map

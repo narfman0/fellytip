@@ -339,6 +339,60 @@ pub fn generate_roads(map: &mut WorldMap, settlements: &[Settlement]) {
 /// settlement placement (which also uses the raw `seed`).
 const BUILDING_SEED_OFFSET: u64 = 0xB411_D1A0;
 
+/// Spiral of 8 (dx, dy) offsets around the tower center, going clockwise.
+const STAIR_SPIRAL: [(i32, i32); 8] = [
+    (0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1),
+];
+
+/// Z height increment per spiral step — smaller than STEP_HEIGHT=2.0 so the
+/// movement system can always reach the next step.
+const STAIR_STEP: f32 = 1.4;
+
+/// Height of each tower floor in world units.
+const TOWER_FLOOR_H: f32 = 3.0;
+
+fn tower_floor_count(kind: BuildingKind) -> u32 {
+    match kind {
+        BuildingKind::CapitalTower => 7,
+        BuildingKind::Tower        => 4,
+        BuildingKind::Keep         => 3,
+        BuildingKind::Tavern | BuildingKind::Barracks => 2,
+        _ => 0,
+    }
+}
+
+fn apply_tower_stair_tiles(b: &Building, map: &mut WorldMap) {
+    let floors = tower_floor_count(b.kind);
+    if floors == 0 { return; }
+
+    let cx = b.tx as i32;
+    let cy = b.ty as i32;
+    let base_z = b.z;
+    let total_height = floors as f32 * TOWER_FLOOR_H;
+
+    // Center tile: a flat floor layer at each storey.
+    for k in 0..=floors {
+        let z = base_z + k as f32 * TOWER_FLOOR_H;
+        map.add_stair_layer(cx as usize, cy as usize, z, crate::world::map::TileKind::Stone);
+    }
+
+    // Stair spiral: rising by STAIR_STEP per tile.
+    let total_steps = ((total_height / STAIR_STEP).ceil() as u32 + 8).min(256);
+    for step in 0..total_steps {
+        let z = base_z + step as f32 * STAIR_STEP;
+        if z > base_z + total_height + TOWER_FLOOR_H { break; }
+        let (dx, dy) = STAIR_SPIRAL[(step as usize) % 8];
+        let tx = cx + dx;
+        let ty = cy + dy;
+        if tx >= 0 && ty >= 0
+            && (tx as usize) < map.width
+            && (ty as usize) < map.height
+        {
+            map.add_stair_layer(tx as usize, ty as usize, z, crate::world::map::TileKind::Stone);
+        }
+    }
+}
+
 /// Town buildings: camp-style structures around a central campfire.
 const TOWN_CENTER: BuildingKind = BuildingKind::CampfireStones;
 const TOWN_POOL: &[BuildingKind] = &[
@@ -549,7 +603,18 @@ fn make_building(
 /// this feature are automatically invalidated and regenerated.
 pub fn apply_building_tiles(buildings: &[Building], map: &mut WorldMap) {
     for b in buildings {
-        map.mark_impassable(b.tx as usize, b.ty as usize);
+        match b.kind {
+            BuildingKind::CapitalTower
+            | BuildingKind::Tower
+            | BuildingKind::Keep
+            | BuildingKind::Tavern
+            | BuildingKind::Barracks => {
+                apply_tower_stair_tiles(b, map);
+            }
+            _ => {
+                map.mark_impassable(b.tx as usize, b.ty as usize);
+            }
+        }
     }
     map.buildings_stamped = true;
 }
@@ -810,9 +875,51 @@ mod tests {
 
         assert!(map.buildings_stamped, "buildings_stamped must be true after apply");
         for b in &buildings {
-            let col = map.column(b.tx as usize, b.ty as usize);
-            let walkable = col.layers.iter().any(|l| l.is_surface_kind() && l.walkable);
-            assert!(!walkable, "tile ({},{}) should be impassable after apply_building_tiles", b.tx, b.ty);
+            match b.kind {
+                BuildingKind::CapitalTower
+                | BuildingKind::Tower
+                | BuildingKind::Keep
+                | BuildingKind::Tavern
+                | BuildingKind::Barracks => {
+                    let col = map.column(b.tx as usize, b.ty as usize);
+                    let walkable_count = col.layers.iter().filter(|l| l.walkable).count();
+                    assert!(walkable_count >= 1,
+                        "tower tile ({},{}) should have walkable stair layers", b.tx, b.ty);
+                }
+                _ => {
+                    let col = map.column(b.tx as usize, b.ty as usize);
+                    let walkable = col.layers.iter().any(|l| l.is_surface_kind() && l.walkable);
+                    assert!(!walkable,
+                        "tile ({},{}) should be impassable after apply_building_tiles", b.tx, b.ty);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tower_stair_layers_are_reachable() {
+        use crate::world::map::STEP_HEIGHT;
+        let map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 5);
+        let buildings = generate_buildings(&settlements, &map, 5);
+        let mut map = map;
+        apply_building_tiles(&buildings, &mut map);
+
+        let tower = buildings.iter().find(|b| b.kind == BuildingKind::CapitalTower);
+        if let Some(b) = tower {
+            let cx = b.tx as usize;
+            let cy = b.ty as usize;
+            let col = map.column(cx, cy);
+            let walkable_count = col.layers.iter().filter(|l| l.walkable).count();
+            assert!(walkable_count >= 2,
+                "tower center at ({cx},{cy}) should have ≥2 walkable layers, got {walkable_count}");
+            let mut z = b.z;
+            for layer in col.layers.iter().filter(|l| l.walkable) {
+                let reached = col.surface_layer(z, STEP_HEIGHT);
+                assert!(reached.is_some(),
+                    "layer at z={} should be reachable from z={z}", layer.z_top);
+                z = layer.z_top;
+            }
         }
     }
 
