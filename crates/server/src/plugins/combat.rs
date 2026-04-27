@@ -18,13 +18,15 @@ use fellytip_shared::{
             CoreStats, Effect,
         },
     },
-    components::{Experience, Health, WorldPosition},
+    components::{EntityKind, Experience, Health, WorldPosition},
     inputs::ActionIntent,
     world::{
+        ecology::RegionId,
         faction::{kill_standing_delta, standing_tier, PlayerReputationMap},
         story::{GameEntityId, StoryEvent, StoryEventKind, WriteStoryEvent},
     },
 };
+use crate::plugins::ecology::Loot;
 
 // ── Class-appropriate NPC ability selection ───────────────────────────────────
 
@@ -328,6 +330,7 @@ type ParticipantQuery<'w, 's> = Query<
 /// Step each active interrupt stack; apply effects; award XP on kills.
 fn resolve_interrupts(
     mut participants: ParticipantQuery,
+    wildlife_loot_query: Query<(Entity, &WorldPosition, &Loot, &EntityKind), With<Loot>>,
     mut story_writer: MessageWriter<WriteStoryEvent>,
     mut reputation: ResMut<PlayerReputationMap>,
     tick: Res<crate::plugins::world_sim::WorldSimTick>,
@@ -353,6 +356,20 @@ fn resolve_interrupts(
         .iter()
         .filter_map(|(e, _, _, _, _, gid, ..)| gid.map(|g| (e, g.0)))
         .collect();
+
+    // Build wildlife loot lookup: entity → (position, loot kind, quantity).
+    // Only Wildlife entities carry the Loot component, so this map is small.
+    let wildlife_loot_map: HashMap<Entity, (WorldPosition, crate::plugins::ecology::Loot)> =
+        wildlife_loot_query
+            .iter()
+            .filter_map(|(e, pos, loot, kind)| {
+                if *kind == EntityKind::Wildlife {
+                    Some((e, (pos.clone(), Loot { kind: loot.kind, quantity: loot.quantity })))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
     // ── Phase 2: build CombatState snapshot for rule calls ───────────────────
     let combat_state = CombatState {
@@ -403,6 +420,8 @@ fn resolve_interrupts(
     let mut story_events: Vec<StoryEvent> = Vec::new();
     // (killer_uuid, target_entity) pairs for reputation penalty application.
     let mut reputation_kills: Vec<(uuid::Uuid, Entity)> = Vec::new();
+    // Loot to spawn: (position, loot) pairs for dead wildlife.
+    let mut loot_spawns: Vec<(WorldPosition, Loot)> = Vec::new();
 
     for (_attacker_id, attacker_entity, effects) in &all_effects {
         for effect in effects {
@@ -431,6 +450,26 @@ fn resolve_interrupts(
                     if let Some(&target_entity) = id_to_entity.get(target) {
                         if let Some(&xp) = xp_rewards.get(&target_entity) {
                             xp_awards.push((*attacker_entity, xp));
+                        }
+                        // #115: Drop loot if the dead entity is wildlife with a Loot component.
+                        if let Some((loot_pos, loot)) = wildlife_loot_map.get(&target_entity) {
+                            loot_spawns.push((loot_pos.clone(), Loot { kind: loot.kind, quantity: loot.quantity }));
+                            story_events.push(StoryEvent {
+                                id: Uuid::new_v4(),
+                                tick: tick.0,
+                                world_day: (tick.0 / 86400) as u32,
+                                kind: StoryEventKind::WildlifeLootDropped {
+                                    region: RegionId(smol_str::SmolStr::new("surface")),
+                                },
+                                participants: vec![],
+                                location: None,
+                                lore_tags: vec![SmolStr::new("loot"), SmolStr::new("wildlife")],
+                            });
+                            tracing::debug!(
+                                kind = ?loot.kind,
+                                quantity = loot.quantity,
+                                "Wildlife loot dropped"
+                            );
                         }
                         // Resolve killer UUID from attacker's GameEntityId (players have one).
                         let killer_uuid = entity_to_game_id
@@ -512,6 +551,11 @@ fn resolve_interrupts(
     // ── Phase 7: despawn dead entities ───────────────────────────────────────
     for entity in despawn_list {
         commands.entity(entity).despawn();
+    }
+
+    // ── Phase 8: spawn loot drops from dead wildlife (#115) ──────────────────
+    for (pos, loot) in loot_spawns {
+        commands.spawn((pos, loot));
     }
 }
 

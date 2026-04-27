@@ -305,6 +305,48 @@ fn run_ecology_tick(
                     }
                 }
             }
+
+            // #116: Emit prey scarcity / predator extinction story events.
+            if next.prey.count < 10.0 && next.prey.count > 0.0 {
+                tracing::warn!(
+                    tick = tick.0,
+                    region = %next.region.0,
+                    prey = next.prey.count,
+                    "Prey scarcity in region"
+                );
+                story_writer.write(WriteStoryEvent(StoryEvent {
+                    id: Uuid::new_v4(),
+                    tick: tick.0,
+                    world_day: (tick.0 / 86_400).min(u32::MAX as u64) as u32,
+                    kind: StoryEventKind::PreyScarcity {
+                        species: next.prey.species.clone(),
+                        region: next.region.clone(),
+                    },
+                    participants: vec![],
+                    location: None,
+                    lore_tags: vec!["ecology".into(), "scarcity".into()],
+                }));
+            }
+            if next.predator.count == 0.0 {
+                tracing::warn!(
+                    tick = tick.0,
+                    region = %next.region.0,
+                    "Predator extinction in region"
+                );
+                story_writer.write(WriteStoryEvent(StoryEvent {
+                    id: Uuid::new_v4(),
+                    tick: tick.0,
+                    world_day: (tick.0 / 86_400).min(u32::MAX as u64) as u32,
+                    kind: StoryEventKind::PredatorExtinction {
+                        species: next.predator.species.clone(),
+                        region: next.region.clone(),
+                    },
+                    participants: vec![],
+                    location: None,
+                    lore_tags: vec!["ecology".into(), "extinction".into()],
+                }));
+            }
+
             Some(next)
         })
         .collect();

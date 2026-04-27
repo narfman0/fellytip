@@ -47,6 +47,12 @@ pub enum StoryEventKind {
     TreeFelled          { region: crate::world::ecology::RegionId },
     /// A farm plot was harvested.
     FarmHarvested       { settlement_id: SmolStr, yield_amount: u32 },
+    /// Prey population in a region dropped below 10 (#116).
+    PreyScarcity        { species: crate::world::ecology::SpeciesId, region: crate::world::ecology::RegionId },
+    /// Predator population in a region hit 0 (#116).
+    PredatorExtinction  { species: crate::world::ecology::SpeciesId, region: crate::world::ecology::RegionId },
+    /// Wildlife loot was dropped at a location (#115).
+    WildlifeLootDropped { region: crate::world::ecology::RegionId },
 }
 
 // ── Story event ───────────────────────────────────────────────────────────────

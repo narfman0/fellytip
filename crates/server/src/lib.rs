@@ -4,7 +4,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 use fellytip_shared::{
     WORLD_SEED,
-    combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
+    combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}, SpellSlots, Spellbook},
     components::{AbilityScores, Experience, Health, PlayerStandings, SavingThrowProficiencies, WorldMeta, WorldPosition},
     protocol::ChooseClassMessage,
     world::{
@@ -203,6 +203,9 @@ fn spawn_player_on_class_choice(
     let (_, str_val, dex_val, con_val, int_val, wis_val, cha_val, ability_scores, saves) =
         class_stats(&class);
 
+    let spell_slots = SpellSlots::for_class(&class, level as u8);
+    let spellbook   = Spellbook::for_class(&class);
+
     commands.spawn((
         WorldPosition { x: px, y: py, z: pz },
         ZoneMembership(OVERWORLD_ZONE),
@@ -233,6 +236,8 @@ fn spawn_player_on_class_choice(
             ..default()
         },
         world_meta,
+        spell_slots,
+        spellbook,
     ));
     tracing::info!(uuid = %player_uuid, x = px, y = py, z = pz, "Player spawned after class selection");
 }

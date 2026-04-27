@@ -65,6 +65,12 @@ fn format_story_event(ev: &StoryEvent) -> String {
             format!("Day {day}: A great tree falls in {}.", region.0),
         StoryEventKind::FarmHarvested { settlement_id, yield_amount } =>
             format!("Day {day}: Farms near {settlement_id} yield {yield_amount} food."),
+        StoryEventKind::PreyScarcity { species, region } =>
+            format!("Day {day}: Prey scarcity in region {} — {} numbers critically low!", region.0, species.0),
+        StoryEventKind::PredatorExtinction { species, region } =>
+            format!("Day {day}: Predator extinction in region {} — {} are gone!", region.0, species.0),
+        StoryEventKind::WildlifeLootDropped { region } =>
+            format!("Day {day}: Wildlife loot dropped in {}.", region.0),
     }
 }
 

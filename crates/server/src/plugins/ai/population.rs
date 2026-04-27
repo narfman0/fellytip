@@ -15,6 +15,7 @@ use fellytip_shared::{
     combat::{
         interrupt::InterruptStack,
         types::{CharacterClass, CombatantId},
+        SpellSlots, Spellbook,
     },
     components::{EconomicRole, EconomicRoleKind, EntityKind, FactionBadge, GrowthStage, Health, NavPath, NavReplanTimer, PlayerStandings, WorldPosition},
     world::{
@@ -313,7 +314,7 @@ pub fn spawn_faction_npcs(
                 crate::plugins::combat::CombatParticipant {
                     id: CombatantId(Uuid::new_v4()),
                     interrupt_stack: InterruptStack::default(),
-                    class: npc_class,
+                    class: npc_class.clone(),
                     level: 1,
                     armor_class: 11,
                     strength: scores.strength as i32,
@@ -333,6 +334,8 @@ pub fn spawn_faction_npcs(
                 NavPath::default(),
                 NavReplanTimer::default(),
                 economic_role,
+                SpellSlots::for_class(&npc_class, 1),
+                Spellbook::for_class(&npc_class),
             ));
             tracing::debug!(
                 faction = %faction.name,
@@ -536,7 +539,7 @@ pub fn tick_population_system(
                         CombatParticipant {
                             id: CombatantId(Uuid::new_v4()),
                             interrupt_stack: Default::default(),
-                            class: child_class,
+                            class: child_class.clone(),
                             level: 1,
                             armor_class: 8,
                             strength: 8,
@@ -556,6 +559,8 @@ pub fn tick_population_system(
                         GrowthStage(0.0),
                         NavPath::default(),
                         NavReplanTimer::default(),
+                        SpellSlots::for_class(&child_class, 1),
+                        Spellbook::for_class(&child_class),
                     ));
                     tracing::debug!(faction = %next.faction_id.0, "Child NPC spawned");
                 }
@@ -578,7 +583,7 @@ pub fn tick_population_system(
                         CombatParticipant {
                             id: CombatantId(Uuid::new_v4()),
                             interrupt_stack: Default::default(),
-                            class: child_class,
+                            class: child_class.clone(),
                             level: 1,
                             armor_class: 8,
                             strength: 8,
@@ -598,6 +603,8 @@ pub fn tick_population_system(
                         GrowthStage(0.0),
                         NavPath::default(),
                         NavReplanTimer::default(),
+                        SpellSlots::for_class(&child_class, 1),
+                        Spellbook::for_class(&child_class),
                     ));
                     tracing::debug!(faction = %next.faction_id.0, "Economy growth: child NPC spawned");
                 }
@@ -937,7 +944,7 @@ pub fn spawn_underground_raid(
             CombatParticipant {
                 id: CombatantId(Uuid::new_v4()),
                 interrupt_stack: InterruptStack::default(),
-                class: raid_class,
+                class: raid_class.clone(),
                 level: 2,
                 armor_class: 12,
                 strength: raid_scores.strength as i32,
@@ -965,6 +972,8 @@ pub fn spawn_underground_raid(
                 zone_route: zone_route.clone(),
             },
             fellytip_shared::world::zone::ZoneMembership(deepest_id),
+            SpellSlots::for_class(&raid_class, 2),
+            Spellbook::for_class(&raid_class),
         ));
     }
 
