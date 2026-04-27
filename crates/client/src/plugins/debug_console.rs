@@ -10,7 +10,7 @@ type LocalPlayerQuery<'w, 's> = Query<
     'w,
     's,
     (
-        &'static mut PredictedPosition,
+        &'static PredictedPosition,
         &'static Health,
         &'static Experience,
         &'static GameEntityId,
@@ -50,7 +50,7 @@ fn toggle_debug_console(keyboard: Res<ButtonInput<KeyCode>>, mut console: ResMut
 fn draw_debug_console(
     mut ctx: EguiContexts,
     mut console: ResMut<DebugConsole>,
-    mut player_q: LocalPlayerQuery,
+    player_q: LocalPlayerQuery,
 ) -> Result {
     let egui_ctx = ctx.ctx_mut()?;
 
@@ -100,103 +100,166 @@ fn draw_debug_console(
         });
 
     if let Some(cmd) = pending_cmd {
-        run_command(&cmd, &mut console, &mut player_q);
+        run_command(&cmd, &mut console, &player_q);
     }
 
     Ok(())
 }
 
-fn run_command(cmd: &str, console: &mut DebugConsole, player_q: &mut LocalPlayerQuery) {
+#[cfg(not(target_family = "wasm"))]
+fn brp_call(method: &str, params: serde_json::Value) -> String {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": 1
+    });
+    match ureq::post("http://localhost:15702/brp")
+        .set("Content-Type", "application/json")
+        .send_json(&body)
+    {
+        Ok(resp) => {
+            if let Ok(v) = resp.into_json::<serde_json::Value>() {
+                if let Some(result) = v.get("result") {
+                    return format!("  {result}");
+                }
+                if let Some(err) = v.get("error") {
+                    return format!("  error: {err}");
+                }
+            }
+            "  ok".into()
+        }
+        Err(e) => format!("  brp error: {e}"),
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn brp_call(_method: &str, _params: serde_json::Value) -> String {
+    "  brp not supported on wasm".into()
+}
+
+fn terminal_to_brp(parts: &[&str]) -> Option<(String, serde_json::Value)> {
+    match parts {
+        ["tp" | "teleport", x, y] => Some((
+            "dm/teleport_player".into(),
+            serde_json::json!({"x": x.parse::<f32>().ok()?, "y": y.parse::<f32>().ok()?, "z": 0.0}),
+        )),
+        ["tp" | "teleport", x, y, z] => Some((
+            "dm/teleport_player".into(),
+            serde_json::json!({"x": x.parse::<f32>().ok()?, "y": y.parse::<f32>().ok()?, "z": z.parse::<f32>().ok()?}),
+        )),
+        ["time", t] => Some((
+            "dm/set_time_of_day".into(),
+            serde_json::json!({"time": t.parse::<f32>().ok()?}),
+        )),
+        ["screenshot"] => Some((
+            "dm/take_screenshot".into(),
+            serde_json::json!({"path": "/tmp/screenshot.png"}),
+        )),
+        ["screenshot", path] => Some((
+            "dm/take_screenshot".into(),
+            serde_json::json!({"path": path}),
+        )),
+        ["portal"] => Some(("dm/enter_portal".into(), serde_json::json!({}))),
+        [method, rest @ ..] if method.starts_with("dm/") => {
+            let mut map = serde_json::Map::new();
+            for kv in rest.iter() {
+                if let Some((k, v)) = kv.split_once('=') {
+                    let val = v
+                        .parse::<f64>()
+                        .map(serde_json::Value::from)
+                        .or_else(|_| v.parse::<bool>().map(serde_json::Value::from))
+                        .unwrap_or_else(|_| serde_json::Value::String(v.to_string()));
+                    map.insert(k.to_string(), val);
+                }
+            }
+            Some((method.to_string(), serde_json::Value::Object(map)))
+        }
+        _ => None,
+    }
+}
+
+fn run_command(cmd: &str, console: &mut DebugConsole, player_q: &LocalPlayerQuery) {
     console.output.push(format!("> {cmd}"));
     let parts: Vec<&str> = cmd.split_whitespace().collect();
 
+    // Terminal-only commands
     match parts.as_slice() {
         ["help"] | [] => {
             for line in [
-                "  help                    — this list",
-                "  pos                     — current coordinates",
-                "  whoami                  — name, stats, position",
-                "  teleport <x> <y> [z]   — warp to world position",
+                "  help                              — this list",
+                "  pos                               — current coordinates",
+                "  whoami                            — name, stats, position",
+                "  teleport <x> <y> [z]             — warp to world position (via BRP)",
+                "  time <t>                          — set time of day (via BRP)",
+                "  screenshot [path]                 — take screenshot (via BRP)",
+                "  portal                            — enter portal (via BRP)",
+                "  dm/<method> [key=val ...]         — raw BRP pass-through",
             ] {
                 console.output.push(line.into());
             }
+            return;
         }
 
-        ["pos"] | ["position"] => match player_q.single_mut() {
-            Ok((pred, ..)) => {
-                console.output.push(format!("  ({:.2}, {:.2}, {:.2})", pred.x, pred.y, pred.z));
-            }
-            Err(_) => console.output.push("  not connected".into()),
-        },
+        ["clear"] => {
+            console.output.clear();
+            return;
+        }
 
-        ["whoami"] => match player_q.single_mut() {
-            Ok((pred, health, exp, geid, standings)) => {
-                let short_id = geid.0.to_string();
-                let short_id = &short_id[..8];
-                console.output.push(format!("  ID:       {short_id}…  (full: {})", geid.0));
-                console.output.push(format!(
-                    "  Level:    {}  ({}/{} XP)",
-                    exp.level, exp.xp, exp.xp_to_next
-                ));
-                console.output.push(format!("  HP:       {}/{}", health.current, health.max));
-                console.output.push(format!(
-                    "  Position: ({:.2}, {:.2}, {:.2})",
-                    pred.x, pred.y, pred.z
-                ));
-                if let Some(s) = standings {
-                    if !s.standings.is_empty() {
-                        let summary: Vec<String> = s
-                            .standings
-                            .iter()
-                            .map(|(name, score)| {
-                                let tier = standing_tier(*score);
-                                format!("{name} {score:+} ({tier:?})")
-                            })
-                            .collect();
-                        console.output.push(format!("  Standing: {}", summary.join(", ")));
+        ["pos"] | ["position"] => {
+            match player_q.single() {
+                Ok((pred, ..)) => {
+                    console.output.push(format!("  ({:.2}, {:.2}, {:.2})", pred.x, pred.y, pred.z));
+                }
+                Err(_) => console.output.push("  not connected".into()),
+            }
+            return;
+        }
+
+        ["whoami"] => {
+            match player_q.single() {
+                Ok((pred, health, exp, geid, standings)) => {
+                    let short_id = geid.0.to_string();
+                    let short_id = &short_id[..8];
+                    console.output.push(format!("  ID:       {short_id}…  (full: {})", geid.0));
+                    console.output.push(format!(
+                        "  Level:    {}  ({}/{} XP)",
+                        exp.level, exp.xp, exp.xp_to_next
+                    ));
+                    console.output.push(format!("  HP:       {}/{}", health.current, health.max));
+                    console.output.push(format!(
+                        "  Position: ({:.2}, {:.2}, {:.2})",
+                        pred.x, pred.y, pred.z
+                    ));
+                    if let Some(s) = standings {
+                        if !s.standings.is_empty() {
+                            let summary: Vec<String> = s
+                                .standings
+                                .iter()
+                                .map(|(name, score)| {
+                                    let tier = standing_tier(*score);
+                                    format!("{name} {score:+} ({tier:?})")
+                                })
+                                .collect();
+                            console.output.push(format!("  Standing: {}", summary.join(", ")));
+                        }
                     }
                 }
+                Err(_) => console.output.push("  not connected".into()),
             }
-            Err(_) => console.output.push("  not connected".into()),
-        },
-
-        ["teleport", xs, ys] | ["tp", xs, ys] => {
-            match (xs.parse::<f32>(), ys.parse::<f32>()) {
-                (Ok(x), Ok(y)) => match player_q.single_mut() {
-                    Ok((mut pred, ..)) => {
-                        pred.x = x;
-                        pred.y = y;
-                        console
-                            .output
-                            .push(format!("  teleported to ({x:.2}, {y:.2}, {:.2})", pred.z));
-                    }
-                    Err(_) => console.output.push("  not connected".into()),
-                },
-                _ => console.output.push("  usage: teleport <x> <y>".into()),
-            }
+            return;
         }
 
-        ["teleport", xs, ys, zs] | ["tp", xs, ys, zs] => {
-            match (xs.parse::<f32>(), ys.parse::<f32>(), zs.parse::<f32>()) {
-                (Ok(x), Ok(y), Ok(z)) => match player_q.single_mut() {
-                    Ok((mut pred, ..)) => {
-                        pred.x = x;
-                        pred.y = y;
-                        pred.z = z;
-                        console
-                            .output
-                            .push(format!("  teleported to ({x:.2}, {y:.2}, {z:.2})"));
-                    }
-                    Err(_) => console.output.push("  not connected".into()),
-                },
-                _ => console.output.push("  usage: teleport <x> <y> <z>".into()),
-            }
-        }
+        _ => {}
+    }
 
-        _ => {
-            console
-                .output
-                .push(format!("  unknown command '{cmd}' — type help"));
-        }
+    // BRP-proxied commands
+    if let Some((method, params)) = terminal_to_brp(&parts) {
+        let result = brp_call(&method, params);
+        console.output.push(result);
+    } else {
+        console
+            .output
+            .push(format!("  unknown command '{}' — type help", parts.first().unwrap_or(&"")));
     }
 }
