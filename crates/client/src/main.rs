@@ -92,7 +92,8 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::ZoneCachePlugin)
     .add_plugins(plugins::ZoneRendererPlugin)
     .add_plugins(plugins::PortalRendererPlugin)
-    .add_plugins(plugins::ParticlesPlugin);
+    .add_plugins(plugins::ParticlesPlugin)
+    .add_plugins(plugins::ActionMenuPlugin);
 }
 
 fn main() {
@@ -269,6 +270,8 @@ fn sync_pred_to_world(
 #[allow(clippy::too_many_arguments)]
 fn send_player_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    egui_consumed: Option<Res<plugins::EguiPointerConsumed>>,
     camera_q: Query<&OrbitCamera>,
     mut pred_q: Query<(&mut PredictedPosition, &EntityBounds), With<LocalPlayer>>,
     map: Option<Res<WorldMap>>,
@@ -423,7 +426,10 @@ fn send_player_input(
     }
 
     // Queue combat action intents for server-side processing.
-    let action = if keyboard.just_pressed(KeyCode::KeyQ) {
+    // Left-click = basic attack (unless egui consumed the pointer).
+    let egui_over = egui_consumed.as_ref().is_some_and(|e| e.0);
+    let lmb_attack = !egui_over && mouse.as_ref().is_some_and(|m| m.just_pressed(MouseButton::Left));
+    let action = if lmb_attack || keyboard.just_pressed(KeyCode::KeyQ) {
         Some(ActionIntent::BasicAttack)
     } else if keyboard.just_pressed(KeyCode::KeyE) {
         Some(ActionIntent::UseAbility(1))

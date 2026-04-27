@@ -1,3 +1,4 @@
+pub mod action_menu;
 pub mod battle;
 pub mod billboard_sprite;
 pub mod particles;
@@ -18,6 +19,7 @@ pub mod terrain;
 pub mod zone_cache;
 pub mod zone_renderer;
 
+pub use action_menu::{ActionMenuPlugin, EguiPointerConsumed};
 pub use battle::BattleVisualsPlugin;
 pub use billboard_sprite::BillboardSpritePlugin;
 pub use camera::OrbitCameraPlugin;
