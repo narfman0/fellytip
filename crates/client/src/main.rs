@@ -86,6 +86,7 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::HudPlugin)
     .add_plugins(plugins::ClassSelectionPlugin)
     .add_plugins(plugins::MapPlugin)
+    .add_plugins(plugins::SettingsPlugin)
     .add_plugins(plugins::PauseMenuPlugin)
     .add_plugins(plugins::DebugConsolePlugin)
     .add_plugins(plugins::ZoneCachePlugin)

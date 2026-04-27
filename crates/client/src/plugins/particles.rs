@@ -19,7 +19,8 @@
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 use fellytip_shared::protocol::ClientDamageMsg;
-use rand::{Rng as _, RngExt as _};
+use rand::RngExt as _;
+use super::settings::ParticlesEnabled;
 
 // ── Components ────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ pub struct ParticleEmitter {
     pub timer: Timer,
 }
 
+#[allow(dead_code)]
 pub enum EmitterKind {
     Campfire,
     Lantern,
@@ -133,7 +135,14 @@ fn tick_emitters(
     assets: Option<Res<ParticleAssets>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut query: Query<(&mut ParticleEmitter, &Transform)>,
+    particles_enabled: Option<Res<ParticlesEnabled>>,
 ) {
+    // Respect the global particles toggle if the resource exists.
+    if let Some(ref enabled) = particles_enabled {
+        if !enabled.0 {
+            return;
+        }
+    }
     let Some(assets) = assets else { return };
     let mut rng = rand::rng();
 
@@ -255,8 +264,7 @@ fn spawn_combat_particles(
 
 // ── Heal effect helper ────────────────────────────────────────────────────────
 
-/// Spawn a heal effect burst at `position` (call from a system that detects healing).
-pub fn spawn_heal_effect(
+pub(crate) fn spawn_heal_effect(
     commands: &mut Commands,
     assets: &ParticleAssets,
     materials: &mut Assets<StandardMaterial>,

@@ -24,6 +24,9 @@ tracing            = { workspace = true }
 uuid               = { workspace = true }
 smol_str           = { workspace = true }
 image              = { workspace = true }
+ron                = { workspace = true }
+serde              = { workspace = true }
+dirs               = "5"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 bevy               = { workspace = true, features = ["bevy_remote"] }

@@ -12,6 +12,7 @@ pub mod pause_menu;
 pub mod portal_renderer;
 pub mod scene_decoration;
 pub mod scene_lighting;
+pub mod settings;
 pub mod skybox;
 pub mod terrain;
 pub mod zone_cache;
@@ -30,6 +31,8 @@ pub use pause_menu::PauseMenuPlugin;
 pub use portal_renderer::PortalRendererPlugin;
 pub use scene_decoration::SceneDecorationPlugin;
 pub use scene_lighting::SceneLightingPlugin;
+#[allow(unused_imports)]
+pub use settings::{GraphicsSettings, SettingsPlugin};
 pub use skybox::SkyboxPlugin;
 pub use terrain::TerrainPlugin;
 #[allow(unused_imports)]

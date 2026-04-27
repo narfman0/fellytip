@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
+use super::settings::SettingsMenuOpen;
 
 #[derive(Resource, Default)]
 pub struct PauseMenu {
@@ -25,6 +26,7 @@ fn toggle_pause_menu(keyboard: Res<ButtonInput<KeyCode>>, mut menu: ResMut<Pause
 fn draw_pause_menu(
     mut ctx: EguiContexts,
     mut menu: ResMut<PauseMenu>,
+    mut settings_open: ResMut<SettingsMenuOpen>,
 ) -> Result {
     let egui_ctx = ctx.ctx_mut()?;
 
@@ -41,6 +43,11 @@ fn draw_pause_menu(
             ui.vertical_centered(|ui| {
                 if ui.button("New Game").clicked() {
                     // MULTIPLAYER: disconnect from server here.
+                    menu.open = false;
+                }
+                ui.add_space(8.0);
+                if ui.button("Settings").clicked() {
+                    settings_open.0 = true;
                     menu.open = false;
                 }
                 ui.add_space(8.0);

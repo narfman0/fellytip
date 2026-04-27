@@ -27,6 +27,7 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use bevy::prelude::*;
 use bevy::gizmos::config::GizmoConfigStore;
+use super::settings::{BuildingLodSettings, WindmillSpinEnabled};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::asset::RenderAssetUsages;
@@ -692,7 +693,14 @@ fn tag_windmill_children(
 fn spin_windmills(
     time: Res<Time>,
     mut q: Query<&mut Transform, With<WindmillSpin>>,
+    windmill_spin_enabled: Option<Res<WindmillSpinEnabled>>,
 ) {
+    // Respect the global windmill-spin toggle if the resource exists.
+    if let Some(ref enabled) = windmill_spin_enabled {
+        if !enabled.0 {
+            return;
+        }
+    }
     for mut transform in &mut q {
         transform.rotate_local_y(time.delta_secs() * 0.8);
     }
@@ -701,15 +709,27 @@ fn spin_windmills(
 /// Toggle visibility between the full procedural tower mesh group and a simple
 /// coloured cuboid based on camera distance.
 fn update_building_lod(
-    camera_q:       Query<&GlobalTransform, With<Camera>>,
-    lod_q:          Query<(&BuildingLod, &GlobalTransform)>,
-    mut visibility: Query<&mut Visibility>,
+    camera_q:             Query<&GlobalTransform, With<Camera>>,
+    lod_q:                Query<(&BuildingLod, &GlobalTransform)>,
+    mut visibility:       Query<&mut Visibility>,
+    lod_settings:         Option<Res<BuildingLodSettings>>,
 ) {
     let Ok(cam_gt) = camera_q.single() else { return };
     let cam_pos = cam_gt.translation();
+
+    // If LOD is disabled, always show the full-detail mesh.
+    let lod_enabled = lod_settings.as_ref().map(|s| s.enabled).unwrap_or(true);
+
     for (lod, transform) in &lod_q {
-        let dist = cam_pos.distance(transform.translation());
-        let show_full = dist < lod.distance_threshold;
+        let show_full = if lod_enabled {
+            let threshold = lod_settings.as_ref()
+                .map(|s| s.distance)
+                .unwrap_or(lod.distance_threshold);
+            let dist = cam_pos.distance(transform.translation());
+            dist < threshold
+        } else {
+            true
+        };
         if let Ok(mut vis) = visibility.get_mut(lod.full_entity) {
             let desired = if show_full { Visibility::Inherited } else { Visibility::Hidden };
             if *vis != desired { *vis = desired; }

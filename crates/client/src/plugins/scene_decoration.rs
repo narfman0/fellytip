@@ -48,6 +48,7 @@ use bevy::gltf::{Gltf, GltfMesh};
 use bevy::prelude::*;
 use fellytip_shared::world::map::{TileKind, WorldMap};
 
+use super::settings::TreeSwayEnabled;
 use super::terrain::chunk::{vertex_height, ChunkCoord};
 use super::terrain::lod::CHUNK_TILES;
 use super::terrain::{manager::ChunkManager, ChunkLifecycle};
@@ -441,7 +442,14 @@ fn grow_trees(
 fn sway_trees(
     time: Res<Time>,
     mut q: Query<(&mut Transform, &GlobalTransform), With<TreeSway>>,
+    tree_sway_enabled: Option<Res<TreeSwayEnabled>>,
 ) {
+    // Respect the global tree-sway toggle if the resource exists.
+    if let Some(ref enabled) = tree_sway_enabled {
+        if !enabled.0 {
+            return;
+        }
+    }
     let t = time.elapsed_secs();
     for (mut transform, global) in &mut q {
         let pos = global.translation();
