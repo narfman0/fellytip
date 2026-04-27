@@ -3,6 +3,7 @@
 //! All types here are pure data — no ECS, no I/O.
 
 use crate::world::faction::FactionId;
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
@@ -18,20 +19,44 @@ pub struct CoreStats {
     pub strength: i32,
     pub dexterity: i32,
     pub constitution: i32,
+    /// Intelligence (field kept as `intellect` for backward compatibility
+    /// with existing tests and ECS snapshots).
     pub intellect: i32,
+    pub wisdom: i32,
+    pub charisma: i32,
 }
 
 impl Default for CoreStats {
     fn default() -> Self {
-        Self { strength: 10, dexterity: 10, constitution: 10, intellect: 10 }
+        Self {
+            strength: 10,
+            dexterity: 10,
+            constitution: 10,
+            intellect: 10,
+            wisdom: 10,
+            charisma: 10,
+        }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CharacterClass {
+    // ── Legacy player-facing aliases (kept for save compatibility) ────────────
     Warrior,
     Rogue,
     Mage,
+    // ── Full SRD 5e classes (NPCs) ────────────────────────────────────────────
+    Fighter,
+    Wizard,
+    Cleric,
+    Ranger,
+    Paladin,
+    Druid,
+    Bard,
+    Warlock,
+    Sorcerer,
+    Monk,
+    Barbarian,
 }
 
 // ── Snapshot ──────────────────────────────────────────────────────────────────
@@ -52,9 +77,12 @@ pub struct CombatantSnapshot {
 }
 
 impl CombatantSnapshot {
-    /// Modifier from a stat value (D&D-style floor division).
+    /// Modifier from a stat value (D&D 5e SRD floor division).
+    ///
+    /// Uses `div_euclid` to get true floor division for negative values.
+    /// Example: stat 9 → (9 − 10).div_euclid(2) = −1 (correct), not 0.
     pub fn modifier(stat: i32) -> i32 {
-        (stat - 10) / 2
+        (stat - 10).div_euclid(2)
     }
     pub fn str_mod(&self) -> i32 { Self::modifier(self.stats.strength) }
     pub fn dex_mod(&self) -> i32 { Self::modifier(self.stats.dexterity) }
@@ -77,9 +105,22 @@ pub fn proficiency_bonus(level: u32) -> i32 {
 /// See `docs/dnd5e-srd-reference.md`.
 pub fn hit_die_for_class(class: &CharacterClass) -> i32 {
     match class {
-        CharacterClass::Warrior => 10,
-        CharacterClass::Rogue   =>  8,
-        CharacterClass::Mage    =>  6,
+        // Legacy player aliases
+        CharacterClass::Warrior   => 10,
+        CharacterClass::Rogue     =>  8,
+        CharacterClass::Mage      =>  6,
+        // SRD NPC classes
+        CharacterClass::Barbarian => 12,
+        CharacterClass::Fighter   => 10,
+        CharacterClass::Paladin   => 10,
+        CharacterClass::Ranger    => 10,
+        CharacterClass::Monk      =>  8,
+        CharacterClass::Cleric    =>  8,
+        CharacterClass::Druid     =>  8,
+        CharacterClass::Bard      =>  8,
+        CharacterClass::Warlock   =>  8,
+        CharacterClass::Sorcerer  =>  6,
+        CharacterClass::Wizard    =>  6,
     }
 }
 

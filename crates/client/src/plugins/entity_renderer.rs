@@ -365,6 +365,7 @@ fn build_tiled_box_mesh(w: f32, h: f32, d: f32, tile_size: f32) -> Mesh {
     mesh
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_hollow_tower(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,

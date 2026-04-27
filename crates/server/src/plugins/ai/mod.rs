@@ -18,10 +18,11 @@ pub mod battle;
 pub mod goal;
 pub mod pathfinding;
 pub mod population;
+pub mod surface_danger;
 
 use bevy::prelude::*;
 use fellytip_shared::protocol::{BattleAttackMsg, BattleEndMsg, BattleStartMsg};
-use fellytip_shared::world::faction::{FactionId, FactionGoal, NpcRank, PlayerReputationMap, Faction};
+use fellytip_shared::world::faction::{FactionId, FactionGoal, FactionRelations, NpcRank, PlayerReputationMap, Faction};
 use fellytip_shared::world::population::SettlementPopulation;
 use fellytip_shared::components::WorldPosition;
 use std::collections::HashMap;
@@ -38,9 +39,16 @@ pub use pathfinding::{
     update_war_party_player_targets, war_party_separation, wander_npcs,
 };
 pub use population::{
-    accumulate_underground_pressure, age_npcs_system, check_war_party_formation,
-    deliver_underground_signals, flush_factions_to_db, init_population_state, seed_factions,
-    spawn_faction_npcs, spawn_underground_raid, tick_population_system, FormWarPartyEvent,
+    accumulate_underground_pressure, age_npcs_system,
+    check_war_party_formation, deliver_underground_signals, flush_factions_to_db,
+    init_population_state, seed_factions, spawn_faction_npcs,
+    spawn_underground_raid, tick_population_system, FormWarPartyEvent,
+};
+pub use surface_danger::{
+    update_danger_levels, spawn_bandit_groups, spawn_portal_horrors,
+    resolve_warfront_events, update_threat_registry,
+    BanditCamp, DangerLevel, DangerTier, PortalHorror,
+    ThreatRegistry, WarfrontRegistry,
 };
 
 // ── Shared types (referenced by multiple sub-modules) ──────────────────────────
@@ -195,14 +203,21 @@ impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FactionRegistry>()
             .init_resource::<PlayerReputationMap>()
+            .init_resource::<FactionRelations>()
             .init_resource::<FactionPopulationState>()
             .init_resource::<FlowField>()
             .init_resource::<BattleHistory>()
             .init_resource::<UndergroundPressure>()
             .init_resource::<FactionAlertState>()
+            .init_resource::<DangerLevel>()
+            .init_resource::<ThreatRegistry>()
+            .init_resource::<WarfrontRegistry>()
             .add_message::<FormWarPartyEvent>()
             .register_type::<FactionNpcRank>()
             .register_type::<WarPartyMember>()
+            .register_type::<fellytip_shared::world::civilization::AbandonedSettlement>()
+            .register_type::<fellytip_shared::world::civilization::RuinsTile>()
+            .register_type::<fellytip_shared::components::EconomicRole>()
             .add_message::<BattleStartMsg>()
             .add_message::<BattleEndMsg>()
             .add_message::<BattleAttackMsg>();
@@ -222,6 +237,12 @@ impl Plugin for AiPlugin {
                 run_battle_rounds,
                 wander_npcs,
                 sync_player_standings,
+                // Surface danger systems (issues #117-#121)
+                update_danger_levels,
+                spawn_bandit_groups,
+                spawn_portal_horrors,
+                resolve_warfront_events,
+                update_threat_registry,
             ).chain(),
         );
         app.add_systems(

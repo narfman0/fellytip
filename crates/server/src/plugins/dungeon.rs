@@ -78,7 +78,14 @@ impl Plugin for DungeonPlugin {
 }
 
 fn spawn_dungeon_boss(mut commands: Commands) {
+    use fellytip_shared::world::faction::NpcRank;
     let id = CombatantId(Uuid::new_v4());
+    // The Hollow King is a Boss-rank Fighter — max STR primary, heavy melee spec.
+    let boss_class = CharacterClass::Fighter;
+    let boss_scores = fellytip_shared::components::AbilityScores::for_class(
+        &boss_class,
+        NpcRank::Boss,
+    );
     commands.spawn((
         BossNpc {
             name: SmolStr::new("The Hollow King"),
@@ -91,17 +98,20 @@ fn spawn_dungeon_boss(mut commands: Commands) {
         CombatParticipant {
             id,
             interrupt_stack: InterruptStack::default(),
-            class: CharacterClass::Warrior,
+            class: boss_class,
             level: 5,
             armor_class: 16, // chain mail (SRD: AC 16, no DEX)
-            strength: 18,
-            dexterity: 10,
-            constitution: 18,
+            strength: boss_scores.strength as i32,
+            dexterity: boss_scores.dexterity as i32,
+            constitution: boss_scores.constitution as i32,
+            intelligence: boss_scores.intelligence as i32,
+            wisdom: boss_scores.wisdom as i32,
+            charisma: boss_scores.charisma as i32,
         },
         // CR 3 = 700 XP (SRD docs/dnd5e-srd-reference.md)
         ExperienceReward(700),
     ));
-    tracing::info!("Dungeon boss 'The Hollow King' spawned");
+    tracing::info!("Dungeon boss 'The Hollow King' spawned (Fighter, Boss rank)");
 }
 
 // ── Phase transition system ───────────────────────────────────────────────────

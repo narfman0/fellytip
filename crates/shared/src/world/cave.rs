@@ -146,8 +146,8 @@ pub fn place_cave_portals(map: &mut WorldMap, seed: u64, depth: u32, count: usiz
     let cave_z_val = cave_z(depth);
 
     let cells_per_axis = (count as f64).sqrt().ceil() as usize + 1;
-    let cell_w = (width + cells_per_axis - 1) / cells_per_axis;
-    let cell_h = (height + cells_per_axis - 1) / cells_per_axis;
+    let cell_w = width.div_ceil(cells_per_axis);
+    let cell_h = height.div_ceil(cells_per_axis);
 
     let portal_seed = seed.wrapping_add(0xFEED_FACE_CAFE_BABE);
     let mut placed = 0usize;

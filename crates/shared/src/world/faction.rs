@@ -107,6 +107,77 @@ pub fn default_standing(faction_id: &FactionId) -> i32 {
     }
 }
 
+// ── Faction-to-faction relations (issue #110) ─────────────────────────────────
+
+/// Score range for faction-to-faction relations.
+/// -100 = fully hostile, 0 = neutral, +100 = allied.
+pub const RELATION_ALLIED: i32     =  60;
+pub const RELATION_HOSTILE: i32    = -50;
+pub const RELATION_TRADE_BONUS: i32 =   5;
+pub const RELATION_RAID_PENALTY: i32 = -10;
+pub const RELATION_BATTLE_PENALTY: i32 = -30;
+
+/// Symmetric relation matrix between factions.
+///
+/// `get(a, b)` == `get(b, a)`.  Clamped to [-100, 100].
+/// Initial values are set by `seed_faction_relations`.
+#[derive(Debug, Default, Clone, Resource)]
+pub struct FactionRelations(pub HashMap<(SmolStr, SmolStr), i32>);
+
+impl FactionRelations {
+    /// Canonical key — always stores (smaller, larger) alphabetically.
+    fn key(a: &FactionId, b: &FactionId) -> (SmolStr, SmolStr) {
+        if a.0.as_str() <= b.0.as_str() {
+            (a.0.clone(), b.0.clone())
+        } else {
+            (b.0.clone(), a.0.clone())
+        }
+    }
+
+    /// Current relation score between two factions (0 if unknown).
+    pub fn get(&self, a: &FactionId, b: &FactionId) -> i32 {
+        *self.0.get(&Self::key(a, b)).unwrap_or(&0)
+    }
+
+    /// Apply a delta and clamp to [-100, 100].
+    pub fn apply_delta(&mut self, a: &FactionId, b: &FactionId, delta: i32) {
+        let entry = self.0.entry(Self::key(a, b)).or_insert(0);
+        *entry = (*entry + delta).clamp(-100, 100);
+    }
+
+    /// Set an absolute value (clamped).
+    pub fn set(&mut self, a: &FactionId, b: &FactionId, score: i32) {
+        *self.0.entry(Self::key(a, b)).or_insert(0) = score.clamp(-100, 100);
+    }
+
+    /// Returns true when factions are allied (relation >= RELATION_ALLIED).
+    /// Allied factions do not attack each other's settlements.
+    pub fn are_allied(&self, a: &FactionId, b: &FactionId) -> bool {
+        self.get(a, b) >= RELATION_ALLIED
+    }
+
+    /// Returns true when factions are at war (relation < RELATION_HOSTILE).
+    pub fn at_war(&self, a: &FactionId, b: &FactionId) -> bool {
+        self.get(a, b) < RELATION_HOSTILE
+    }
+
+    /// Seed default starting relations per the design spec:
+    /// - Iron Wolves hostile to Merchant Guild (-60)
+    /// - Deep Tide neutral to all (0)
+    /// - Ash Covenant hostile to Iron Wolves (-40)
+    pub fn seed_defaults(&mut self) {
+        let iron_wolves    = FactionId("iron_wolves".into());
+        let merchant_guild = FactionId("merchant_guild".into());
+        let ash_covenant   = FactionId("ash_covenant".into());
+        let deep_tide      = FactionId("deep_tide".into());
+
+        self.set(&iron_wolves,    &merchant_guild, -60);
+        self.set(&ash_covenant,   &iron_wolves,    -40);
+        // Deep Tide is explicitly neutral (0), which is the default.
+        let _ = &deep_tide; // ensure it's referenced even if no explicit entry.
+    }
+}
+
 // ── Player reputation map ─────────────────────────────────────────────────────
 
 /// Per-player, per-faction standing scores.
@@ -254,6 +325,49 @@ mod tests {
         assert!(StandingTier::Hated.is_aggressive());
         assert!(!StandingTier::Neutral.is_aggressive());
         assert!(!StandingTier::Friendly.is_aggressive());
+    }
+
+    #[test]
+    fn faction_relations_seed_defaults() {
+        let mut rel = FactionRelations::default();
+        rel.seed_defaults();
+        let iron_wolves    = FactionId("iron_wolves".into());
+        let merchant_guild = FactionId("merchant_guild".into());
+        let ash_covenant   = FactionId("ash_covenant".into());
+        assert_eq!(rel.get(&iron_wolves, &merchant_guild), -60);
+        assert_eq!(rel.get(&ash_covenant, &iron_wolves), -40);
+    }
+
+    #[test]
+    fn faction_relations_symmetric() {
+        let mut rel = FactionRelations::default();
+        let a = FactionId("ash_covenant".into());
+        let b = FactionId("iron_wolves".into());
+        rel.set(&a, &b, -40);
+        assert_eq!(rel.get(&a, &b), -40);
+        assert_eq!(rel.get(&b, &a), -40);
+    }
+
+    #[test]
+    fn faction_relations_allied_threshold() {
+        let mut rel = FactionRelations::default();
+        let a = FactionId("iron_wolves".into());
+        let b = FactionId("merchant_guild".into());
+        rel.set(&a, &b, RELATION_ALLIED);
+        assert!(rel.are_allied(&a, &b));
+        rel.set(&a, &b, RELATION_ALLIED - 1);
+        assert!(!rel.are_allied(&a, &b));
+    }
+
+    #[test]
+    fn faction_relations_clamped() {
+        let mut rel = FactionRelations::default();
+        let a = FactionId("deep_tide".into());
+        let b = FactionId("ash_covenant".into());
+        rel.apply_delta(&a, &b, -999);
+        assert_eq!(rel.get(&a, &b), -100);
+        rel.apply_delta(&a, &b, 9999);
+        assert_eq!(rel.get(&a, &b), 100);
     }
 
     #[test]

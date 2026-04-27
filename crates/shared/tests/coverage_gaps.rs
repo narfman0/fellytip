@@ -47,6 +47,9 @@ fn make_pop(adult_count: u32, military_strength: f32) -> SettlementPopulation {
         home_z: 0.0,
         war_party_cooldown: 0,
         military_strength,
+        economy: Default::default(),
+        collapsed: false,
+        founded_tick: 0,
     }
 }
 

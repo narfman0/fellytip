@@ -445,6 +445,7 @@ fn nearest_within(pos: Vec2, settlements: &Settlements, radius: f32) -> Option<&
 /// settlement dots, facing direction arrow, coordinates, and nearby town name.
 /// The map rotates so the player's forward direction is always at the top.
 /// Selects the surface or Sunken Realm texture based on the player's world_id.
+#[allow(clippy::too_many_arguments)]
 fn draw_minimap(
     mut ctx: EguiContexts,
     tex: Res<TerrainTex>,

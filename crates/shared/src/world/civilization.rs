@@ -50,6 +50,23 @@ pub struct Settlement {
 #[derive(Resource, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Settlements(pub Vec<Settlement>);
 
+/// Marker component placed on a settlement entity when its population reaches 0
+/// (issue #111). The entity remains in the world so it can be rebuilt.
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component)]
+pub struct AbandonedSettlement {
+    /// Tick at which the settlement collapsed.
+    pub collapsed_at_tick: u64,
+    /// Faction that owned the settlement when it collapsed.
+    /// Stored as `String` (not `SmolStr`) so Reflect can be derived on this component.
+    pub original_faction_id: String,
+}
+
+/// Tile marker indicating the tile was once a settlement site (issue #109).
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component)]
+pub struct RuinsTile;
+
 // ── Building types ─────────────────────────────────────────────────────────────
 
 /// Visual/semantic category for a procedurally-placed settlement building.

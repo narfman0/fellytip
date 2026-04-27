@@ -8854,6 +8854,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fellytip-shared",
+ "image",
  "rand 0.10.0",
  "rand_chacha 0.10.0",
  "serde_json",

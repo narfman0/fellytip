@@ -59,6 +59,12 @@ pub const SWIM_RISE_SPEED: f32 = 6.0;
 /// At 20.0, mountain peaks reach ~20 world units above sea level.
 pub const Z_SCALE: f32 = 20.0;
 
+/// World scale: 1 world unit = 1 metre.
+pub const METRES_PER_UNIT: f32 = 1.0;
+
+/// Depth of the first underground level in metres (~33 m / ~108 ft).
+pub const CAVE_DEPTH_1_METRES: f32 = 10.0 * METRES_PER_UNIT;
+
 // ── Tile kind ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]

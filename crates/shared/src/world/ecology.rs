@@ -92,9 +92,13 @@ pub fn tick_ecology(state: RegionEcology) -> (RegionEcology, Vec<EcologyEvent>) 
     let p = prey.count;
     let q = predator.count;
 
-    // Discrete Lotka-Volterra step
-    let new_p = (p * (1.0 + r * (1.0 - p / k)) - alpha * q * p).max(0.0);
-    let new_q = (q * (beta * alpha * p - delta)).max(0.0);
+    // Discrete Lotka-Volterra step.
+    // Prey: logistic growth minus predation losses.
+    // Predator: population grows by conversion of prey eaten, shrinks by death rate.
+    // Both use the additive (1 + rate) form so populations can only go negative via
+    // the .max(0.0) clamp, never by a multiplicative factor < 0.
+    let new_p = (p + p * r * (1.0 - p / k) - alpha * q * p).max(0.0);
+    let new_q = (q + q * (beta * alpha * p - delta)).max(0.0);
 
     let mut events = Vec::new();
 
@@ -133,6 +137,196 @@ pub fn tick_ecology(state: RegionEcology) -> (RegionEcology, Vec<EcologyEvent>) 
         delta,
     };
     (next, events)
+}
+
+// ── Flora ─────────────────────────────────────────────────────────────────────
+
+/// What kind of flora an entity represents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FloraKind {
+    /// Full-grown tree that can spread seeds.
+    Tree,
+    /// Low-growing bush or shrub.
+    Shrub,
+    /// Farm-managed crop plant.
+    Crop,
+    /// Dead wood — decays over time.
+    DeadWood,
+}
+
+/// Shared component for flora entities — attached to every tree/shrub/crop/deadwood.
+///
+/// `stage` follows the same `[0.0, 1.0]` convention as `GrowthStage`:
+/// - 0.0 = seedling
+/// - 0.5 = sapling
+/// - 1.0 = mature / full-grown
+///
+/// Trees at `stage >= 0.9` have a per-tick chance to spawn seedlings on adjacent tiles.
+/// DeadWood entities decay (`age_ticks` increments) and are removed at a threshold.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FloraState {
+    pub kind: FloraKind,
+    /// Growth stage [0.0, 1.0].
+    pub stage: f32,
+    /// Ticks this entity has existed.
+    pub age_ticks: u32,
+}
+
+impl FloraState {
+    pub fn new_seedling() -> Self {
+        Self { kind: FloraKind::Tree, stage: 0.0, age_ticks: 0 }
+    }
+
+    pub fn new_shrub() -> Self {
+        Self { kind: FloraKind::Shrub, stage: 0.5, age_ticks: 0 }
+    }
+
+    pub fn new_deadwood() -> Self {
+        Self { kind: FloraKind::DeadWood, stage: 0.0, age_ticks: 0 }
+    }
+
+    pub fn mature_tree() -> Self {
+        Self { kind: FloraKind::Tree, stage: 1.0, age_ticks: 0 }
+    }
+}
+
+/// Growth rate per tick for a tree based on the biome tile kind it stands on.
+///
+/// Temperate and tropical biomes have fast growth; polar biomes are slow.
+/// Returns growth increment per world-sim tick (1 Hz).
+pub fn tree_growth_rate(kind: crate::world::map::TileKind) -> f32 {
+    use crate::world::map::TileKind;
+    match kind {
+        TileKind::TemperateForest | TileKind::Forest
+        | TileKind::TropicalForest | TileKind::TropicalRainforest => 1.0 / 200.0,
+        TileKind::Grassland | TileKind::Plains | TileKind::Savanna => 1.0 / 300.0,
+        TileKind::Taiga => 1.0 / 500.0,
+        TileKind::Tundra | TileKind::PolarDesert | TileKind::Arctic => 1.0 / 800.0,
+        _ => 1.0 / 400.0,
+    }
+}
+
+// ── Farm plots ────────────────────────────────────────────────────────────────
+
+/// Per-tick growth rate for farm crops (1/200 ticks → harvestable in ~3 min).
+pub const CROP_GROWTH_RATE: f32 = 1.0 / 200.0;
+
+/// State for one farm plot near a settlement.
+///
+/// `crop_stage`:
+/// - 0.0 = fallow (just harvested or just established)
+/// - 0.0–1.0 = growing
+/// - 1.0 = harvestable
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FarmPlotState {
+    /// Settlement UUID this farm belongs to.
+    pub settlement_id: uuid::Uuid,
+    /// Crop growth stage [0.0, 1.0].
+    pub crop_stage: f32,
+    /// World-sim tick when the last harvest occurred.
+    pub last_harvest_tick: u32,
+    /// How much food the last harvest yielded.
+    pub yield_amount: u32,
+}
+
+impl FarmPlotState {
+    pub fn new(settlement_id: uuid::Uuid) -> Self {
+        Self { settlement_id, crop_stage: 0.0, last_harvest_tick: 0, yield_amount: 0 }
+    }
+
+    /// Advance crop growth by one tick.  Returns `true` if the crop is ready to harvest.
+    pub fn tick_growth(&mut self) -> bool {
+        if self.crop_stage < 1.0 {
+            self.crop_stage = (self.crop_stage + CROP_GROWTH_RATE).min(1.0);
+        }
+        self.crop_stage >= 1.0
+    }
+
+    /// Harvest the crop: reset stage and compute yield (10–30 food units).
+    pub fn harvest(&mut self, current_tick: u32) -> u32 {
+        let yield_val = 10 + (self.crop_stage * 20.0) as u32;
+        self.crop_stage = 0.0;
+        self.last_harvest_tick = current_tick;
+        self.yield_amount = yield_val;
+        yield_val
+    }
+}
+
+// ── Animal behavior ───────────────────────────────────────────────────────────
+
+/// Ecological role of an animal entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EcologyRole {
+    /// Prey animals: deer, rabbit — graze and flee predators.
+    Prey,
+    /// Predator animals: wolf, bear — hunt prey.
+    Predator,
+    /// Scavenger animals — opportunistically eat dead prey.
+    Scavenger,
+}
+
+/// Current behavioral state of an animal.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum AnimalState {
+    /// Peacefully eating vegetation.
+    Grazing,
+    /// Running away from a threat.
+    Fleeing,
+    /// Actively pursuing and attacking a target.
+    Hunting,
+    /// Resting / inactive.
+    Resting,
+}
+
+/// Loot dropped when an animal is killed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LootKind {
+    Meat,
+    Hide,
+    Bone,
+}
+
+// ── Ecological balance helpers ────────────────────────────────────────────────
+
+/// Cap multiplier applied to prey when there are no predators in the region.
+pub const PREY_OVERPOPULATION_CAP: f64 = 2.0;
+
+/// Fraction by which predator population is reduced when prey collapses.
+pub const PREDATOR_STARVATION_HALVING: f64 = 0.5;
+
+/// Apply spatial distribution logic to a region after the normal Lotka-Volterra step.
+///
+/// - If prey drops to 0, halve predator population (starvation).
+/// - If predators drop to 0, cap prey at `normal_max * PREY_OVERPOPULATION_CAP`.
+///
+/// Returns any balance events that occurred.
+pub fn apply_spatial_balance(
+    ecology: &mut RegionEcology,
+    normal_prey_max: f64,
+) -> Vec<EcologyEvent> {
+    let mut events = Vec::new();
+
+    if ecology.predator.count < COLLAPSE_THRESHOLD {
+        // No predators → prey overpopulates but is capped.
+        let cap = normal_prey_max * PREY_OVERPOPULATION_CAP;
+        if ecology.prey.count > cap {
+            ecology.prey.count = cap;
+        }
+    }
+
+    if ecology.prey.count < COLLAPSE_THRESHOLD {
+        // No prey → predators starve.
+        let old = ecology.predator.count;
+        ecology.predator.count = (old * PREDATOR_STARVATION_HALVING).max(0.0);
+        if old >= COLLAPSE_THRESHOLD && ecology.predator.count < COLLAPSE_THRESHOLD {
+            events.push(EcologyEvent::Collapse {
+                species: ecology.predator.species.clone(),
+                region: ecology.region.clone(),
+            });
+        }
+    }
+
+    events
 }
 
 // ── Cave ecology ─────────────────────────────────────────────────────────────

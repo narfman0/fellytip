@@ -11,9 +11,10 @@ use fellytip_server::{
 };
 use fellytip_shared::{
     PLAYER_SPEED, WORLD_SEED,
+    combat::types::CharacterClass,
     components::{EntityBounds, Experience, WorldPosition},
     inputs::ActionIntent,
-    protocol::FellytipProtocolPlugin,
+    protocol::{ChooseClassMessage, FellytipProtocolPlugin},
     world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT},
 };
 use plugins::camera::OrbitCamera;
@@ -83,6 +84,7 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::BillboardSpritePlugin)
     .add_plugins(plugins::BattleVisualsPlugin)
     .add_plugins(plugins::HudPlugin)
+    .add_plugins(plugins::ClassSelectionPlugin)
     .add_plugins(plugins::MapPlugin)
     .add_plugins(plugins::PauseMenuPlugin)
     .add_plugins(plugins::DebugConsolePlugin)
@@ -130,6 +132,7 @@ fn main() {
                         .with_method("dm/teleport_player",        dm_teleport_player)
                         .with_method("dm/set_character_debug",    dm_set_character_debug)
                         .with_method("dm/set_camera_free",        dm_set_camera_free)
+                        .with_method("dm/choose_class",           dm_choose_class)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -155,6 +158,7 @@ fn main() {
                     .with_method("dm/teleport_player",            dm_teleport_player)
                     .with_method("dm/set_character_debug",        dm_set_character_debug)
                     .with_method("dm/set_camera_free",            dm_set_camera_free)
+                    .with_method("dm/choose_class",               dm_choose_class)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
@@ -267,6 +271,7 @@ fn send_player_input(
     pause_menu: Option<Res<plugins::pause_menu::PauseMenu>>,
     map_win: Option<Res<plugins::MapWindow>>,
     char_screen: Option<Res<plugins::CharScreen>>,
+    class_sel: Option<Res<plugins::ClassSelectionState>>,
     mut local_input: ResMut<LocalPlayerInput>,
 ) {
     let Some(keyboard) = keyboard else { return };
@@ -274,6 +279,7 @@ fn send_player_input(
         || pause_menu.is_some_and(|m| m.open)
         || map_win.is_some_and(|m| m.open)
         || char_screen.is_some_and(|s| s.open)
+        || class_sel.is_some_and(|s| s.open)
     {
         return;
     }
@@ -575,6 +581,37 @@ fn dm_set_camera_distance(
     cam.distance = clamped;
     tracing::info!(distance = clamped, "DM camera distance set");
     Ok(serde_json::json!({ "ok": true, "distance": clamped }))
+}
+
+/// Choose a character class for the local player, bypassing the class selection UI.
+///
+/// Params: `{ "class": "Warrior" | "Rogue" | "Mage" }` (defaults to "Warrior" if omitted)
+/// Returns `{ "ok": true, "class": "..." }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_choose_class(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let class_str = params
+        .as_ref()
+        .and_then(|p| p.get("class"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Warrior")
+        .to_owned();
+
+    let class = match class_str.as_str() {
+        "Rogue"  => CharacterClass::Rogue,
+        "Mage"   => CharacterClass::Mage,
+        _        => CharacterClass::Warrior,
+    };
+
+    world.write_message(ChooseClassMessage { class });
+    // Also hide the class selection overlay so the UI dismisses.
+    if let Some(mut state) = world.get_resource_mut::<plugins::class_selection::ClassSelectionState>() {
+        state.open = false;
+    }
+    tracing::info!(%class_str, "DM choose class");
+    Ok(serde_json::json!({ "ok": true, "class": class_str }))
 }
 
 /// Toggle free-orbit mode on the camera.

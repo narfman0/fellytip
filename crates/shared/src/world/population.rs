@@ -4,6 +4,13 @@
 //! `SettlementPopulation`. The function is pure — no RNG, no ECS — and uses a
 //! fractional accumulator for births (same technique as Lotka-Volterra in
 //! `ecology.rs`) so no dice are needed.
+//!
+//! # Economy (issue #107)
+//!
+//! Each settlement also carries a [`SettlementEconomy`] that tracks food supply,
+//! consumption, gold, and trade income. Food surplus drives growth (+1 NPC every
+//! 200 ticks); famine causes starvation (-1 NPC every 50 ticks). When population
+//! reaches 0 the settlement is considered collapsed.
 
 use crate::world::faction::FactionId;
 use crate::world::map::{TileKind, WorldMap};
@@ -38,6 +45,61 @@ pub const MAX_SETTLEMENT_POP: u32 = 30;
 /// Minimum military strength required before a war party can be dispatched.
 pub const WAR_PARTY_MILITARY_MIN: f32 = 15.0;
 
+/// Ticks between fed-population growth events (+1 NPC per surplus food tick).
+pub const ECONOMY_GROWTH_PERIOD: u32 = 200;
+
+/// Ticks between starvation events (-1 NPC per deficit food tick).
+pub const ECONOMY_STARVE_PERIOD: u32 = 50;
+
+/// Food consumed per NPC per tick.
+pub const FOOD_CONSUMPTION_PER_NPC: f32 = 0.5;
+
+/// Food produced per tick by a single hunter NPC.
+pub const HUNTER_FOOD_PER_TICK: f32 = 0.8;
+
+/// Trade income added to gold per tick per merchant NPC on a road.
+pub const MERCHANT_TRADE_PER_TICK: f32 = 1.5;
+
+/// Food bonus added per tick per farmer NPC working a farm tile.
+pub const FARMER_FOOD_PER_TICK: f32 = 1.0;
+
+// ── Economy state ─────────────────────────────────────────────────────────────
+
+/// Per-settlement economic state (issue #107).
+///
+/// `food_supply` and `food_consumption` are updated each tick;
+/// `gold` and `trade_income` track economic activity.
+#[derive(Clone, Debug, Default)]
+pub struct SettlementEconomy {
+    /// Current food stockpile.
+    pub food_supply: f32,
+    /// Food consumed per tick (= population * FOOD_CONSUMPTION_PER_NPC).
+    pub food_consumption: f32,
+    /// Gold reserve.
+    pub gold: f32,
+    /// Trade income added to gold per tick (from merchants + trade routes).
+    pub trade_income: f32,
+    /// Ticks elapsed since last growth event (counted when fed).
+    pub growth_ticks: u32,
+    /// Ticks elapsed since last starvation event (counted when starving).
+    pub starve_ticks: u32,
+    /// Ticks an enemy war party has been besieging this settlement (issue #109).
+    pub siege_ticks: u32,
+}
+
+// ── Economic role (issue #108) ────────────────────────────────────────────────
+
+/// Economic role an NPC fills within its settlement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NpcRole {
+    Farmer,
+    Hunter,
+    Merchant,
+    Guard,
+    Soldier,
+    Idle,
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 /// Per-settlement mutable population state (runtime, not world-gen output).
@@ -62,6 +124,12 @@ pub struct SettlementPopulation {
     /// Mirror of `FactionResources.military_strength` — synced by the ECS caller
     /// before each `tick_population` call so the pure function can gate war parties.
     pub military_strength: f32,
+    /// Settlement economic state (issue #107).
+    pub economy: SettlementEconomy,
+    /// Whether this settlement has been marked collapsed (population == 0).
+    pub collapsed: bool,
+    /// Tick at which this settlement was founded (for history tracking, issue #111).
+    pub founded_tick: u64,
 }
 
 // ── Effects emitted by the tick ───────────────────────────────────────────────
@@ -83,6 +151,12 @@ pub enum PopulationEffect {
         tx: f32,
         ty: f32,
     },
+    /// Economy-driven extra birth (food surplus, issue #107).
+    EconomyGrowth { settlement_id: Uuid, x: f32, y: f32, z: f32 },
+    /// Economy-driven NPC death from starvation (issue #107).
+    Starvation { settlement_id: Uuid },
+    /// Settlement population reached zero — it has collapsed (issue #111).
+    SettlementCollapsed { settlement_id: Uuid, faction_id: FactionId, x: f32, y: f32, z: f32 },
 }
 
 // ── Pure tick function ────────────────────────────────────────────────────────
@@ -95,6 +169,9 @@ pub enum PopulationEffect {
 ///
 /// `map` — optional reference to the world map used to compute a cave growth
 /// modifier for underground settlements. Pass `None` to skip the modifier.
+///
+/// `current_tick` — world-sim tick counter, used to seed economy growth/starvation
+/// timing. Pass `0` if not relevant (e.g., in tests that don't exercise economy).
 ///
 /// Returns the updated state and any effects to apply.
 pub fn tick_population(
@@ -130,6 +207,62 @@ pub fn tick_population(
                 y: state.home_y + angle.sin(),
                 z: state.home_z,
             });
+        }
+    }
+
+    // ── Economy tick (issue #107) ─────────────────────────────────────────────
+    // Skip if already collapsed.
+    if !state.collapsed {
+        let total_pop = state.adult_count + state.child_count;
+        // Siege doubles consumption (issue #109).
+        let siege_multiplier = if state.economy.siege_ticks >= 5 { 2.0 } else { 1.0 };
+        state.economy.food_consumption =
+            total_pop as f32 * FOOD_CONSUMPTION_PER_NPC * siege_multiplier;
+
+        // Apply food consumption.
+        let net = state.economy.food_supply - state.economy.food_consumption;
+        state.economy.food_supply = (state.economy.food_supply - state.economy.food_consumption).max(0.0);
+
+        // Apply trade income.
+        state.economy.gold += state.economy.trade_income;
+
+        if net >= 0.0 && total_pop < MAX_SETTLEMENT_POP {
+            // Fed: count toward a growth event (+1 NPC every ECONOMY_GROWTH_PERIOD fed ticks).
+            state.economy.growth_ticks += 1;
+            state.economy.starve_ticks = 0;
+            if state.economy.growth_ticks >= ECONOMY_GROWTH_PERIOD {
+                state.economy.growth_ticks = 0;
+                effects.push(PopulationEffect::EconomyGrowth {
+                    settlement_id: state.settlement_id,
+                    x: state.home_x,
+                    y: state.home_y,
+                    z: state.home_z,
+                });
+            }
+        } else if net < 0.0 {
+            // Starving: count toward a starvation event (-1 NPC every ECONOMY_STARVE_PERIOD ticks).
+            state.economy.starve_ticks += 1;
+            state.economy.growth_ticks = 0;
+            if state.economy.starve_ticks >= ECONOMY_STARVE_PERIOD {
+                state.economy.starve_ticks = 0;
+                if total_pop > 0 {
+                    effects.push(PopulationEffect::Starvation { settlement_id: state.settlement_id });
+                    // Decrement adult count immediately so war-party gate sees the hit.
+                    state.adult_count = state.adult_count.saturating_sub(1);
+                }
+                // Check collapse condition (issue #111).
+                let total_after = state.adult_count + state.child_count;
+                if total_after == 0 {
+                    state.collapsed = true;
+                    effects.push(PopulationEffect::SettlementCollapsed {
+                        settlement_id: state.settlement_id,
+                        faction_id: state.faction_id.clone(),
+                        x: state.home_x,
+                        y: state.home_y,
+                        z: state.home_z,
+                    });
+                }
+            }
         }
     }
 
@@ -191,12 +324,12 @@ pub fn cave_growth_modifier(map: &WorldMap, hx: f32, hy: f32) -> f32 {
     modifier.clamp(-0.2, 0.2)
 }
 
-fn nearest_target<'a>(
+fn nearest_target(
     hx: f32,
     hy: f32,
     hz: f32,
-    targets: &'a [(Uuid, f32, f32, f32)],
-) -> Option<&'a (Uuid, f32, f32, f32)> {
+    targets: &[(Uuid, f32, f32, f32)],
+) -> Option<&(Uuid, f32, f32, f32)> {
     targets.iter().min_by(|a, b| {
         let z_penalty_a = (a.3 - hz).abs() / 10.0;
         let z_penalty_b = (b.3 - hz).abs() / 10.0;
@@ -228,6 +361,9 @@ mod tests {
             home_z: 0.0,
             war_party_cooldown: 0,
             military_strength: WAR_PARTY_MILITARY_MIN,
+            economy: SettlementEconomy { food_supply: 9999.0, ..Default::default() },
+            collapsed: false,
+            founded_tick: 0,
         }
     }
 
@@ -244,6 +380,9 @@ mod tests {
             home_z: -10.0,
             war_party_cooldown: 0,
             military_strength: WAR_PARTY_MILITARY_MIN,
+            economy: SettlementEconomy { food_supply: 9999.0, ..Default::default() },
+            collapsed: false,
+            founded_tick: 0,
         }
     }
 
@@ -441,5 +580,85 @@ mod tests {
             effects.iter().any(|e| matches!(e, PopulationEffect::FormWarParty { .. })),
             "underground civ should be able to raid surface settlement"
         );
+    }
+
+    // ── Economy tests (issue #107) ─────────────────────────────────────────────
+
+    #[test]
+    fn economy_growth_fires_after_200_fed_ticks() {
+        let mut state = make_pop(5);
+        // Plenty of food — should never starve, growth event every 200 ticks.
+        state.economy.food_supply = 99999.0;
+        let mut growth_count = 0u32;
+        for _ in 0..200 {
+            let (next, effects) = tick_population(state, &[], None);
+            state = next;
+            growth_count += effects.iter()
+                .filter(|e| matches!(e, PopulationEffect::EconomyGrowth { .. }))
+                .count() as u32;
+        }
+        assert_eq!(growth_count, 1, "exactly one economy growth event in 200 fed ticks");
+    }
+
+    #[test]
+    fn starvation_fires_after_50_deficit_ticks() {
+        let mut state = make_pop(5);
+        // No food supply at all — starvation starts immediately.
+        state.economy.food_supply = 0.0;
+        let mut starve_count = 0u32;
+        for _ in 0..50 {
+            let (next, effects) = tick_population(state, &[], None);
+            state = next;
+            starve_count += effects.iter()
+                .filter(|e| matches!(e, PopulationEffect::Starvation { .. }))
+                .count() as u32;
+        }
+        assert_eq!(starve_count, 1, "exactly one starvation event in 50 deficit ticks");
+    }
+
+    #[test]
+    fn settlement_collapses_when_all_starve() {
+        // One adult, no food — should collapse after 50 starvation ticks.
+        let mut state = make_pop(1);
+        state.economy.food_supply = 0.0;
+        let mut collapsed = false;
+        for _ in 0..100 {
+            let (next, effects) = tick_population(state, &[], None);
+            state = next;
+            if effects.iter().any(|e| matches!(e, PopulationEffect::SettlementCollapsed { .. })) {
+                collapsed = true;
+                break;
+            }
+        }
+        assert!(collapsed, "settlement with 1 adult and no food should collapse");
+        assert!(state.collapsed, "collapsed flag should be set");
+    }
+
+    #[test]
+    fn siege_doubles_consumption() {
+        let mut state = make_pop(4);
+        state.economy.siege_ticks = 5;
+        state.economy.food_supply = 100.0;
+        // One tick: consumption = 4 adults * 0.5 * 2.0 = 4.0
+        let (next, _) = tick_population(state, &[], None);
+        assert!(
+            (next.economy.food_consumption - 4.0).abs() < 0.01,
+            "siege should double consumption: expected 4.0, got {}", next.economy.food_consumption
+        );
+    }
+
+    #[test]
+    fn food_surplus_does_not_grow_beyond_cap() {
+        let mut state = make_pop(MAX_SETTLEMENT_POP);
+        state.economy.food_supply = 99999.0;
+        let mut growth_count = 0u32;
+        for _ in 0..200 {
+            let (next, effects) = tick_population(state, &[], None);
+            state = next;
+            growth_count += effects.iter()
+                .filter(|e| matches!(e, PopulationEffect::EconomyGrowth { .. }))
+                .count() as u32;
+        }
+        assert_eq!(growth_count, 0, "no economy growth when already at MAX_SETTLEMENT_POP");
     }
 }

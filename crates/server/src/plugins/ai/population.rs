@@ -1,6 +1,13 @@
 //! NPC population management: spawn_faction_npcs, tick_population_system,
 //! age_npcs_system, check_war_party_formation, seed_factions, init_population_state,
 //! flush_factions_to_db, underground pressure/raid systems.
+//!
+//! Also contains civilization simulation depth systems (issues #107-#111):
+//! - `tick_settlement_economy`: drives food supply/consumption and gold from trade
+//! - `tick_siege_counters`: tracks how long a war party has been at a settlement
+//! - `apply_battle_economy_effects`: wires raid/battle outcomes to economy
+//! - `tick_settlement_rebuild`: rebuilds abandoned settlements after 500 ticks
+//! - `seed_faction_relations`: seeds the FactionRelations matrix at startup
 
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
@@ -9,17 +16,20 @@ use fellytip_shared::{
         interrupt::InterruptStack,
         types::{CharacterClass, CombatantId},
     },
-    components::{EntityKind, FactionBadge, GrowthStage, Health, NavPath, NavReplanTimer, PlayerStandings, WorldPosition},
+    components::{EconomicRole, EconomicRoleKind, EntityKind, FactionBadge, GrowthStage, Health, NavPath, NavReplanTimer, PlayerStandings, WorldPosition},
     world::{
-        civilization::Settlements,
+        civilization::{AbandonedSettlement, RuinsTile, SettlementKind, Settlements},
         ecology::RegionId,
         faction::{
-            Disposition, FactionId, FactionGoal, FactionResources, NpcRank,
-            PlayerReputationMap, standing_tier, STANDING_NEUTRAL, STANDING_HOSTILE,
+            Disposition, FactionId, FactionGoal, FactionRelations, FactionResources, NpcRank,
+            PlayerReputationMap, standing_tier,
+            RELATION_BATTLE_PENALTY, RELATION_RAID_PENALTY, RELATION_TRADE_BONUS,
+            STANDING_NEUTRAL, STANDING_HOSTILE,
         },
         map::{MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
         population::{
-            tick_population, PopulationEffect, SettlementPopulation,
+            tick_population, PopulationEffect, SettlementEconomy, SettlementPopulation,
+            FARMER_FOOD_PER_TICK, HUNTER_FOOD_PER_TICK, MERCHANT_TRADE_PER_TICK,
             WAR_PARTY_SIZE,
         },
         story::{StoryEvent, StoryEventKind, WriteStoryEvent},
@@ -35,7 +45,7 @@ use crate::plugins::persistence::Db;
 use crate::plugins::world_sim::WorldSimTick;
 
 use super::{
-    CurrentGoal, FactionMember,
+    BattleHistory, CurrentGoal, FactionMember,
     FactionNpcRank, FactionPopulationState, FactionRegistry, HomePosition, UndergroundPressure,
     WarPartyMember,
 };
@@ -90,6 +100,65 @@ fn npc_spawn_offsets(n: usize) -> Vec<(f32, f32)> {
     (0..n).map(|i| ((i % 3) as f32 * 2.0, (i / 3) as f32 * 2.0)).collect()
 }
 
+/// Choose a class for a grunt NPC based on its faction id.
+///
+/// Assignment rules (issues #127 / #130):
+/// - Ash Covenant (militant)   → Fighter / Paladin alternating
+/// - Deep Tide (naval/underground) → Warlock / Druid alternating
+/// - Iron Wolves (raiders)     → Barbarian / Ranger alternating
+/// - Merchant Guild            → Rogue / Bard alternating
+/// - Remnants (underground)    → Warlock (dark underground bias, issue #130)
+/// - Fallback                  → Fighter
+pub fn class_for_faction_grunt(faction_id: &FactionId, npc_index: usize) -> CharacterClass {
+    match faction_id.0.as_str() {
+        "ash_covenant" => {
+            if npc_index.is_multiple_of(2) { CharacterClass::Fighter } else { CharacterClass::Paladin }
+        }
+        "deep_tide" => {
+            if npc_index.is_multiple_of(2) { CharacterClass::Warlock } else { CharacterClass::Druid }
+        }
+        "iron_wolves" => {
+            if npc_index.is_multiple_of(2) { CharacterClass::Barbarian } else { CharacterClass::Ranger }
+        }
+        "merchant_guild" => {
+            if npc_index.is_multiple_of(2) { CharacterClass::Rogue } else { CharacterClass::Bard }
+        }
+        // Underground / Sunken Realm factions get dark spellcaster bias (#130)
+        "remnants" => CharacterClass::Warlock,
+        _ => CharacterClass::Fighter,
+    }
+}
+
+/// Assign an `EconomicRole` to a newly spawned faction NPC (issue #108).
+///
+/// Distribution for Towns:  40% Farmer, 20% Hunter, 20% Merchant, 15% Guard, 5% Soldier.
+/// Capitals have more Guards (25%) and Soldiers (10%) at the cost of Farmers (25%).
+///
+/// `npc_index` cycles through roles deterministically without RNG.
+pub fn assign_economic_role(npc_index: usize, is_capital: bool, home_tile: (u32, u32)) -> EconomicRole {
+    // Lookup table: cumulative thresholds for modulo assignment.
+    let role = if is_capital {
+        // Capital: Farmer 25%, Hunter 20%, Merchant 20%, Guard 25%, Soldier 10%.
+        match npc_index % 20 {
+            0..=4   => EconomicRoleKind::Farmer,
+            5..=8   => EconomicRoleKind::Hunter,
+            9..=12  => EconomicRoleKind::Merchant,
+            13..=17 => EconomicRoleKind::Guard,
+            _       => EconomicRoleKind::Soldier,
+        }
+    } else {
+        // Town: Farmer 40%, Hunter 20%, Merchant 20%, Guard 15%, Soldier 5%.
+        match npc_index % 20 {
+            0..=7   => EconomicRoleKind::Farmer,
+            8..=11  => EconomicRoleKind::Hunter,
+            12..=15 => EconomicRoleKind::Merchant,
+            16..=18 => EconomicRoleKind::Guard,
+            _       => EconomicRoleKind::Soldier,
+        }
+    };
+    EconomicRole { role, workplace_tile: home_tile }
+}
+
 /// Core ECS bundle for a faction NPC — shared by both `spawn_faction_npcs` and
 /// `dm_spawn_npc` so the stat block stays in sync.
 ///
@@ -104,19 +173,27 @@ pub(crate) fn faction_npc_bundle(
     pos: WorldPosition,
     level: u32,
 ) -> impl Bundle {
+    let class = class_for_faction_grunt(&faction_id, 0);
+    let scores = fellytip_shared::components::AbilityScores::for_class(
+        &class,
+        fellytip_shared::world::faction::NpcRank::Grunt,
+    );
     (
         pos.clone(),
         Health { current: 20, max: 20 },
         crate::plugins::combat::CombatParticipant {
             id: CombatantId(Uuid::new_v4()),
             interrupt_stack: InterruptStack::default(),
-            class: CharacterClass::Warrior,
+            class,
             level,
             // Leather armour, DEX 10 → AC 11 (SRD: 11 + DEX mod)
             armor_class: 11,
-            strength: 10,
-            dexterity: 10,
-            constitution: 10,
+            strength: scores.strength as i32,
+            dexterity: scores.dexterity as i32,
+            constitution: scores.constitution as i32,
+            intelligence: scores.intelligence as i32,
+            wisdom: scores.wisdom as i32,
+            charisma: scores.charisma as i32,
         },
         // CR 1/4 = 50 XP (docs/dnd5e-srd-reference.md)
         crate::plugins::combat::ExperienceReward(50),
@@ -212,6 +289,7 @@ pub fn spawn_faction_npcs(
         // Assign each faction a home settlement by cycling through the list.
         let settlement = &settlements.0[faction_idx % settlements.0.len()];
 
+        let is_capital = matches!(settlement.kind, SettlementKind::Capital);
         for (npc_idx, (ox, oy)) in offsets.iter().enumerate() {
             // settlement.x/y are tile-space (0..MAP_WIDTH); convert to world-space.
             let pos = WorldPosition {
@@ -219,11 +297,42 @@ pub fn spawn_faction_npcs(
                 y: settlement.y - MAP_HALF_HEIGHT as f32 + oy,
                 z: settlement.z,
             };
+            let npc_class = class_for_faction_grunt(&faction.id, npc_idx);
+            let scores = fellytip_shared::components::AbilityScores::for_class(
+                &npc_class,
+                NpcRank::Grunt,
+            );
+            let economic_role = assign_economic_role(
+                npc_idx,
+                is_capital,
+                (settlement.x as u32, settlement.y as u32),
+            );
             commands.spawn((
-                faction_npc_bundle(faction.id.clone(), pos, 1),
+                pos.clone(),
+                Health { current: 20, max: 20 },
+                crate::plugins::combat::CombatParticipant {
+                    id: CombatantId(Uuid::new_v4()),
+                    interrupt_stack: InterruptStack::default(),
+                    class: npc_class,
+                    level: 1,
+                    armor_class: 11,
+                    strength: scores.strength as i32,
+                    dexterity: scores.dexterity as i32,
+                    constitution: scores.constitution as i32,
+                    intelligence: scores.intelligence as i32,
+                    wisdom: scores.wisdom as i32,
+                    charisma: scores.charisma as i32,
+                },
+                crate::plugins::combat::ExperienceReward(50),
+                FactionMember(faction.id.clone()),
+                FactionNpcRank(NpcRank::Grunt),
+                CurrentGoal(None),
+                HomePosition(pos),
+                EntityKind::FactionNpc,
                 FactionBadge { faction_id: faction.id.0.to_string(), rank: NpcRank::Grunt },
                 NavPath::default(),
                 NavReplanTimer::default(),
+                economic_role,
             ));
             tracing::debug!(
                 faction = %faction.name,
@@ -322,6 +431,9 @@ pub fn init_population_state(
                 home_z: settlement.z,
                 war_party_cooldown: 0,
                 military_strength,
+                economy: Default::default(),
+                collapsed: false,
+                founded_tick: 0,
             },
         );
     }
@@ -332,6 +444,7 @@ pub fn init_population_state(
 
 /// Advance each settlement's population by one tick.
 /// Spawns child NPCs and emits `FormWarPartyEvent` when threshold is reached.
+#[allow(clippy::too_many_arguments)]
 pub fn tick_population_system(
     mut pop: ResMut<FactionPopulationState>,
     npc_query: Query<(&FactionMember, Option<&GrowthStage>, Has<WarPartyMember>)>,
@@ -340,6 +453,7 @@ pub fn tick_population_system(
     tick: Res<WorldSimTick>,
     mut commands: Commands,
     mut war_events: MessageWriter<FormWarPartyEvent>,
+    mut story_events: MessageWriter<WriteStoryEvent>,
 ) {
     // Count live adults and children per faction.
     let mut faction_adults: HashMap<FactionId, u32>   = HashMap::new();
@@ -411,18 +525,26 @@ pub fn tick_population_system(
                     // Use tick counter for deterministic jitter between factions.
                     let jitter = ((tick.0 as f32 * 0.37).sin() * 0.5, (tick.0 as f32 * 0.61).cos() * 0.5);
                     let pos = WorldPosition { x: x + jitter.0, y: y + jitter.1, z };
+                    // Assign faction-appropriate class to child NPCs.
+                    let child_class = class_for_faction_grunt(
+                        &next.faction_id,
+                        tick.0 as usize,
+                    );
                     commands.spawn((
                         pos.clone(),
                         Health { current: 5, max: 5 },
                         CombatParticipant {
                             id: CombatantId(Uuid::new_v4()),
                             interrupt_stack: Default::default(),
-                            class: CharacterClass::Warrior,
+                            class: child_class,
                             level: 1,
                             armor_class: 8,
                             strength: 8,
                             dexterity: 8,
                             constitution: 8,
+                            intelligence: 10,
+                            wisdom: 10,
+                            charisma: 10,
                         },
                         ExperienceReward(5),
                         FactionMember(next.faction_id.clone()),
@@ -444,6 +566,57 @@ pub fn tick_population_system(
                         target_x: tx,
                         target_y: ty,
                     });
+                }
+                PopulationEffect::EconomyGrowth { x, y, z, .. } => {
+                    // Spawn an economy-growth child NPC (same as SpawnChild but driven by food surplus).
+                    let jitter = ((tick.0 as f32 * 0.47).sin() * 0.5, (tick.0 as f32 * 0.71).cos() * 0.5);
+                    let pos = WorldPosition { x: x + jitter.0, y: y + jitter.1, z };
+                    let child_class = class_for_faction_grunt(&next.faction_id, tick.0 as usize + 1);
+                    commands.spawn((
+                        pos.clone(),
+                        Health { current: 5, max: 5 },
+                        CombatParticipant {
+                            id: CombatantId(Uuid::new_v4()),
+                            interrupt_stack: Default::default(),
+                            class: child_class,
+                            level: 1,
+                            armor_class: 8,
+                            strength: 8,
+                            dexterity: 8,
+                            constitution: 8,
+                            intelligence: 10,
+                            wisdom: 10,
+                            charisma: 10,
+                        },
+                        ExperienceReward(5),
+                        FactionMember(next.faction_id.clone()),
+                        FactionNpcRank(NpcRank::Grunt),
+                        FactionBadge { faction_id: next.faction_id.0.to_string(), rank: NpcRank::Grunt },
+                        CurrentGoal(None),
+                        HomePosition(pos),
+                        EntityKind::FactionNpc,
+                        GrowthStage(0.0),
+                        NavPath::default(),
+                        NavReplanTimer::default(),
+                    ));
+                    tracing::debug!(faction = %next.faction_id.0, "Economy growth: child NPC spawned");
+                }
+                PopulationEffect::Starvation { settlement_id } => {
+                    tracing::warn!(%settlement_id, faction = %next.faction_id.0, "Starvation: NPC died");
+                    // A story event is worth emitting here for narrative purposes.
+                    // The actual adult_count decrement already happened in the pure function.
+                }
+                PopulationEffect::SettlementCollapsed { settlement_id, faction_id, x, y, .. } => {
+                    tracing::warn!(%settlement_id, faction = %faction_id.0, "Settlement collapsed");
+                    story_events.write(WriteStoryEvent(StoryEvent {
+                        id: Uuid::new_v4(),
+                        tick: tick.0,
+                        world_day: (tick.0 / 300) as u32,
+                        kind: StoryEventKind::SettlementRazed { by: faction_id.clone() },
+                        participants: vec![],
+                        location: Some(IVec2::new(x as i32, y as i32)),
+                        lore_tags: vec!["settlement".into(), "collapse".into(), "starvation".into()],
+                    }));
                 }
             }
         }
@@ -752,18 +925,27 @@ pub fn spawn_underground_raid(
             y: spawn_y + offset_y,
             z: 0.0,
         };
+        // Underground raid NPCs: Warlock bias (dark underground class, issue #130).
+        let raid_class = class_for_faction_grunt(&underground_fid, i as usize);
+        let raid_scores = fellytip_shared::components::AbilityScores::for_class(
+            &raid_class,
+            NpcRank::Grunt,
+        );
         commands.spawn((
             pos.clone(),
             Health { current: 25, max: 25 },
             CombatParticipant {
                 id: CombatantId(Uuid::new_v4()),
                 interrupt_stack: InterruptStack::default(),
-                class: CharacterClass::Warrior,
+                class: raid_class,
                 level: 2,
                 armor_class: 12,
-                strength: 12,
-                dexterity: 11,
-                constitution: 12,
+                strength: raid_scores.strength as i32,
+                dexterity: raid_scores.dexterity as i32,
+                constitution: raid_scores.constitution as i32,
+                intelligence: raid_scores.intelligence as i32,
+                wisdom: raid_scores.wisdom as i32,
+                charisma: raid_scores.charisma as i32,
             },
             ExperienceReward(75),
             FactionBadge {
@@ -795,4 +977,293 @@ pub fn spawn_underground_raid(
         hops = zone_route.len(),
         "Underground raid party spawned"
     );
+}
+
+// ── Civilization simulation depth (issues #107-#111) ──────────────────────────
+
+/// Seed default faction-to-faction relations at startup (issue #110).
+///
+/// Must run after `seed_factions` so the faction ids are known.
+pub fn seed_faction_relations(mut relations: ResMut<FactionRelations>) {
+    relations.seed_defaults();
+    tracing::info!("Faction relations seeded");
+}
+
+/// Update each settlement's `SettlementEconomy` based on NPC roles.
+///
+/// Counts Farmer/Hunter/Merchant NPCs and credits their contributions to
+/// food supply and trade income each tick (issue #108 output → #107 input).
+/// Also applies trade income to relations when merchants are active (#110).
+pub fn tick_settlement_economy(
+    mut pop: ResMut<FactionPopulationState>,
+    npc_query: Query<(&FactionMember, Option<&EconomicRole>)>,
+    mut relations: ResMut<FactionRelations>,
+    registry: Res<FactionRegistry>,
+) {
+    // Count economic role contributions per faction.
+    let mut farmer_count:   HashMap<FactionId, u32> = HashMap::new();
+    let mut hunter_count:   HashMap<FactionId, u32> = HashMap::new();
+    let mut merchant_count: HashMap<FactionId, u32> = HashMap::new();
+
+    for (member, role_opt) in &npc_query {
+        if let Some(role) = role_opt {
+            match role.role {
+                EconomicRoleKind::Farmer   => *farmer_count.entry(member.0.clone()).or_insert(0) += 1,
+                EconomicRoleKind::Hunter   => *hunter_count.entry(member.0.clone()).or_insert(0) += 1,
+                EconomicRoleKind::Merchant => *merchant_count.entry(member.0.clone()).or_insert(0) += 1,
+                _ => {}
+            }
+        }
+    }
+
+    for state in pop.settlements.values_mut() {
+        if state.collapsed { continue; }
+
+        let fid = &state.faction_id.clone();
+        let farmers   = *farmer_count.get(fid).unwrap_or(&0);
+        let hunters   = *hunter_count.get(fid).unwrap_or(&0);
+        let merchants = *merchant_count.get(fid).unwrap_or(&0);
+
+        // Add food from workers.
+        state.economy.food_supply += farmers   as f32 * FARMER_FOOD_PER_TICK;
+        state.economy.food_supply += hunters   as f32 * HUNTER_FOOD_PER_TICK;
+
+        // Update trade income (used next tick to add to gold).
+        state.economy.trade_income = merchants as f32 * MERCHANT_TRADE_PER_TICK;
+        state.economy.gold         = (state.economy.gold + state.economy.trade_income).max(0.0);
+
+        // If merchants are active, improve faction relations with neighbors (trade bonus).
+        if merchants > 0 {
+            for other_faction in &registry.factions {
+                if other_faction.id != *fid {
+                    relations.apply_delta(fid, &other_faction.id, RELATION_TRADE_BONUS);
+                }
+            }
+        }
+    }
+}
+
+/// Track how long a war party has been besieging a settlement (issue #109).
+///
+/// Increments `SettlementEconomy::siege_ticks` for each settlement that has an
+/// enemy war party within `BATTLE_RADIUS * 2` tiles. Resets when they leave.
+pub fn tick_siege_counters(
+    mut pop: ResMut<FactionPopulationState>,
+    war_party_q: Query<(&WarPartyMember, &WorldPosition)>,
+) {
+    use fellytip_shared::world::population::BATTLE_RADIUS;
+
+    // Build set of settlement ids that are currently under siege.
+    let mut sieged: HashMap<Uuid, bool> = HashMap::new();
+
+    for (wm, pos) in &war_party_q {
+        if let Some(state) = pop.settlements.get(&wm.target_settlement_id) {
+            let dist = ((pos.x - state.home_x).powi(2) + (pos.y - state.home_y).powi(2)).sqrt();
+            if dist <= BATTLE_RADIUS * 2.0 {
+                *sieged.entry(wm.target_settlement_id).or_insert(false) = true;
+            }
+        }
+    }
+
+    for (sid, state) in pop.settlements.iter_mut() {
+        if *sieged.get(sid).unwrap_or(&false) {
+            state.economy.siege_ticks = state.economy.siege_ticks.saturating_add(1);
+        } else {
+            state.economy.siege_ticks = 0;
+        }
+    }
+}
+
+/// Wire raid and battle outcomes to economy and faction relations (issues #109, #110).
+///
+/// Reads `BattleHistory` for new records since last call and applies:
+/// - War victory: winner gains 30% of loser's gold; loser loses 10% food.
+/// - Raid (zero defender casualties): attacker steals extra 20% gold, burns 10% food.
+/// - Faction relations: -30 per battle, -10 per raid.
+/// - Razed settlement: inserts `RuinsTile` marker on the settlement entity.
+pub fn apply_battle_economy_effects(
+    history: Res<BattleHistory>,
+    mut pop: ResMut<FactionPopulationState>,
+    mut relations: ResMut<FactionRelations>,
+    registry: Res<FactionRegistry>,
+    mut last_processed: Local<usize>,
+    settlement_q: Query<(Entity, &WorldPosition), With<fellytip_shared::world::civilization::SettlementKind>>,
+    mut commands: Commands,
+) {
+    let records: Vec<_> = history.records.iter().collect();
+    let start = *last_processed;
+    let end = records.len();
+    *last_processed = end;
+
+    for record in &records[start..end] {
+        let winner_fid = FactionId(SmolStr::new(&record.winner_faction));
+        let loser_fid  = FactionId(SmolStr::new(&record.loser_faction));
+
+        // Apply faction relations penalty for the battle.
+        relations.apply_delta(&winner_fid, &loser_fid, RELATION_BATTLE_PENALTY);
+
+        // Find loser economy and compute loot.
+        let gold_transfer = {
+            let loser = pop.settlements.values_mut().find(|s| s.faction_id == loser_fid);
+            if let Some(ls) = loser {
+                let transfer = ls.economy.gold * 0.30;
+                ls.economy.gold -= transfer;
+                ls.economy.food_supply = (ls.economy.food_supply * 0.90).max(0.0);
+                transfer
+            } else {
+                0.0
+            }
+        };
+
+        // Credit winner.
+        if gold_transfer > 0.0 {
+            if let Some(winner) = pop.settlements.values_mut().find(|s| s.faction_id == winner_fid) {
+                winner.economy.gold += gold_transfer;
+            }
+        }
+
+        // Raid: attacker steals an extra 20% and burns 10% food.
+        let is_raid = record.defender_casualties == 0 && record.attacker_casualties == 0;
+        if is_raid {
+            relations.apply_delta(&winner_fid, &loser_fid, RELATION_RAID_PENALTY);
+            if let Some(loser) = pop.settlements.values_mut().find(|s| s.faction_id == loser_fid) {
+                let raid_gold = loser.economy.gold * 0.20;
+                loser.economy.gold        -= raid_gold;
+                loser.economy.food_supply  = (loser.economy.food_supply * 0.90).max(0.0);
+            }
+        }
+
+        // Razed check: if loser's military is fully depleted, mark settlement as ruins.
+        let loser_military = registry.factions
+            .iter()
+            .find(|f| f.id == loser_fid)
+            .map(|f| f.resources.military_strength)
+            .unwrap_or(0.0);
+
+        if loser_military <= 0.0 {
+            // Find the closest settlement entity belonging to the loser.
+            if let Some(loser_state) = pop.settlements.values().find(|s| s.faction_id == loser_fid) {
+                let lx = loser_state.home_x;
+                let ly = loser_state.home_y;
+                for (entity, pos) in &settlement_q {
+                    let dist = ((pos.x - lx).powi(2) + (pos.y - ly).powi(2)).sqrt();
+                    if dist < 5.0 {
+                        commands.entity(entity).insert(RuinsTile);
+                        tracing::info!(faction = %loser_fid.0, "Settlement razed — RuinsTile marker added");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Handle settlement collapse and rebuilding (issue #111).
+///
+/// Two phases per tick:
+/// 1. Newly collapsed settlements → insert `AbandonedSettlement` marker on the
+///    matching settlement entity.
+/// 2. Abandoned for 500+ ticks → if an adjacent faction has pop > 20 and gold > 50,
+///    colonise the ruins and spawn a new `SettlementPopulation`.
+pub fn tick_settlement_rebuild(
+    mut pop: ResMut<FactionPopulationState>,
+    tick: Res<WorldSimTick>,
+    registry: Res<FactionRegistry>,
+    abandoned_q: Query<(Entity, &AbandonedSettlement, &WorldPosition)>,
+    settlement_marker_q: Query<(Entity, &WorldPosition), With<fellytip_shared::world::civilization::SettlementKind>>,
+    mut commands: Commands,
+    mut story_events: MessageWriter<WriteStoryEvent>,
+) {
+    // Phase 1: mark newly collapsed settlements.
+    let collapsed_states: Vec<_> = pop.settlements
+        .values()
+        .filter(|s| s.collapsed)
+        .map(|s| (s.settlement_id, s.faction_id.clone(), s.home_x, s.home_y, s.home_z, s.founded_tick))
+        .collect();
+
+    for (sid, fid, hx, hy, _hz, founded_tick) in collapsed_states {
+        // Only mark once — check if any AbandonedSettlement entity is near this position.
+        let already_abandoned = abandoned_q.iter().any(|(_, ab, pos)| {
+            let dist = ((pos.x - hx).powi(2) + (pos.y - hy).powi(2)).sqrt();
+            dist < 2.0 && ab.original_faction_id == fid.0.as_str()
+        });
+        if already_abandoned { continue; }
+
+        // Debounce via founded_tick: if founded_tick == 0 and collapsed is true
+        // (it was seeded with founded_tick=0), still emit the event.
+        let _ = (sid, founded_tick);
+
+        // Find the closest settlement entity.
+        if let Some((entity, _)) = settlement_marker_q.iter().min_by(|(_, pa), (_, pb)| {
+            let da = ((pa.x - hx).powi(2) + (pa.y - hy).powi(2)).sqrt();
+            let db = ((pb.x - hx).powi(2) + (pb.y - hy).powi(2)).sqrt();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            commands.entity(entity).insert(AbandonedSettlement {
+                collapsed_at_tick: tick.0,
+                original_faction_id: fid.0.to_string(),
+            });
+            tracing::warn!(faction = %fid.0, x = hx, y = hy, "Settlement marked abandoned");
+        }
+    }
+
+    // Phase 2: attempt rebuilding abandoned settlements.
+    for (entity, ab, pos) in &abandoned_q {
+        let ticks_since_collapse = tick.0.saturating_sub(ab.collapsed_at_tick);
+        if ticks_since_collapse < 500 { continue; }
+
+        // Check if any faction can colonise.
+        let coloniser = registry.factions.iter().find(|f| {
+            let total_pop: u32 = pop.settlements.values()
+                .filter(|s| s.faction_id == f.id && !s.collapsed)
+                .map(|s| s.adult_count + s.child_count)
+                .sum();
+            total_pop > 20 && f.resources.gold > 50.0
+        });
+
+        if let Some(coloniser) = coloniser {
+            let new_sid = Uuid::new_v4();
+            pop.settlements.insert(new_sid, SettlementPopulation {
+                settlement_id: new_sid,
+                faction_id: coloniser.id.clone(),
+                world_id: fellytip_shared::world::zone::WORLD_SURFACE,
+                birth_ticks: 0,
+                adult_count: 5,
+                child_count: 0,
+                home_x: pos.x,
+                home_y: pos.y,
+                home_z: pos.z,
+                war_party_cooldown: 0,
+                military_strength: 5.0,
+                economy: SettlementEconomy {
+                    food_supply: 50.0,
+                    gold: 10.0,
+                    ..Default::default()
+                },
+                collapsed: false,
+                founded_tick: tick.0,
+            });
+
+            // Remove the abandoned marker so it won't be processed again.
+            commands.entity(entity).remove::<AbandonedSettlement>();
+
+            story_events.write(WriteStoryEvent(StoryEvent {
+                id: Uuid::new_v4(),
+                tick: tick.0,
+                world_day: (tick.0 / 300) as u32,
+                kind: StoryEventKind::SettlementFounded {
+                    faction: coloniser.id.clone(),
+                    name: SmolStr::new(format!("Ruins_{}_{}", pos.x as i32, pos.y as i32)),
+                },
+                participants: vec![],
+                location: Some(IVec2::new(pos.x as i32, pos.y as i32)),
+                lore_tags: vec!["settlement".into(), "rebuild".into()],
+            }));
+            tracing::info!(
+                faction = %coloniser.id.0,
+                x = pos.x, y = pos.y,
+                "Abandoned settlement colonised and rebuilt"
+            );
+        }
+    }
 }

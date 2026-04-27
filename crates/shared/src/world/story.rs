@@ -39,6 +39,14 @@ pub enum StoryEventKind {
     /// A war party in the underground (the Sunken Realm) is within a few hops
     /// of the surface and poised to erupt. Emitted while `hops_to_surface <= 3`.
     UndergroundThreat   { faction_id: SmolStr, hops_to_surface: usize },
+    /// Prey overpopulated a region because predators collapsed.
+    PreyOverpopulated   { species: crate::world::ecology::SpeciesId, region: crate::world::ecology::RegionId },
+    /// Predators starved because prey collapsed.
+    PredatorStarved     { species: crate::world::ecology::SpeciesId, region: crate::world::ecology::RegionId },
+    /// A tree was felled by a player or NPC.
+    TreeFelled          { region: crate::world::ecology::RegionId },
+    /// A farm plot was harvested.
+    FarmHarvested       { settlement_id: SmolStr, yield_amount: u32 },
 }
 
 // ── Story event ───────────────────────────────────────────────────────────────

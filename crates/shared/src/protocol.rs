@@ -8,6 +8,7 @@
 
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
+use crate::combat::types::CharacterClass;
 use crate::components::{EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
 use crate::world::zone::{InteriorTile, Portal, WorldId, ZoneAnchor, ZoneId, ZoneKind};
@@ -56,6 +57,16 @@ pub struct BattleAttackMsg {
     pub target_combatant_id: Uuid,
     pub damage: i32,
     pub is_kill: bool,
+}
+
+/// Client → server: player has selected a class and wants to spawn.
+///
+/// Sent once on first join (no saved character). The server will look up
+/// the DB for an existing character; if found it ignores the class field and
+/// restores saved state instead.
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+pub struct ChooseClassMessage {
+    pub class: CharacterClass,
 }
 
 /// Server → client message carrying a single zone's tile map + anchors.
@@ -120,6 +131,9 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<PlayerStandings>();
         app.register_type::<EntityBounds>();
         app.register_type::<GameEntityId>();
+        // ChooseClassMessage flows client→server; must be registered before
+        // MessageWriter/MessageReader can be used.
+        app.add_message::<ChooseClassMessage>();
         // Messages are registered by the plugins that emit them (StoryPlugin, AiPlugin).
         // MULTIPLAYER: add_channel / register_message / register_component calls here.
     }

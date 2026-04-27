@@ -26,6 +26,31 @@ use fellytip_shared::{
     },
 };
 
+// ── Class-appropriate NPC ability selection ───────────────────────────────────
+
+/// Choose the ability_id an NPC should use based on its class and current HP %.
+///
+/// Issue #129 — class-appropriate NPC combat actions:
+/// - Fighter/Warrior: StrongAttack (1) when HP > 50 %, DefensiveStance (9) when ≤ 50 %
+/// - Rogue/Ranger/Monk: SneakAttack (2)
+/// - Mage/Wizard/Sorcerer: ArcaneBlast (3)
+/// - Barbarian: RageEntry (8)
+/// - Cleric/Druid: HealAlly (7) — targets self (ECS bridge heals lowest-HP ally)
+/// - Paladin: StrongAttack (1)
+/// - Warlock/Bard: ArcaneBlast (3) — CHA-based blast flavoured as Eldritch Blast / Bardic Magic
+fn npc_ability_id(class: &CharacterClass, hp_pct: f32) -> u8 {
+    match class {
+        CharacterClass::Warrior | CharacterClass::Fighter | CharacterClass::Paladin => {
+            if hp_pct > 0.5 { 1 } else { 9 }
+        }
+        CharacterClass::Rogue | CharacterClass::Ranger | CharacterClass::Monk => 2,
+        CharacterClass::Mage | CharacterClass::Wizard | CharacterClass::Sorcerer
+        | CharacterClass::Warlock | CharacterClass::Bard => 3,
+        CharacterClass::Barbarian => 8,
+        CharacterClass::Cleric | CharacterClass::Druid => 7,
+    }
+}
+
 use crate::plugins::ai::{FactionMember, FactionNpcRank, FactionRegistry};
 use smol_str::SmolStr;
 use uuid::Uuid;
@@ -56,6 +81,9 @@ pub struct CombatParticipant {
     pub strength: i32,
     pub dexterity: i32,
     pub constitution: i32,
+    pub intelligence: i32,
+    pub wisdom: i32,
+    pub charisma: i32,
 }
 
 /// XP granted to the killer when this entity dies. Server-only (NPCs/bosses).
@@ -121,8 +149,8 @@ impl Plugin for CombatPlugin {
 type NpcAggroQuery<'w, 's> = Query<
     'w,
     's,
-    (Entity, &'static FactionMember, &'static WorldPosition),
-    (With<ExperienceReward>, Without<PendingAttack>),
+    (Entity, &'static FactionMember, &'static WorldPosition, &'static CombatParticipant, &'static Health),
+    (With<ExperienceReward>, Without<PendingAttack>, Without<PendingAbility>),
 >;
 
 /// Check whether any faction NPC should initiate combat with a nearby player.
@@ -132,6 +160,8 @@ type NpcAggroQuery<'w, 's> = Query<
 /// 2. The player's standing with that faction is Hostile or Hated.
 ///
 /// Range: 10 tiles (squared distance ≤ 100).  Runs at FixedUpdate (62.5 Hz).
+///
+/// Issue #129: NPCs queue a class-appropriate ability instead of a plain attack.
 fn check_faction_aggression(
     npc_query: NpcAggroQuery,
     player_query: Query<
@@ -143,7 +173,7 @@ fn check_faction_aggression(
     mut commands: Commands,
 ) {
     const AGGRO_RANGE_SQ: f32 = 100.0; // 10 tiles²
-    for (npc_entity, fm, npc_pos) in npc_query.iter() {
+    for (npc_entity, fm, npc_pos, cp, health) in npc_query.iter() {
         let Some(faction) = registry.factions.iter().find(|f| f.id == fm.0) else {
             continue;
         };
@@ -155,7 +185,17 @@ fn check_faction_aggression(
             }
             let tier = standing_tier(reputation.score(gid.0, &fm.0));
             if faction.is_aggressive || tier.is_aggressive() {
-                commands.entity(npc_entity).insert(PendingAttack { target: player_entity });
+                // Use class-appropriate ability (#129).
+                let hp_pct = if health.max > 0 {
+                    health.current as f32 / health.max as f32
+                } else {
+                    0.0
+                };
+                let ability_id = npc_ability_id(&cp.class, hp_pct);
+                commands.entity(npc_entity).insert(PendingAbility {
+                    target: player_entity,
+                    ability_id,
+                });
                 break;
             }
         }
@@ -327,7 +367,9 @@ fn resolve_interrupts(
                         strength: p.strength,
                         dexterity: p.dexterity,
                         constitution: p.constitution,
-                        ..CoreStats::default()
+                        intellect: p.intelligence,
+                        wisdom: p.wisdom,
+                        charisma: p.charisma,
                     },
                     health_current: h.current,
                     health_max: h.max,

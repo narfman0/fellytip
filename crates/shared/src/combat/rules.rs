@@ -31,11 +31,22 @@ pub fn resolve_attack_roll(
     if roll == 1 {
         return AttackRollResult::Miss;
     }
-    // Rogue uses DEX (finesse), Mage uses INT for spell attacks, Warrior uses STR.
+    // Ability modifier for attack rolls by class (SRD §Ability Score).
     let ability_mod = match attacker.class {
-        CharacterClass::Rogue => attacker.dex_mod(),
-        CharacterClass::Mage  => CombatantSnapshot::modifier(attacker.stats.intellect),
-        CharacterClass::Warrior => attacker.str_mod(),
+        // DEX-primary classes
+        CharacterClass::Rogue | CharacterClass::Monk | CharacterClass::Ranger => attacker.dex_mod(),
+        // INT-primary spellcasters
+        CharacterClass::Mage | CharacterClass::Wizard => CombatantSnapshot::modifier(attacker.stats.intellect),
+        // CHA-primary spellcasters
+        CharacterClass::Warlock | CharacterClass::Bard | CharacterClass::Sorcerer
+            => CombatantSnapshot::modifier(attacker.stats.charisma),
+        // WIS-primary spellcasters
+        CharacterClass::Cleric | CharacterClass::Druid
+            => CombatantSnapshot::modifier(attacker.stats.wisdom),
+        // STR-primary melee
+        CharacterClass::Warrior | CharacterClass::Fighter
+        | CharacterClass::Paladin | CharacterClass::Barbarian
+            => attacker.str_mod(),
     };
     let prof = proficiency_bonus(attacker.level);
     if roll + ability_mod + prof >= defender.armor_class {
@@ -62,9 +73,20 @@ pub fn resolve_damage(
     dmg_roll: i32,
 ) -> Vec<Effect> {
     let ability_mod = match attacker.class {
-        CharacterClass::Rogue   => attacker.dex_mod(),
-        CharacterClass::Mage    => CombatantSnapshot::modifier(attacker.stats.intellect),
-        CharacterClass::Warrior => attacker.str_mod(),
+        // DEX-primary
+        CharacterClass::Rogue | CharacterClass::Monk | CharacterClass::Ranger => attacker.dex_mod(),
+        // INT spellcasters
+        CharacterClass::Mage | CharacterClass::Wizard => CombatantSnapshot::modifier(attacker.stats.intellect),
+        // CHA spellcasters
+        CharacterClass::Warlock | CharacterClass::Bard | CharacterClass::Sorcerer
+            => CombatantSnapshot::modifier(attacker.stats.charisma),
+        // WIS spellcasters
+        CharacterClass::Cleric | CharacterClass::Druid
+            => CombatantSnapshot::modifier(attacker.stats.wisdom),
+        // STR melee
+        CharacterClass::Warrior | CharacterClass::Fighter
+        | CharacterClass::Paladin | CharacterClass::Barbarian
+            => attacker.str_mod(),
     };
     match result {
         AttackRollResult::Miss => vec![],
@@ -258,8 +280,63 @@ pub fn resolve_ability(
             }
             effects
         }
+        7 => {
+            // HealAlly (Cleric/Druid): restore 1d8 + WIS mod HP to the caster.
+            // The ECS bridge targets the lowest-HP ally; here we heal the "target" passed in.
+            // Rolls layout: [dmg_d8].
+            let heal_roll = rolls.first().copied().unwrap_or(1);
+            let wis_mod = CombatantSnapshot::modifier(caster.stats.wisdom);
+            let amount = (heal_roll + wis_mod).max(1);
+            vec![Effect::HealDamage {
+                target: target.id.clone(),
+                amount,
+            }]
+        }
+        8 => {
+            // RageEntry (Barbarian): +2 flat damage on next hit, gains "raging" status.
+            // Rolls layout: [attack_d20, dmg_d12].
+            let attack_roll = rolls.first().copied().unwrap_or(1);
+            let dmg_roll    = rolls.get(1).copied().unwrap_or(1);
+            let roll_result = resolve_attack_roll(caster, target, attack_roll);
+            let mut effects = resolve_damage(&roll_result, caster, target, dmg_roll + 2);
+            effects.push(Effect::ApplyStatus {
+                target: caster.id.clone(),
+                status: SmolStr::new("raging"),
+            });
+            effects
+        }
+        9 => {
+            // DefensiveStance (Fighter at < 50 % HP): grants "defending" self-buff.
+            // Rolls layout: [] (no attack — pure buff).
+            vec![Effect::ApplyStatus {
+                target: caster.id.clone(),
+                status: SmolStr::new("defending"),
+            }]
+        }
         _ => vec![],
     }
+}
+
+// ── Saving throw resolution ───────────────────────────────────────────────────
+
+/// Resolve a D&D 5e SRD saving throw.
+///
+/// Formula: `d20 + ability_modifier + (proficiency_bonus if proficient) >= dc`
+///
+/// `roll` — injected d20 value [1, 20] (never rolled here — callers inject it).
+/// Returns `true` if the save succeeds (defender resists the effect).
+///
+/// See `docs/dnd5e-srd-reference.md`.
+pub fn resolve_saving_throw(
+    ability_score: i32,
+    proficient: bool,
+    proficiency_bonus: i32,
+    dc: i32,
+    roll: i32,
+) -> bool {
+    let ability_mod = CombatantSnapshot::modifier(ability_score);
+    let prof_bonus = if proficient { proficiency_bonus } else { 0 };
+    roll + ability_mod + prof_bonus >= dc
 }
 
 // ── Progression helpers ───────────────────────────────────────────────────────
@@ -577,6 +654,29 @@ mod tests {
             .filter_map(|e| if let Effect::TakeDamage { amount, .. } = e { Some(*amount) } else { None })
             .sum();
         assert_eq!(total, 10);
+    }
+
+    // ── Saving throw tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn saving_throw_succeeds_on_exact_dc() {
+        // STR 14 (mod +2), not proficient, DC 12, roll 10: 10 + 2 + 0 = 12 >= 12 → pass
+        assert!(resolve_saving_throw(14, false, 2, 12, 10));
+    }
+
+    #[test]
+    fn saving_throw_fails_one_below_dc() {
+        // STR 14 (mod +2), not proficient, DC 12, roll 9: 9 + 2 + 0 = 11 < 12 → fail
+        assert!(!resolve_saving_throw(14, false, 2, 12, 9));
+    }
+
+    #[test]
+    fn saving_throw_proficiency_makes_difference() {
+        // STR 10 (mod 0), prof +2, DC 12, roll 9: 9 + 0 + 2 = 11 → fail without prof
+        // With prof: 9 + 0 + 2 = 11 → still fails at DC 12
+        // Use roll 10: without prof 10 + 0 + 0 = 10 < 12 → fail; with prof 10 + 0 + 2 = 12 → pass
+        assert!(!resolve_saving_throw(10, false, 2, 12, 10));
+        assert!( resolve_saving_throw(10, true,  2, 12, 10));
     }
 
     // ── Class ability modifier tests ──────────────────────────────────────────

@@ -1,12 +1,20 @@
 //! Scene lighting: directional sun + sky-blue ambient fill with a day-night cycle.
+//! Underground (WORLD_SUNKEN_REALM) skips the day-night cycle and uses a static
+//! dim blue ambient light instead.
 
 use std::f32::consts::{PI, TAU};
 use bevy::prelude::*;
+use fellytip_shared::world::zone::{ZoneMembership, ZoneRegistry, WORLD_SUNKEN_REALM};
+use crate::LocalPlayer;
 
 pub struct SceneLightingPlugin;
 
 /// Seconds for one full day-night cycle.
 const DAY_DURATION: f32 = 300.0;
+
+/// Underground ambient light color: dim blue, bright enough to see clearly.
+const UNDERGROUND_AMBIENT_COLOR: Color = Color::srgb(0.15, 0.2, 0.35);
+const UNDERGROUND_AMBIENT_BRIGHTNESS: f32 = 800.0;
 
 /// Current time of day as a fraction [0.0, 1.0).
 /// 0.0/1.0 = midnight, 0.25 = dawn, 0.5 = noon, 0.75 = dusk.
@@ -61,7 +69,37 @@ fn update_day_night(
     mut tod: ResMut<TimeOfDay>,
     mut sun_q: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
     mut amb_q: Query<&mut AmbientLight>,
+    player_q: Query<Option<&ZoneMembership>, With<LocalPlayer>>,
+    zone_registry: Option<Res<ZoneRegistry>>,
 ) {
+    // Determine if the player is currently in the Sunken Realm.
+    let is_underground = if let Ok(zone_membership) = player_q.single() {
+        if let (Some(registry), Some(membership)) = (&zone_registry, zone_membership) {
+            registry.get(membership.0)
+                .map(|z| z.world_id == WORLD_SUNKEN_REALM)
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if is_underground {
+        // Underground: disable the sun and apply static dim blue ambient.
+        if let Ok((mut sun, _)) = sun_q.single_mut() {
+            sun.illuminance = 0.0;
+            sun.color = Color::BLACK;
+        }
+        if let Ok(mut amb) = amb_q.single_mut() {
+            amb.color = UNDERGROUND_AMBIENT_COLOR;
+            amb.brightness = UNDERGROUND_AMBIENT_BRIGHTNESS;
+        }
+        // Do not advance the time of day while underground.
+        return;
+    }
+
+    // Surface: normal day-night cycle.
     tod.0 = (tod.0 + time.delta_secs() / DAY_DURATION).fract();
     let t = tod.0;
 
@@ -75,9 +113,11 @@ fn update_day_night(
     let yaw = (t - 0.5) * PI;
 
     let illuminance = if sun_elevation > 0.0 {
-        // Soft ramp-up near horizon, peak at noon.
+        // Soft ramp-up near horizon, peak at noon (~100,000 lux).
+        // Dawn/dusk peak (elev≈0): ramp * 100_000 * ~0 ≈ a few thousand lux.
+        // Full midday (elev=1): 100_000 lux.
         let ramp = if elev < 0.15 { elev / 0.15 } else { 1.0 };
-        ramp * 80_000.0 * elev
+        ramp * 100_000.0 * elev
     } else {
         0.0
     };
@@ -101,13 +141,16 @@ fn update_day_night(
     }
 
     if let Ok(mut amb) = amb_q.single_mut() {
-        // Transition from deep-night blue to sky blue as sun rises.
-        let day_frac = ((sun_elevation + 0.2) / 1.2).clamp(0.0, 1.0);
+        // Transition from deep moonlit-night to bright sky blue as sun rises.
+        // Midnight: dark blue at brightness 50 (~10 lux equivalent).
+        // Midday: sky blue at brightness ~800 (~100,000 lux, matched to sun illuminance).
+        let day_frac = ((sun_elevation + 0.15) / 1.15).clamp(0.0, 1.0);
         amb.color = Color::srgb(
-            0.08 + day_frac * 0.47,
-            0.10 + day_frac * 0.55,
-            0.22 + day_frac * 0.58,
+            0.05 + day_frac * 0.50,   // R: near-black night → warm day
+            0.05 + day_frac * 0.60,   // G: near-black night → sky-blue
+            0.15 + day_frac * 0.65,   // B: deep-blue moonlight → bright sky
         );
-        amb.brightness = 12.0 + day_frac * 68.0;
+        // Night floor ~50 (moonlight), peak ~800 at solar zenith.
+        amb.brightness = 50.0 + day_frac * 750.0;
     }
 }

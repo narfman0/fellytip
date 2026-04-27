@@ -25,7 +25,7 @@ use fellytip_shared::{
     world::{
         civilization::{
             apply_building_tiles, assign_territories, generate_buildings, generate_roads,
-            generate_settlements, Buildings, Settlements,
+            generate_settlements_full, Buildings, Settlements,
         },
         map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
         zone::{generate_zones, Zone, ZoneKind, ZoneParent, OVERWORLD_ZONE},
@@ -157,7 +157,7 @@ fn generate_and_save(
 ) -> WorldMap {
     tracing::info!(seed = config.seed, width = config.width, height = config.height, "Generating world map…");
     let mut map = generate_map(config.seed, config.width, config.height);
-    let settlements = generate_settlements(&map, config.seed);
+    let settlements = generate_settlements_full(&mut map, config.seed);
     generate_roads(&mut map, &settlements);
     let road_count = map.road_tiles.iter().filter(|&&r| r).count();
     tracing::info!(road_count, "Road network stamped");
@@ -186,7 +186,7 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
         .expect("tokio runtime for world map load");
 
     // Attempt to load the cached map file whose path is stored in world_meta.
-    let map = match rt.block_on(get_map_file_path(&pool)) {
+    let mut map = match rt.block_on(get_map_file_path(&pool)) {
         Some(path) => {
             tracing::info!(path = %path.display(), "Found cached world map — attempting load");
             match try_load_map_file(&path) {
@@ -215,7 +215,7 @@ fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>
         }
     };
 
-    let settlements = generate_settlements(&map, config.seed);
+    let settlements = generate_settlements_full(&mut map, config.seed);
     tracing::info!(count = settlements.len(), "Settlements placed");
 
     let territory = assign_territories(&map, &settlements);

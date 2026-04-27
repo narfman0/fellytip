@@ -238,6 +238,7 @@ pub fn build_cave_chunk_mesh(map: &WorldMap, coord: ChunkCoord, z_level: f32) ->
                 indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
 
                 // Four side faces.
+                #[allow(clippy::type_complexity)]
                 let sides: [([f32;3],[f32;3],[f32;3],[f32;3],[f32;3]); 4] = [
                     // North (-Z): normal [0,0,-1]
                     ([bx,1.,bz],[bx+1.,1.,bz],[bx+1.,0.,bz],[bx,0.,bz],[0.,0.,-1.]),

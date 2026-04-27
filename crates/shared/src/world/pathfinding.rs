@@ -171,7 +171,7 @@ pub fn find_path_cross_layer(
     let mut open: BinaryHeap<Reverse<(u32, usize)>> = BinaryHeap::new();
 
     g_score[start_idx] = 0.0;
-    let h_start = heuristic((sx, sy), (ex, ey)) + if sl != el { 0.0 } else { 0.0 };
+    let h_start = heuristic((sx, sy), (ex, ey));
     open.push(Reverse((f32_to_ord(h_start), start_idx)));
 
     while let Some(Reverse((_, cur_idx))) = open.pop() {

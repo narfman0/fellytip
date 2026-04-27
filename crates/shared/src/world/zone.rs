@@ -33,17 +33,24 @@ pub struct ZoneId(pub u32);
 /// WorldId(0) = The Surface (main world)
 /// WorldId(1) = The Sunken Realm (underground)
 /// WorldId(2) = The Mycelium (extra-cosmological fungi world, separate universe)
-/// WorldId(3+) = Dynamically allocated player/procedural worlds
+/// WorldId(3) = Devil's Casino Realm (placeholder)
+/// WorldId(4) = Hivemind Fungus World (placeholder)
+/// WorldId(5+) = Dynamically allocated player/procedural worlds
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub struct WorldId(pub u32);
 
 pub const WORLD_SURFACE: WorldId = WorldId(0);
 pub const WORLD_SUNKEN_REALM: WorldId = WorldId(1);
 pub const WORLD_MYCELIUM: WorldId = WorldId(2);
+/// Devil's Casino Realm — placeholder world, no terrain generation yet.
+pub const WORLD_DEVILS_CASINO: WorldId = WorldId(3);
+/// Hivemind Fungus World — placeholder world, no terrain generation yet.
+pub const WORLD_HIVEMIND_FUNGUS: WorldId = WorldId(4);
 
 /// First dynamically allocated world ID. IDs below this are reserved for
-/// well-known worlds (Surface, Sunken Realm, Mycelium).
-pub const WORLD_DYNAMIC_START: u32 = 3;
+/// well-known worlds (Surface, Sunken Realm, Mycelium, Devil's Casino,
+/// Hivemind Fungus).
+pub const WORLD_DYNAMIC_START: u32 = 5;
 
 /// Registry for world IDs — tracks the next available dynamic world ID so
 /// player-owned or procedurally generated worlds can be allocated at runtime
@@ -75,6 +82,26 @@ impl WorldRegistry {
         id.0 < WORLD_DYNAMIC_START
     }
 }
+
+// ── Placeholder zone stubs for reserved worlds ────────────────────────────────
+
+/// Stub zone definition for a placeholder world that has no terrain generation yet.
+#[derive(Clone, Debug)]
+pub struct PlaceholderWorldZone {
+    pub world_id: WorldId,
+    pub name: &'static str,
+}
+
+pub const PLACEHOLDER_WORLDS: &[PlaceholderWorldZone] = &[
+    PlaceholderWorldZone {
+        world_id: WORLD_DEVILS_CASINO,
+        name: "Devil's Casino Realm",
+    },
+    PlaceholderWorldZone {
+        world_id: WORLD_HIVEMIND_FUNGUS,
+        name: "Hivemind Fungus World",
+    },
+];
 
 /// What category of zone this is (overworld, building floor, dungeon, etc.).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +196,10 @@ pub enum PortalKind {
     Trapdoor,
     CaveEntrance,
     SealRift,
+    /// Portal to the Devil's Casino Realm (placeholder).
+    CasinoPortal,
+    /// Portal to the Hivemind Fungus World (placeholder).
+    FungusPortal,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -441,9 +472,9 @@ pub fn generate_zones(
         }
     }
 
-    // Underground chain (the Sunken Realm): 3 zones depth 1→3. Overworld
-    // attaches via CaveEntrance portal to depth 1; SealRift portals link
-    // deeper layers.
+    // Underground chain (the Sunken Realm): 2 zones — depth 1 (shallow) and
+    // depth 2 (deep). Overworld attaches via CaveEntrance portal to depth 1;
+    // a SealRift portal links depth 1 → depth 2.
     let underground_template_tiles: Vec<InteriorTile> = vec![InteriorTile::Floor; 16 * 16];
     let underground_template_id = ZoneTemplate::compute_id(&underground_template_tiles);
     let underground_template = ZoneTemplate {
@@ -463,8 +494,9 @@ pub fn generate_zones(
         ],
     };
 
-    let mut underground_ids: Vec<ZoneId> = Vec::with_capacity(3);
-    for depth in 1u8..=3 {
+    // Depth 1 = Sunken Realm shallow; depth 2 = Sunken Realm deep.
+    let mut underground_ids: Vec<ZoneId> = Vec::with_capacity(2);
+    for depth in 1u8..=2 {
         let zone_id = registry.alloc_id();
         let zone = Zone {
             id: zone_id,
@@ -476,12 +508,12 @@ pub fn generate_zones(
             template_id: underground_template_id,
             anchors: underground_template.anchors.clone(),
         };
-        // Reuse the same template across all three.
+        // Reuse the same template for both depths.
         registry.insert(zone, underground_template.clone());
         underground_ids.push(zone_id);
     }
 
-    // Overworld → Underground depth 1 via CaveEntrance (bidirectional).
+    // Overworld → depth 1 via CaveEntrance (bidirectional).
     topology.add_portal(Portal {
         id: next_portal_id,
         kind: PortalKind::CaveEntrance,
@@ -511,39 +543,149 @@ pub fn generate_zones(
     });
     next_portal_id += 1;
 
-    // Deeper links via SealRift (bidirectional).
-    for i in 0..(underground_ids.len() - 1) {
-        let upper = underground_ids[i];
-        let lower = underground_ids[i + 1];
-        topology.add_portal(Portal {
-            id: next_portal_id,
-            kind: PortalKind::SealRift,
-            from_zone: upper,
-            from_anchor: SmolStr::new("down"),
-            trigger_radius: 1.5,
-            traversal_cost: 1.0,
-            faction_permeable: true,
-            one_way: false,
-            to_zone: lower,
-            to_anchor: SmolStr::new("up"),
-            shape: None,
-        });
-        next_portal_id += 1;
-        topology.add_portal(Portal {
-            id: next_portal_id,
-            kind: PortalKind::SealRift,
-            from_zone: lower,
-            from_anchor: SmolStr::new("up"),
-            trigger_radius: 1.5,
-            traversal_cost: 1.0,
-            faction_permeable: true,
-            one_way: false,
-            to_zone: upper,
-            to_anchor: SmolStr::new("down"),
-            shape: None,
-        });
-        next_portal_id += 1;
-    }
+    // Depth 1 → depth 2 via SealRift (bidirectional).
+    let upper = underground_ids[0];
+    let lower = underground_ids[1];
+    topology.add_portal(Portal {
+        id: next_portal_id,
+        kind: PortalKind::SealRift,
+        from_zone: upper,
+        from_anchor: SmolStr::new("down"),
+        trigger_radius: 1.5,
+        traversal_cost: 1.0,
+        faction_permeable: true,
+        one_way: false,
+        to_zone: lower,
+        to_anchor: SmolStr::new("up"),
+        shape: None,
+    });
+    next_portal_id += 1;
+    topology.add_portal(Portal {
+        id: next_portal_id,
+        kind: PortalKind::SealRift,
+        from_zone: lower,
+        from_anchor: SmolStr::new("up"),
+        trigger_radius: 1.5,
+        traversal_cost: 1.0,
+        faction_permeable: true,
+        one_way: false,
+        to_zone: upper,
+        to_anchor: SmolStr::new("down"),
+        shape: None,
+    });
+    next_portal_id += 1;
+
+    // ── Placeholder worlds — stub entry zones ─────────────────────────────────
+    //
+    // Devil's Casino Realm (WORLD_DEVILS_CASINO = WorldId(3)) and
+    // Hivemind Fungus World (WORLD_HIVEMIND_FUNGUS = WorldId(4)) each get a
+    // single stub Underground zone (depth 0 used as a lobby/placeholder).
+    // The surface overworld connects to them via CasinoPortal / FungusPortal.
+
+    let stub_tiles: Vec<InteriorTile> = vec![InteriorTile::Floor; 8 * 8];
+    let stub_template_id = ZoneTemplate::compute_id(&stub_tiles);
+    let stub_template = ZoneTemplate {
+        id: stub_template_id,
+        width: 8,
+        height: 8,
+        tiles: stub_tiles,
+        anchors: vec![ZoneAnchor {
+            name: SmolStr::new("entrance"),
+            pos: Vec2::new(4.0, 4.0),
+        }],
+    };
+    registry.templates.entry(stub_template_id).or_insert(stub_template.clone());
+
+    // Devil's Casino stub zone.
+    let casino_zone_id = registry.alloc_id();
+    registry.zones.insert(
+        casino_zone_id,
+        Zone {
+            id: casino_zone_id,
+            kind: ZoneKind::Underground { depth: 0 },
+            parent: ZoneParent::Underground,
+            world_id: WORLD_DEVILS_CASINO,
+            width: 8,
+            height: 8,
+            template_id: stub_template_id,
+            anchors: stub_template.anchors.clone(),
+        },
+    );
+    // Surface → Casino (one-way stub portal from overworld).
+    topology.add_portal(Portal {
+        id: next_portal_id,
+        kind: PortalKind::CasinoPortal,
+        from_zone: overworld_id,
+        from_anchor: SmolStr::new("casino_portal"),
+        trigger_radius: 2.0,
+        traversal_cost: 5.0,
+        faction_permeable: true,
+        one_way: false,
+        to_zone: casino_zone_id,
+        to_anchor: SmolStr::new("entrance"),
+        shape: None,
+    });
+    next_portal_id += 1;
+    topology.add_portal(Portal {
+        id: next_portal_id,
+        kind: PortalKind::CasinoPortal,
+        from_zone: casino_zone_id,
+        from_anchor: SmolStr::new("entrance"),
+        trigger_radius: 2.0,
+        traversal_cost: 5.0,
+        faction_permeable: true,
+        one_way: false,
+        to_zone: overworld_id,
+        to_anchor: SmolStr::new("casino_portal"),
+        shape: None,
+    });
+    next_portal_id += 1;
+
+    // Hivemind Fungus stub zone.
+    let fungus_zone_id = registry.alloc_id();
+    registry.zones.insert(
+        fungus_zone_id,
+        Zone {
+            id: fungus_zone_id,
+            kind: ZoneKind::Underground { depth: 0 },
+            parent: ZoneParent::Underground,
+            world_id: WORLD_HIVEMIND_FUNGUS,
+            width: 8,
+            height: 8,
+            template_id: stub_template_id,
+            anchors: stub_template.anchors.clone(),
+        },
+    );
+    // Surface → Fungus (bidirectional stub portal from overworld).
+    topology.add_portal(Portal {
+        id: next_portal_id,
+        kind: PortalKind::FungusPortal,
+        from_zone: overworld_id,
+        from_anchor: SmolStr::new("fungus_portal"),
+        trigger_radius: 2.0,
+        traversal_cost: 5.0,
+        faction_permeable: true,
+        one_way: false,
+        to_zone: fungus_zone_id,
+        to_anchor: SmolStr::new("entrance"),
+        shape: None,
+    });
+    next_portal_id += 1;
+    topology.add_portal(Portal {
+        id: next_portal_id,
+        kind: PortalKind::FungusPortal,
+        from_zone: fungus_zone_id,
+        from_anchor: SmolStr::new("entrance"),
+        trigger_radius: 2.0,
+        traversal_cost: 5.0,
+        faction_permeable: true,
+        one_way: false,
+        to_zone: overworld_id,
+        to_anchor: SmolStr::new("fungus_portal"),
+        shape: None,
+    });
+    #[allow(unused_assignments)]
+    { next_portal_id += 1; }
 
     (registry, topology)
 }

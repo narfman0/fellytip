@@ -57,6 +57,14 @@ fn format_story_event(ev: &StoryEvent) -> String {
             format!("Day {day}: {} migrate from {} to {}!", species.0, from.0, to.0),
         StoryEventKind::UndergroundThreat { faction_id, hops_to_surface } =>
             format!("Day {day}: {} stirs in the Sunken Realm — {hops_to_surface} hops from the surface!", faction_id),
+        StoryEventKind::PreyOverpopulated { species, region } =>
+            format!("Day {day}: {} overpopulate {} with no predators to check them!", species.0, region.0),
+        StoryEventKind::PredatorStarved { species, region } =>
+            format!("Day {day}: {} starve in {} — their prey is gone!", species.0, region.0),
+        StoryEventKind::TreeFelled { region } =>
+            format!("Day {day}: A great tree falls in {}.", region.0),
+        StoryEventKind::FarmHarvested { settlement_id, yield_amount } =>
+            format!("Day {day}: Farms near {settlement_id} yield {yield_amount} food."),
     }
 }
 
