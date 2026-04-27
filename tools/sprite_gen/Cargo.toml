@@ -16,6 +16,16 @@ ron             = { workspace = true }
 color_quant     = { workspace = true }
 reqwest         = { workspace = true }
 base64          = "0.22"
+eframe          = "0.31"
+egui            = "0.31"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "sprite_gen"
+path = "src/main.rs"
+
+[[bin]]
+name = "sprite_studio"
+path = "src/studio/main.rs"

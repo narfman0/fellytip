@@ -10,3 +10,4 @@ pub mod openai;
 pub mod palette;
 pub mod parallel;
 pub mod seeding;
+pub mod studio;
