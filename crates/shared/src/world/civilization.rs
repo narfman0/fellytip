@@ -20,6 +20,7 @@ use smol_str::SmolStr;
 use uuid::Uuid;
 
 use crate::world::cave::{cave_z, find_cave_capital_site, generate_cave_layer, place_cave_portals};
+use crate::world::faction::faction_archetype;
 use crate::world::map::{TileKind, WorldMap};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -103,6 +104,11 @@ pub struct Building {
     pub z: f32,
     /// Rotation in 90-degree increments (0–3 maps to 0°, 90°, 180°, 270°).
     pub rotation: u8,
+    /// Owning faction id string (e.g. "iron_wolves"). `None` for unaffiliated buildings.
+    /// Populated deterministically by `generate_buildings` so clients can apply
+    /// per-faction art direction without server queries.
+    #[serde(default)]
+    pub faction_id: Option<String>,
 }
 
 /// Bevy resource holding all procedurally generated buildings.
@@ -489,6 +495,33 @@ const CAPITAL_POOL: &[BuildingKind] = &[
     BuildingKind::TentSmall,
 ];
 
+/// Returns `true` for building kinds that generate multi-floor interior zones
+/// and stair-tile spirals. These must be excluded from ring building pools to
+/// prevent stair layers being stamped on top of adjacent GLB building tiles.
+fn is_tower_kind(kind: BuildingKind) -> bool {
+    matches!(
+        kind,
+        BuildingKind::CapitalTower
+            | BuildingKind::Tower
+            | BuildingKind::Keep
+            | BuildingKind::Tavern
+            | BuildingKind::Barracks
+    )
+}
+
+/// Well-known faction ids in cycling order used for deterministic assignment.
+const FACTION_CYCLE: &[&str] = &["iron_wolves", "merchant_guild", "ash_covenant", "deep_tide"];
+
+/// Deterministically assign a faction to a settlement by index.
+/// Underground settlements (z < 0) always belong to "deep_tide".
+pub fn faction_for_settlement(settlement_index: usize, z: f32) -> &'static str {
+    if z < 0.0 {
+        "deep_tide"
+    } else {
+        FACTION_CYCLE[settlement_index % FACTION_CYCLE.len()]
+    }
+}
+
 /// Ring radii (in tiles) used when placing Town buildings.
 const TOWN_RADII: &[u32] = &[2, 3, 4];
 /// Ring radii (in tiles) used when placing Capital buildings (excluding the
@@ -508,10 +541,14 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
     let mut rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(BUILDING_SEED_OFFSET));
     let mut all: Vec<Building> = Vec::new();
 
-    for settlement in settlements {
+    for (settlement_idx, settlement) in settlements.iter().enumerate() {
         let cx = settlement.x as u32;
         let cy = settlement.y as u32;
         let is_underground = settlement.z < 0.0;
+
+        // Deterministic faction assignment (issue #136).
+        let faction_id_str = faction_for_settlement(settlement_idx, settlement.z);
+        let archetype = faction_archetype(faction_id_str);
 
         // Track occupied tiles across this settlement to prevent overlap.
         let mut occupied: HashSet<(u32, u32)> = HashSet::new();
@@ -526,11 +563,13 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
             }
         };
         let make = |rng: &mut _, sid, kind, tx, ty, map: &WorldMap| {
-            if is_underground {
+            let mut b = if is_underground {
                 make_cave_building(rng, sid, kind, tx, ty, map)
             } else {
                 make_building(rng, sid, kind, tx, ty, map)
-            }
+            };
+            b.faction_id = Some(faction_id_str.to_string());
+            b
         };
 
         match settlement.kind {
@@ -557,17 +596,32 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                     ));
                 }
 
+                // Use faction-specific pool when available; fall back to CAPITAL_POOL.
+                // Tower-type buildings (Tower, Keep, Tavern, Barracks, CapitalTower) are
+                // excluded from ring placement — they are only placed as the centre
+                // landmark above. Ring buildings must be GLB-backed to avoid stair-layer
+                // collisions with adjacent non-tower buildings.
+                let raw_pool = if !archetype.building_pool.is_empty() {
+                    archetype.building_pool
+                } else {
+                    CAPITAL_POOL
+                };
+                let filtered: Vec<BuildingKind> = raw_pool.iter().copied()
+                    .filter(|k| !is_tower_kind(*k))
+                    .collect();
+                let pool: &[BuildingKind] = if filtered.is_empty() { CAPITAL_POOL } else { &filtered };
                 let count = 7 + (rng.random::<u32>() % 6) as usize; // 7–12
-                place_ring_buildings_ex(
+                place_ring_buildings_ex_with_faction(
                     &mut rng,
                     &mut all,
                     &mut occupied,
                     settlement,
                     map,
-                    CAPITAL_POOL,
+                    pool,
                     CAPITAL_RADII,
                     count,
                     is_underground,
+                    faction_id_str,
                 );
             }
 
@@ -577,17 +631,29 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                     all.push(make(&mut rng, settlement.id, TOWN_CENTER, cx, cy, map));
                 }
 
+                // Use faction-specific pool when available; fall back to TOWN_POOL.
+                // Tower-type buildings excluded from ring placement (see Capital branch).
+                let raw_pool = if !archetype.building_pool.is_empty() {
+                    archetype.building_pool
+                } else {
+                    TOWN_POOL
+                };
+                let filtered: Vec<BuildingKind> = raw_pool.iter().copied()
+                    .filter(|k| !is_tower_kind(*k))
+                    .collect();
+                let pool: &[BuildingKind] = if filtered.is_empty() { TOWN_POOL } else { &filtered };
                 let count = 3 + (rng.random::<u32>() % 3) as usize; // 3–5
-                place_ring_buildings_ex(
+                place_ring_buildings_ex_with_faction(
                     &mut rng,
                     &mut all,
                     &mut occupied,
                     settlement,
                     map,
-                    TOWN_POOL,
+                    pool,
                     TOWN_RADII,
                     count,
                     is_underground,
+                    faction_id_str,
                 );
             }
         }
@@ -676,6 +742,69 @@ fn place_ring_buildings_ex(
     }
 }
 
+/// Extended ring-building placement supporting both surface and underground settlements,
+/// with explicit faction id stamped on each generated building (issue #136).
+#[allow(clippy::too_many_arguments)]
+fn place_ring_buildings_ex_with_faction(
+    rng: &mut impl rand::RngExt,
+    output: &mut Vec<Building>,
+    occupied: &mut std::collections::HashSet<(u32, u32)>,
+    settlement: &Settlement,
+    map: &WorldMap,
+    pool: &[BuildingKind],
+    radii: &[u32],
+    count: usize,
+    is_underground: bool,
+    faction_id_str: &str,
+) {
+    use std::f32::consts::TAU;
+
+    let cx = settlement.x as u32;
+    let cy = settlement.y as u32;
+
+    let mut candidates: Vec<(u32, u32)> = Vec::new();
+    for &r in radii {
+        let steps = (r * 8).max(8) as usize;
+        for step in 0..steps {
+            let angle = TAU * step as f32 / steps as f32;
+            let tx = cx as i32 + (r as f32 * angle.cos()).round() as i32;
+            let ty = cy as i32 + (r as f32 * angle.sin()).round() as i32;
+            if tx >= 0 && ty >= 0 {
+                candidates.push((tx as u32, ty as u32));
+            }
+        }
+    }
+
+    for i in (1..candidates.len()).rev() {
+        let j = (rng.random::<u32>() as usize) % (i + 1);
+        candidates.swap(i, j);
+    }
+
+    let mut placed = 0usize;
+    let mut pool_idx = 0usize;
+    for (tx, ty) in candidates {
+        if placed >= count { break; }
+        if occupied.contains(&(tx, ty)) { continue; }
+        let ok = if is_underground {
+            is_cave_buildable(map, tx, ty)
+        } else {
+            is_tile_buildable(map, tx, ty)
+        };
+        if !ok { continue; }
+        occupied.insert((tx, ty));
+        let kind = pool[pool_idx % pool.len()];
+        pool_idx += 1;
+        let mut b = if is_underground {
+            make_cave_building(rng, settlement.id, kind, tx, ty, map)
+        } else {
+            make_building(rng, settlement.id, kind, tx, ty, map)
+        };
+        b.faction_id = Some(faction_id_str.to_string());
+        output.push(b);
+        placed += 1;
+    }
+}
+
 /// Returns `true` if tile `(tx, ty)` exists and has a walkable surface layer.
 fn is_tile_buildable(map: &WorldMap, tx: u32, ty: u32) -> bool {
     if tx as usize >= map.width || ty as usize >= map.height { return false; }
@@ -717,6 +846,7 @@ fn make_building(
         ty,
         z,
         rotation: (rng.random::<u8>() % 4),
+        faction_id: None,
     }
 }
 
@@ -744,6 +874,7 @@ fn make_cave_building(
         ty,
         z,
         rotation: (rng.random::<u8>() % 4),
+        faction_id: None,
     }
 }
 

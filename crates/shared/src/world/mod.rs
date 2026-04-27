@@ -1,3 +1,4 @@
+pub mod art_direction;
 pub mod cave;
 pub mod civilization;
 pub mod dungeon;

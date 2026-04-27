@@ -32,7 +32,9 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::asset::RenderAssetUsages;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
+use fellytip_shared::world::art_direction::WorldArtDirection;
 use fellytip_shared::world::civilization::{BuildingKind, Buildings, SettlementKind};
+use fellytip_shared::world::faction::faction_archetype;
 use fellytip_shared::world::map::{MAP_HALF_HEIGHT, MAP_HALF_WIDTH};
 use fellytip_shared::world::zone::{ZoneMembership, ZoneRegistry, OVERWORLD_ZONE, WORLD_SUNKEN_REALM};
 
@@ -54,7 +56,8 @@ pub struct EntityRendererPlugin;
 
 impl Plugin for EntityRendererPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CharacterDebugOverlay>()
+        app.init_resource::<WorldArtDirection>()
+            .init_resource::<CharacterDebugOverlay>()
             .init_gizmo_group::<CharacterDebugGizmos>()
             .add_systems(Startup, (configure_debug_gizmos, setup_entity_assets, setup_building_assets, setup_tower_assets))
             .add_systems(
@@ -240,9 +243,16 @@ fn setup_tower_assets(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    art_dir: Res<WorldArtDirection>,
 ) {
+    // Default materials use the Surface world art style (WorldId 0).
+    let surface = art_dir.get(0);
+    let [wr, wg, wb] = surface.building_wall_color;
+    let [rr, rg, rb] = surface.building_roof_color;
+
     let stone_tex = generate_stone_texture(&mut images);
     let wall_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(wr, wg, wb),
         base_color_texture: Some(stone_tex),
         perceptual_roughness: 0.9,
         metallic: 0.0,
@@ -260,7 +270,7 @@ fn setup_tower_assets(
         ..default()
     });
     let roof_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.3, 0.28, 0.25),
+        base_color: Color::srgb(rr, rg, rb),
         perceptual_roughness: 0.85,
         ..default()
     });
@@ -369,18 +379,43 @@ fn build_tiled_box_mesh(w: f32, h: f32, d: f32, tile_size: f32) -> Mesh {
 fn spawn_hollow_tower(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
     wx: f32,
     wy: f32,
     base_z: f32,
     kind: BuildingKind,
     id_bytes: &[u8; 16],
     tower_mats: &TowerMaterials,
+    wall_color_override: Option<[f32; 3]>,
+    roof_color_override: Option<[f32; 3]>,
 ) {
     let (floors, base_width) = tower_params(kind, id_bytes);
     const TAPER: f32 = 0.06;
     const FLOOR_H: f32 = 3.0;
     const TILE_SIZE: f32 = 2.0;
     const WALL_T: f32 = 0.2;
+
+    // Build per-tower wall/roof materials when color overrides are requested;
+    // otherwise reuse the shared default materials from TowerMaterials.
+    let wall_mat_handle = if let Some([r, g, b]) = wall_color_override {
+        materials.add(StandardMaterial {
+            base_color: Color::srgb(r, g, b),
+            perceptual_roughness: 0.9,
+            metallic: 0.0,
+            ..default()
+        })
+    } else {
+        tower_mats.wall_mat.clone()
+    };
+    let roof_mat_handle = if let Some([r, g, b]) = roof_color_override {
+        materials.add(StandardMaterial {
+            base_color: Color::srgb(r, g, b),
+            perceptual_roughness: 0.85,
+            ..default()
+        })
+    } else {
+        tower_mats.roof_mat.clone()
+    };
 
     for floor in 0..floors {
         let w = (base_width * (1.0 - TAPER * floor as f32)).max(1.0);
@@ -405,7 +440,7 @@ fn spawn_hollow_tower(
             let mesh = meshes.add(build_tiled_box_mesh(mesh_w, FLOOR_H, mesh_d, TILE_SIZE));
             commands.spawn((
                 Mesh3d(mesh),
-                MeshMaterial3d(tower_mats.wall_mat.clone()),
+                MeshMaterial3d(wall_mat_handle.clone()),
                 Transform::from_translation(Vec3::new(wx + dx, center_y, wy + dz)),
                 BuildingVisual,
                 OccludeFade,
@@ -422,7 +457,7 @@ fn spawn_hollow_tower(
             ));
             commands.spawn((
                 Mesh3d(slab_mesh),
-                MeshMaterial3d(tower_mats.roof_mat.clone()),
+                MeshMaterial3d(roof_mat_handle.clone()),
                 Transform::from_translation(Vec3::new(wx, slab_y, wy)),
                 BuildingVisual,
             ));
@@ -434,7 +469,7 @@ fn spawn_hollow_tower(
     let cap_mesh = meshes.add(build_tiled_box_mesh(top_w, 0.8, top_w, TILE_SIZE));
     commands.spawn((
         Mesh3d(cap_mesh),
-        MeshMaterial3d(tower_mats.roof_mat.clone()),
+        MeshMaterial3d(roof_mat_handle.clone()),
         Transform::from_translation(Vec3::new(wx, cap_y, wy)),
         BuildingVisual,
     ));
@@ -446,9 +481,11 @@ fn spawn_hollow_tower(
 fn spawn_building_visuals(
     mut commands:   Commands,
     mut meshes:     ResMut<Assets<Mesh>>,
+    mut materials:  ResMut<Assets<StandardMaterial>>,
     buildings:      Res<Buildings>,
     assets:         Res<BuildingAssets>,
     tower_mats:     Res<TowerMaterials>,
+    art_dir:        Res<WorldArtDirection>,
     existing:       Query<Entity, With<BuildingVisual>>,
 ) {
     if !buildings.is_changed() { return; }
@@ -465,7 +502,30 @@ fn spawn_building_visuals(
         let rotation = Quat::from_rotation_y(b.rotation as f32 * FRAC_PI_2);
 
         if matches!(b.kind, BuildingKind::CapitalTower | BuildingKind::Tower | BuildingKind::Keep | BuildingKind::Tavern | BuildingKind::Barracks) {
-            spawn_hollow_tower(&mut commands, &mut meshes, wx, wy, b.z, b.kind, b.id.as_bytes(), &tower_mats);
+            // Determine world art direction for this building's world.
+            // Use z < 0 as underground heuristic (Sunken Realm = WorldId 1).
+            let world_id = if b.z < 0.0 { 1u32 } else { 0u32 };
+            let art = art_dir.get(world_id);
+
+            // If the building has a faction, use faction archetype colors;
+            // otherwise use world art direction building colors.
+            let (wall_color, roof_color) = if let Some(ref fid) = b.faction_id {
+                let arch = faction_archetype(fid.as_str());
+                (Some(arch.tower_wall_color), Some(arch.tower_roof_color))
+            } else {
+                (Some(art.building_wall_color), Some(art.building_roof_color))
+            };
+
+            spawn_hollow_tower(
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+                wx, wy, b.z, b.kind,
+                b.id.as_bytes(),
+                &tower_mats,
+                wall_color,
+                roof_color,
+            );
             continue;
         }
 

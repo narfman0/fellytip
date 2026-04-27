@@ -37,6 +37,17 @@ pub fn biome_color(kind: TileKind) -> Vec3 {
     }
 }
 
+/// Apply an art-direction tint multiplier to a biome colour.
+///
+/// `tint` is a `[f32; 3]` RGB multiplier where `[1.0, 1.0, 1.0]` is neutral.
+/// Useful for per-world colour grading (e.g. Sunken Realm blue shift).
+/// Called by terrain chunk generation when a `WorldArtDirection` tint is active.
+#[allow(dead_code)]
+pub fn biome_color_tinted(kind: TileKind, tint: [f32; 3]) -> Vec3 {
+    let base = biome_color(kind);
+    Vec3::new(base.x * tint[0], base.y * tint[1], base.z * tint[2])
+}
+
 /// Blended vertex colour at tile-grid corner `(gx, gy)`.
 ///
 /// A corner is shared by the four tiles `(gx-1,gy-1)`, `(gx,gy-1)`,

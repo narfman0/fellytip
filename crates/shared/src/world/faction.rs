@@ -1,5 +1,6 @@
 //! Faction data, goals, dispositions, and the pure utility-scoring function.
 
+use crate::world::civilization::BuildingKind;
 use crate::world::ecology::RegionId;
 use bevy::prelude::{Reflect, Resource};
 use serde::{Deserialize, Serialize};
@@ -267,6 +268,73 @@ pub fn pick_goal(faction: &Faction) -> Option<&FactionGoal> {
         .goals
         .iter()
         .max_by(|a, b| score_goal(faction, a).partial_cmp(&score_goal(faction, b)).unwrap())
+}
+
+// ── Faction archetype (issue #136) ───────────────────────────────────────────
+
+/// Visual identity for a faction: which buildings it constructs and what
+/// colour its procedural towers use.
+pub struct FactionArchetype {
+    /// Ordered pool of building kinds the faction places in its settlements.
+    pub building_pool: &'static [BuildingKind],
+    /// RGB base colour for tower wall panels.
+    pub tower_wall_color: [f32; 3],
+    /// RGB base colour for tower roof caps and floor slabs.
+    pub tower_roof_color: [f32; 3],
+}
+
+/// Return the `FactionArchetype` for a well-known faction id, or a neutral
+/// default for unknown factions.
+pub fn faction_archetype(faction_id: &str) -> FactionArchetype {
+    match faction_id {
+        "iron_wolves" => FactionArchetype {
+            building_pool: &[
+                BuildingKind::Barracks,
+                BuildingKind::Tower,
+                BuildingKind::TentDetailed,
+            ],
+            tower_wall_color: [0.3, 0.3, 0.3],  // dark grey — rugged military
+            tower_roof_color: [0.5, 0.2, 0.1],  // rust — battle-worn
+        },
+        "merchant_guild" => FactionArchetype {
+            building_pool: &[
+                BuildingKind::StallGreen,
+                BuildingKind::StallRed,
+                BuildingKind::Windmill,
+                BuildingKind::Fountain,
+            ],
+            tower_wall_color: [0.7, 0.6, 0.4],  // warm stone — prosperous
+            tower_roof_color: [0.6, 0.4, 0.1],  // amber — wealth
+        },
+        "ash_covenant" => FactionArchetype {
+            building_pool: &[
+                BuildingKind::Keep,
+                BuildingKind::Tower,
+                BuildingKind::Barracks,
+            ],
+            tower_wall_color: [0.2, 0.2, 0.2],  // charcoal — austere religious
+            tower_roof_color: [0.4, 0.4, 0.4],  // ash — militant
+        },
+        "deep_tide" => FactionArchetype {
+            building_pool: &[
+                BuildingKind::Tower,
+                BuildingKind::TentSmall,
+                BuildingKind::CampfireStones,
+            ],
+            tower_wall_color: [0.2, 0.35, 0.5],  // ocean blue — nautical
+            tower_roof_color: [0.1, 0.25, 0.3],  // dark teal — deep water
+        },
+        // Unknown faction: generic stone
+        _ => FactionArchetype {
+            building_pool: &[
+                BuildingKind::TentDetailed,
+                BuildingKind::TentSmall,
+                BuildingKind::CampfireStones,
+            ],
+            tower_wall_color: [0.55, 0.50, 0.45],
+            tower_roof_color: [0.30, 0.28, 0.25],
+        },
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

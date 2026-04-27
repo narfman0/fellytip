@@ -25,6 +25,14 @@ pub struct PortalTrigger {
     pub portal_id: u32,
 }
 
+/// Added to an entity after a portal traversal to prevent immediate re-triggering.
+/// Counts down in seconds; the entity is immune to portal triggers while > 0.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PortalCooldown(pub f32);
+
+/// Cooldown duration in seconds after a zone transition before triggers re-arm.
+const PORTAL_COOLDOWN_SECS: f32 = 2.0;
+
 // ── Events ────────────────────────────────────────────────────────────────────
 
 /// Emitted when an entity enters a portal's trigger radius. The `apply_zone_transitions`
@@ -55,7 +63,13 @@ impl Plugin for PortalPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (check_portal_triggers, apply_zone_transitions, send_zone_tiles, send_zone_neighbors).chain(),
+                (
+                    tick_portal_cooldowns,
+                    check_portal_triggers,
+                    apply_zone_transitions,
+                    send_zone_tiles,
+                    send_zone_neighbors,
+                ).chain(),
             );
     }
 }
@@ -100,11 +114,25 @@ fn setup_portal_triggers(
 
 // ── Tick systems ──────────────────────────────────────────────────────────────
 
+/// Tick down `PortalCooldown` timers and remove the component when expired.
+fn tick_portal_cooldowns(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut q: Query<(Entity, &mut PortalCooldown)>,
+) {
+    for (entity, mut cooldown) in &mut q {
+        cooldown.0 -= time.delta_secs();
+        if cooldown.0 <= 0.0 {
+            commands.entity(entity).remove::<PortalCooldown>();
+        }
+    }
+}
+
 /// For each non-trigger entity with a `ZoneMembership`, emit a
 /// `PlayerZoneTransition` when it enters any same-zone `PortalTrigger`'s
-/// radius.
+/// radius. Entities with an active `PortalCooldown` are skipped.
 fn check_portal_triggers(
-    movers: Query<(Entity, &WorldPosition, &ZoneMembership), Without<PortalTrigger>>,
+    movers: Query<(Entity, &WorldPosition, &ZoneMembership), (Without<PortalTrigger>, Without<PortalCooldown>)>,
     triggers: Query<(&PortalTrigger, &WorldPosition, &ZoneMembership)>,
     topology: Option<Res<ZoneTopology>>,
     mut out: MessageWriter<PlayerZoneTransition>,
@@ -140,6 +168,7 @@ fn check_portal_triggers(
 /// coordinate is reset to 0.0 so it enters the flat destination world at
 /// ground level rather than retaining an elevation from the source world.
 fn apply_zone_transitions(
+    mut commands: Commands,
     mut events: MessageReader<PlayerZoneTransition>,
     topology: Option<Res<ZoneTopology>>,
     registry: Option<Res<ZoneRegistry>>,
@@ -194,6 +223,10 @@ fn apply_zone_transitions(
                 "World-crossing portal traversal — z reset to 0.0"
             );
         }
+
+        // Apply a cooldown so the entity cannot immediately re-trigger a
+        // portal at the destination anchor position.
+        commands.entity(ev.entity).insert(PortalCooldown(PORTAL_COOLDOWN_SECS));
     }
 }
 
