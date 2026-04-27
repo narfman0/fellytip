@@ -383,6 +383,7 @@ fn draw_map(
                         let (r, fill) = match s.kind {
                             SettlementKind::Capital => (5.0, egui::Color32::from_rgb(255, 220, 60)),
                             SettlementKind::Town    => (3.0, egui::Color32::from_rgb(220, 220, 220)),
+                            SettlementKind::PeacefulSanctuary => (3.0, egui::Color32::from_rgb(180, 230, 200)),
                         };
                         painter.circle_filled(sp, r, fill);
                         painter.circle_stroke(
@@ -563,6 +564,7 @@ fn draw_minimap(
                     let (r, fill) = match s.kind {
                         SettlementKind::Capital => (4.0, egui::Color32::from_rgb(255, 220, 60)),
                         SettlementKind::Town    => (3.0, egui::Color32::from_rgb(220, 220, 220)),
+                        SettlementKind::PeacefulSanctuary => (3.0, egui::Color32::from_rgb(180, 230, 200)),
                     };
                     painter.circle_filled(sp, r, fill);
                     painter.circle_stroke(sp, r, egui::Stroke::new(1.0, egui::Color32::BLACK));

@@ -30,6 +30,9 @@ use crate::world::map::{TileKind, WorldMap};
 pub enum SettlementKind {
     Capital,
     Town,
+    /// Peaceful underground sanctuary — sparse zen towers, depth-2 cave.
+    /// Populated by the "sanctuary" faction (Japanese-inspired hidden dwellers).
+    PeacefulSanctuary,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,12 +171,15 @@ pub fn generate_settlements(map: &WorldMap, seed: u64) -> Vec<Settlement> {
 
 /// Generate surface and underground settlements, stamping cave layers into `map`.
 ///
-/// Extends the surface settlement list with exactly one underground capital.
-/// The map is mutated to add depth-1 cave layers required for cave building
-/// placement and movement queries.
+/// Extends the surface settlement list with exactly one underground capital (depth 1)
+/// and one depth-2 peaceful sanctuary.
+/// The map is mutated to add cave layers required for cave building placement.
 pub fn generate_settlements_full(map: &mut WorldMap, seed: u64) -> Vec<Settlement> {
     let mut settlements = surface_settlements(map, seed);
     if let Some(civ) = generate_underground_civilization(map, seed) {
+        settlements.extend(civ.settlements);
+    }
+    if let Some(civ) = generate_sanctuary_civilization(map, seed) {
         settlements.extend(civ.settlements);
     }
     settlements
@@ -298,6 +304,39 @@ pub fn generate_underground_civilization(map: &mut WorldMap, seed: u64) -> Optio
     Some(Civilization {
         name: civ_name,
         settlements: vec![capital],
+    })
+}
+
+/// Generate one depth-2 sanctuary civilization — the hidden, peaceful underground dwellers.
+///
+/// Uses cave depth 2 (z = -30). The single settlement is a `PeacefulSanctuary` and
+/// belongs to the "sanctuary" faction.
+pub fn generate_sanctuary_civilization(map: &mut WorldMap, seed: u64) -> Option<Civilization> {
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    const DEPTH: u32 = 2;
+    generate_cave_layer(map, seed, DEPTH);
+    place_cave_portals(map, seed, DEPTH, 1);
+
+    let (ix, iy) = find_cave_capital_site(map, seed.wrapping_add(0x5A0C_7A0D_1234_5678), DEPTH)?;
+
+    let z = cave_z(DEPTH);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed.wrapping_add(0xBEAD_CAFE_1234_ABCD));
+    let id = deterministic_uuid(&mut rng);
+
+    let sanctuary = Settlement {
+        id,
+        name: SmolStr::new("Hidden Sanctuary"),
+        kind: SettlementKind::PeacefulSanctuary,
+        x: ix as f32 + 0.5,
+        y: iy as f32 + 0.5,
+        z,
+    };
+
+    Some(Civilization {
+        name: SmolStr::new("The Reclusive Ones"),
+        settlements: vec![sanctuary],
     })
 }
 
@@ -475,6 +514,13 @@ fn apply_tower_stair_tiles(b: &Building, map: &mut WorldMap) {
     }
 }
 
+/// Sanctuary buildings: sparse zen towers for the hidden depth-2 dwellers.
+const SANCTUARY_POOL: &[BuildingKind] = &[
+    BuildingKind::Tower,
+    BuildingKind::Keep,
+    BuildingKind::Tower,
+];
+
 /// Town buildings: camp-style structures around a central campfire.
 const TOWN_CENTER: BuildingKind = BuildingKind::CampfireStones;
 const TOWN_POOL: &[BuildingKind] = &[
@@ -493,6 +539,15 @@ const CAPITAL_POOL: &[BuildingKind] = &[
     BuildingKind::StallBench,
     BuildingKind::Lantern,
     BuildingKind::TentSmall,
+];
+/// Underground cyberpunk capital buildings: data spires, corporate blocks, security posts.
+/// Used for underground Capital settlements in the Sunken Realm (world_id 1).
+const CYBERPUNK_POOL: &[BuildingKind] = &[
+    BuildingKind::Tower,   // tall data spires
+    BuildingKind::Keep,    // corporate blocks
+    BuildingKind::Barracks, // security posts
+    BuildingKind::Tower,   // weighted double
+    BuildingKind::Keep,    // weighted double
 ];
 
 /// Returns `true` for building kinds that generate multi-floor interior zones
@@ -596,12 +651,16 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                     ));
                 }
 
-                // Use faction-specific pool when available; fall back to CAPITAL_POOL.
+                // Underground Capitals owned by deep_tide (or any underground z < -1)
+                // use the cyberpunk building pool (data spires, security posts).
+                // Otherwise, use faction-specific pool when available; fall back to CAPITAL_POOL.
                 // Tower-type buildings (Tower, Keep, Tavern, Barracks, CapitalTower) are
                 // excluded from ring placement — they are only placed as the centre
                 // landmark above. Ring buildings must be GLB-backed to avoid stair-layer
                 // collisions with adjacent non-tower buildings.
-                let raw_pool = if !archetype.building_pool.is_empty() {
+                let raw_pool = if is_underground && (faction_id_str == "deep_tide" || settlement.z < -1.0) {
+                    CYBERPUNK_POOL
+                } else if !archetype.building_pool.is_empty() {
                     archetype.building_pool
                 } else {
                     CAPITAL_POOL
@@ -650,6 +709,23 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                     settlement,
                     map,
                     pool,
+                    TOWN_RADII,
+                    count,
+                    is_underground,
+                    faction_id_str,
+                );
+            }
+
+            SettlementKind::PeacefulSanctuary => {
+                // Sanctuary: sparse towers only, low count (2–3), no center landmark.
+                let count = 2 + (rng.random::<u32>() % 2) as usize; // 2–3
+                place_ring_buildings_ex_with_faction(
+                    &mut rng,
+                    &mut all,
+                    &mut occupied,
+                    settlement,
+                    map,
+                    SANCTUARY_POOL,
                     TOWN_RADII,
                     count,
                     is_underground,

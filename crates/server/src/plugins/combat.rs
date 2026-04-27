@@ -19,7 +19,7 @@ use fellytip_shared::{
             CoreStats, Effect,
         },
     },
-    components::{EntityKind, Experience, Health, WorldPosition},
+    components::{EntityKind, Experience, Health, Pacifist, WorldPosition},
     inputs::ActionIntent,
     world::{
         ecology::RegionId,
@@ -162,7 +162,7 @@ type NpcAggroQuery<'w, 's> = Query<
     's,
     (Entity, &'static FactionMember, &'static WorldPosition, &'static CombatParticipant, &'static Health,
      Option<&'static Spellbook>, Option<&'static SpellSlots>),
-    (With<ExperienceReward>, Without<PendingAttack>, Without<PendingAbility>, Without<PendingSpell>),
+    (With<ExperienceReward>, Without<PendingAttack>, Without<PendingAbility>, Without<PendingSpell>, Without<Pacifist>),
 >;
 
 /// Returns true for classes that prefer to cast spells over using abilities.

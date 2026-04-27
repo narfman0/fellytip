@@ -132,9 +132,23 @@ fn roof_color(kind: ZoneKind) -> Color {
     }
 }
 
-/// Emissive tint for bioluminescent underground (Sunken Realm) atmosphere. Zero for all others.
+/// Exposure weight companion for emissive strips — controls HDR bloom bleed.
+fn emissive_exposure_weight_for(kind: ZoneKind) -> f32 {
+    match kind {
+        ZoneKind::Underground { depth: 1 } => 0.5,
+        ZoneKind::Underground { depth: 2 } => 0.3,
+        _ => 0.0,
+    }
+}
+
+/// Emissive tint for underground zones: neon strips keyed by depth, zero for all others.
+///
+/// depth 1 — cyberpunk neon cyan (bright electric blue)
+/// depth 2 — warm amber (sanctuary bioluminescence)
 fn emissive_for(kind: ZoneKind) -> LinearRgba {
     match kind {
+        ZoneKind::Underground { depth: 1 } => LinearRgba::new(0.0, 0.5, 1.0, 1.0),
+        ZoneKind::Underground { depth: 2 } => LinearRgba::new(0.9, 0.6, 0.1, 1.0),
         ZoneKind::Underground { .. } => LinearRgba::new(0.05, 0.12, 0.18, 0.0),
         _ => LinearRgba::new(0.0, 0.0, 0.0, 0.0),
     }
@@ -166,21 +180,26 @@ fn spawn_zone(
     let render_layer = RenderLayers::layer(hop_distance as usize);
 
     let kind = msg.zone_kind;
+    let emissive = emissive_for(kind);
+    let emissive_exposure_weight = emissive_exposure_weight_for(kind);
     let floor_mat = materials.add(StandardMaterial {
         base_color: floor_color(kind),
-        emissive: emissive_for(kind),
+        emissive,
+        emissive_exposure_weight,
         perceptual_roughness: 0.9,
         ..default()
     });
     let wall_mat = materials.add(StandardMaterial {
         base_color: wall_color(kind),
-        emissive: emissive_for(kind),
+        emissive,
+        emissive_exposure_weight,
         perceptual_roughness: 0.85,
         ..default()
     });
     let balcony_mat = materials.add(StandardMaterial {
         base_color: floor_color(kind).with_alpha(0.6),
-        emissive: emissive_for(kind),
+        emissive,
+        emissive_exposure_weight,
         alpha_mode: AlphaMode::Blend,
         perceptual_roughness: 0.7,
         ..default()

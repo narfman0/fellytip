@@ -324,6 +324,11 @@ pub fn faction_archetype(faction_id: &str) -> FactionArchetype {
             tower_wall_color: [0.2, 0.35, 0.5],  // ocean blue — nautical
             tower_roof_color: [0.1, 0.25, 0.3],  // dark teal — deep water
         },
+        "sanctuary" => FactionArchetype {
+            building_pool: &[BuildingKind::Tower, BuildingKind::Keep],
+            tower_wall_color: [0.85, 0.78, 0.65],
+            tower_roof_color: [0.25, 0.18, 0.10],
+        },
         // Unknown faction: generic stone
         _ => FactionArchetype {
             building_pool: &[

@@ -232,6 +232,14 @@ impl NavPath {
 #[derive(Component, Clone, Debug, Default)]
 pub struct NavReplanTimer(pub u32);
 
+/// Marker component: this entity never initiates combat.
+///
+/// NPCs with this component are skipped by the faction aggression check —
+/// used for PeacefulSanctuary dwellers and other non-hostile factions.
+#[derive(Component, Clone, Debug, Default, Reflect)]
+#[reflect(Component)]
+pub struct Pacifist;
+
 // ── D&D 5e SRD Ability Scores ─────────────────────────────────────────────────
 
 /// The six D&D 5e SRD ability scores for a character or NPC.
