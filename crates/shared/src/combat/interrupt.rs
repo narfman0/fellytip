@@ -3,7 +3,7 @@
 //! `InterruptStack::step()` drives one frame of resolution per call.
 //! Every `InterruptFrame` variant must be handled explicitly — no `_` wildcard.
 
-use crate::combat::rules::{resolve_ability, resolve_attack_roll, resolve_damage};
+use crate::combat::rules::{resolve_ability, resolve_attack_roll, resolve_damage, resolve_spell};
 use crate::combat::types::{CombatState, CombatantId, Effect};
 
 // ── Context types ─────────────────────────────────────────────────────────────
@@ -53,6 +53,16 @@ pub enum InterruptFrame {
     ResolvingDamage   { ctx: DamageContext },
     ResolvingAbility  { ctx: AbilityContext },
     ResolvingMovement { ctx: MovementContext },
+    /// A spellcast being resolved. `rolls` holds injected dice for damage/save.
+    /// Layout: `[dmg_die_1, dmg_die_2, …, save_d20]` (save d20 last, if any).
+    CastingSpell {
+        caster: CombatantId,
+        spell_name: &'static str,
+        slot_level: u8,
+        target: CombatantId,
+        /// Pre-rolled dice injected by the ECS bridge.
+        rolls: Vec<i32>,
+    },
 }
 
 // ── Stack ─────────────────────────────────────────────────────────────────────
@@ -121,6 +131,17 @@ impl InterruptStack {
                 // Movement resolution placeholder — collision/range checks in Step 8+.
                 let _ = ctx;
                 vec![]
+            }
+
+            InterruptFrame::CastingSpell { caster, spell_name, slot_level, target, rolls } => {
+                let _ = slot_level; // slot already expended by the ECS bridge before queuing
+                let Some(caster_state) = state.get(&caster).map(|c| c.snapshot.clone()) else {
+                    return (vec![], self.0.is_empty());
+                };
+                let Some(target_state) = state.get(&target).map(|c| c.snapshot.clone()) else {
+                    return (vec![], self.0.is_empty());
+                };
+                resolve_spell(spell_name, &caster_state, &target_state, &rolls)
             }
         };
 

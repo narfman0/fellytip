@@ -11,8 +11,9 @@ use std::collections::HashMap;
 use bevy::{ecs::message::MessageWriter, prelude::*};
 use fellytip_shared::{
     combat::{
-        hit_die_for_class, hp_on_level_up, xp_to_next_level,
+        find_spell, hit_die_for_class, hp_on_level_up, xp_to_next_level,
         interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
+        spells::{SpellSlots, Spellbook},
         types::{
             CharacterClass, CombatState, CombatantId, CombatantSnapshot, CombatantState,
             CoreStats, Effect,
@@ -129,6 +130,14 @@ pub struct PendingAbility {
     pub ability_id: u8,
 }
 
+/// Marker: a spellcasting NPC has a spell queued to cast against `target`.
+#[derive(Component)]
+pub struct PendingSpell {
+    pub target: Entity,
+    pub spell_name: &'static str,
+    pub slot_level: u8,
+}
+
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
@@ -141,7 +150,7 @@ impl Plugin for CombatPlugin {
         );
         app.add_systems(
             FixedUpdate,
-            (process_player_input, initiate_attacks, initiate_abilities, resolve_interrupts).chain(),
+            (process_player_input, initiate_attacks, initiate_abilities, initiate_spells, resolve_interrupts).chain(),
         );
     }
 }
@@ -151,9 +160,19 @@ impl Plugin for CombatPlugin {
 type NpcAggroQuery<'w, 's> = Query<
     'w,
     's,
-    (Entity, &'static FactionMember, &'static WorldPosition, &'static CombatParticipant, &'static Health),
-    (With<ExperienceReward>, Without<PendingAttack>, Without<PendingAbility>),
+    (Entity, &'static FactionMember, &'static WorldPosition, &'static CombatParticipant, &'static Health,
+     Option<&'static Spellbook>, Option<&'static SpellSlots>),
+    (With<ExperienceReward>, Without<PendingAttack>, Without<PendingAbility>, Without<PendingSpell>),
 >;
+
+/// Returns true for classes that prefer to cast spells over using abilities.
+fn is_spellcaster(class: &CharacterClass) -> bool {
+    matches!(
+        class,
+        CharacterClass::Wizard | CharacterClass::Mage | CharacterClass::Sorcerer
+        | CharacterClass::Warlock | CharacterClass::Cleric | CharacterClass::Druid
+    )
+}
 
 /// Check whether any faction NPC should initiate combat with a nearby player.
 ///
@@ -163,7 +182,9 @@ type NpcAggroQuery<'w, 's> = Query<
 ///
 /// Range: 10 tiles (squared distance ≤ 100).  Runs at FixedUpdate (62.5 Hz).
 ///
-/// Issue #129: NPCs queue a class-appropriate ability instead of a plain attack.
+/// Spellcasting NPCs (Wizard/Mage/Sorcerer/Warlock/Cleric/Druid) pick a known
+/// spell from their `Spellbook`, check `SpellSlots::can_cast`, and queue a
+/// `PendingSpell`. All other classes fall back to the class-appropriate ability.
 fn check_faction_aggression(
     npc_query: NpcAggroQuery,
     player_query: Query<
@@ -175,7 +196,7 @@ fn check_faction_aggression(
     mut commands: Commands,
 ) {
     const AGGRO_RANGE_SQ: f32 = 100.0; // 10 tiles²
-    for (npc_entity, fm, npc_pos, cp, health) in npc_query.iter() {
+    for (npc_entity, fm, npc_pos, cp, health, spellbook, spell_slots) in npc_query.iter() {
         let Some(faction) = registry.factions.iter().find(|f| f.id == fm.0) else {
             continue;
         };
@@ -187,7 +208,30 @@ fn check_faction_aggression(
             }
             let tier = standing_tier(reputation.score(gid.0, &fm.0));
             if faction.is_aggressive || tier.is_aggressive() {
-                // Use class-appropriate ability (#129).
+                // Spellcasters: try to pick a castable spell first.
+                if is_spellcaster(&cp.class) {
+                    if let (Some(book), Some(slots)) = (spellbook, spell_slots) {
+                        // Find a spell the NPC knows and has a slot for.
+                        let chosen = book.known.iter().find_map(|&name| {
+                            let spell = find_spell(name)?;
+                            if slots.can_cast(spell.level) {
+                                Some((name, spell.level))
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some((spell_name, slot_level)) = chosen {
+                            commands.entity(npc_entity).insert(PendingSpell {
+                                target: player_entity,
+                                spell_name,
+                                slot_level,
+                            });
+                            break;
+                        }
+                    }
+                }
+
+                // Fall back to class-appropriate ability.
                 let hp_pct = if health.max > 0 {
                     health.current as f32 / health.max as f32
                 } else {
@@ -307,6 +351,64 @@ fn initiate_abilities(
             participant.interrupt_stack.push(frame);
         }
         commands.entity(entity).remove::<PendingAbility>();
+    }
+}
+
+// ── Spell initiation ──────────────────────────────────────────────────────────
+
+/// Convert `PendingSpell` markers into `CastingSpell` interrupt frames, expend
+/// the spell slot, then remove the marker.
+fn initiate_spells(
+    mut caster_query: Query<(Entity, &PendingSpell, &mut CombatParticipant, Option<&mut SpellSlots>)>,
+    defender_query: Query<&CombatParticipant, Without<PendingSpell>>,
+    mut commands: Commands,
+) {
+    for (entity, pending, mut participant, spell_slots_opt) in caster_query.iter_mut() {
+        let caster_id = participant.id.clone();
+        if let Ok(defender) = defender_query.get(pending.target) {
+            let spell_name = pending.spell_name;
+            let slot_level = pending.slot_level;
+
+            // Expend the slot before queuing.
+            if let Some(mut slots) = spell_slots_opt {
+                slots.expend(slot_level);
+            }
+
+            // Generate dice for spell resolution: one die per damage/heal die.
+            let spell = find_spell(spell_name);
+            let dice_count = spell.map(|s| {
+                if s.heal_dice_count > 0 && s.damage_dice_count == 0 {
+                    s.heal_dice_count as usize
+                } else {
+                    s.damage_dice_count as usize
+                }
+            }).unwrap_or(1);
+            let has_save = spell.and_then(|s| s.save_ability).is_some();
+            let sides = spell.map(|s| {
+                if s.heal_dice_count > 0 && s.damage_dice_count == 0 {
+                    s.heal_dice_sides.max(1) as i32
+                } else {
+                    s.damage_dice_sides.max(1) as i32
+                }
+            }).unwrap_or(6);
+
+            let mut rolls: Vec<i32> = (0..dice_count)
+                .map(|_| rand::random_range(1..=sides))
+                .collect();
+            if has_save {
+                rolls.push(rand::random_range(1..=20)); // save d20
+            }
+
+            let frame = InterruptFrame::CastingSpell {
+                caster: caster_id,
+                spell_name,
+                slot_level,
+                target: defender.id.clone(),
+                rolls,
+            };
+            participant.interrupt_stack.push(frame);
+        }
+        commands.entity(entity).remove::<PendingSpell>();
     }
 }
 

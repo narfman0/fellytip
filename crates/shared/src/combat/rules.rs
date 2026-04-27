@@ -317,6 +317,70 @@ pub fn resolve_ability(
     }
 }
 
+// ── Spell resolution ──────────────────────────────────────────────────────────
+
+/// Resolve a spell cast by looking it up in the `SPELLS` catalogue.
+///
+/// `rolls` — pre-rolled dice injected by the ECS bridge:
+///   - Indices `[0..dice_count)` are the damage/heal dice.
+///   - The final element (if `save_ability` is set) is the target's saving throw d20.
+///
+/// Returns a list of `Effect`s (TakeDamage, HealDamage, or empty on save success).
+pub fn resolve_spell(
+    spell_name: &str,
+    _caster: &CombatantSnapshot,
+    target: &CombatantSnapshot,
+    rolls: &[i32],
+) -> Vec<Effect> {
+    use crate::combat::spells::find_spell;
+
+    let Some(spell) = find_spell(spell_name) else {
+        return vec![];
+    };
+
+    // ── Healing spells ───────────────────────────────────────────────────────
+    if spell.heal_dice_count > 0 && spell.damage_dice_count == 0 {
+        let total_heal: i32 = rolls.iter()
+            .take(spell.heal_dice_count as usize)
+            .sum::<i32>()
+            .max(1);
+        return vec![Effect::HealDamage {
+            target: target.id.clone(),
+            amount: total_heal,
+        }];
+    }
+
+    // ── Damage spells ────────────────────────────────────────────────────────
+    let raw_damage: i32 = rolls.iter()
+        .take(spell.damage_dice_count as usize)
+        .sum::<i32>()
+        .max(1);
+
+    // Saving throw: if the spell has one, check the last element of rolls.
+    let mut damage = raw_damage;
+    if let Some(save_ability_idx) = spell.save_ability {
+        let save_roll = rolls.last().copied().unwrap_or(1);
+        let ability_score = match save_ability_idx {
+            0 => target.stats.strength,
+            1 => target.stats.dexterity,
+            2 => target.stats.constitution,
+            3 => target.stats.intellect,
+            4 => target.stats.wisdom,
+            _ => target.stats.charisma,
+        };
+        let dc = spell.save_dc_base as i32;
+        let saved = resolve_saving_throw(ability_score, false, proficiency_bonus(target.level), dc, save_roll);
+        if saved {
+            damage /= 2; // half damage on successful save (SRD §Saving Throws)
+        }
+    }
+
+    vec![Effect::TakeDamage {
+        target: target.id.clone(),
+        amount: damage.max(1),
+    }]
+}
+
 // ── Saving throw resolution ───────────────────────────────────────────────────
 
 /// Resolve a D&D 5e SRD saving throw.

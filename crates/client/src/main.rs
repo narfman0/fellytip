@@ -133,6 +133,8 @@ fn main() {
                         .with_method("dm/set_character_debug",    dm_set_character_debug)
                         .with_method("dm/set_camera_free",        dm_set_camera_free)
                         .with_method("dm/choose_class",           dm_choose_class)
+                        .with_method("dm/set_time_of_day",        dm_set_time_of_day)
+                        .with_method("dm/enter_portal",           dm_enter_portal)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -159,6 +161,8 @@ fn main() {
                     .with_method("dm/set_character_debug",        dm_set_character_debug)
                     .with_method("dm/set_camera_free",            dm_set_camera_free)
                     .with_method("dm/choose_class",               dm_choose_class)
+                    .with_method("dm/set_time_of_day",            dm_set_time_of_day)
+                    .with_method("dm/enter_portal",               dm_enter_portal)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
@@ -612,6 +616,112 @@ fn dm_choose_class(
     }
     tracing::info!(%class_str, "DM choose class");
     Ok(serde_json::json!({ "ok": true, "class": class_str }))
+}
+
+/// Trigger portal traversal for the local player to the nearest portal.
+///
+/// Finds the portal trigger closest to the local player's current position and
+/// immediately applies the zone transition as if the player had walked through it.
+/// This bypasses the normal proximity check so the player doesn't need to be
+/// standing on the portal anchor.
+///
+/// Optionally accepts `{ "portal_id": u32 }` to target a specific portal.
+///
+/// Returns `{ "ok": true, "portal_id": u32, "to_zone": u32 }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_enter_portal(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    use fellytip_server::plugins::portal::PlayerZoneTransition;
+    use fellytip_shared::world::zone::{ZoneMembership, ZoneTopology};
+    use fellytip_shared::components::WorldPosition;
+
+    // Resolve the local player's entity and position.
+    let mut player_q = world.query_filtered::<(Entity, &WorldPosition, Option<&ZoneMembership>), With<LocalPlayer>>();
+    let (player_entity, player_pos, player_zone) =
+        player_q.single(world)
+            .map_err(|_| BrpError::internal("no local player found"))?;
+    let player_pos = player_pos.clone();
+    let player_zone_id = player_zone.map(|z| z.0);
+
+    // Find portal by explicit ID or nearest anchor.
+    let specific_id: Option<u32> = params
+        .as_ref()
+        .and_then(|p| p.get("portal_id"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+
+    let portal_id = {
+        let topology = world.get_resource::<ZoneTopology>()
+            .ok_or_else(|| BrpError::internal("ZoneTopology resource not found"))?;
+
+        if let Some(id) = specific_id {
+            if topology.portals.iter().any(|p| p.id == id) {
+                id
+            } else {
+                return Err(BrpError::internal(format!("portal {id} not found")));
+            }
+        } else {
+            // Use portal system's PortalTrigger query to find the nearest one.
+            let mut trigger_q = world.query::<(&fellytip_server::plugins::portal::PortalTrigger, &WorldPosition, Option<&ZoneMembership>)>();
+            let nearest = trigger_q
+                .iter(world)
+                .filter(|(trigger, tpos, tzone)| {
+                    // Prefer same-zone portals; if player has no zone, allow all.
+                    let zone_match = player_zone_id
+                        .zip(tzone.map(|z| z.0))
+                        .map(|(pz, tz)| pz == tz)
+                        .unwrap_or(true);
+                    let _ = trigger;
+                    let _ = tpos;
+                    zone_match
+                })
+                .min_by(|(_, a_pos, _), (_, b_pos, _)| {
+                    let da = (a_pos.x - player_pos.x).powi(2) + (a_pos.y - player_pos.y).powi(2);
+                    let db = (b_pos.x - player_pos.x).powi(2) + (b_pos.y - player_pos.y).powi(2);
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(trigger, _, _)| trigger.portal_id);
+
+            nearest.ok_or_else(|| BrpError::internal("no portal triggers found in current zone"))?
+        }
+    };
+
+    // Look up to_zone for the return value before writing the message.
+    let to_zone = {
+        let topology = world.get_resource::<ZoneTopology>()
+            .ok_or_else(|| BrpError::internal("ZoneTopology resource not found"))?;
+        topology.portals.iter()
+            .find(|p| p.id == portal_id)
+            .map(|p| p.to_zone.0)
+            .unwrap_or(0)
+    };
+
+    world.write_message(PlayerZoneTransition { entity: player_entity, portal_id });
+    tracing::info!(portal_id, to_zone, "DM enter portal triggered for local player");
+    Ok(serde_json::json!({ "ok": true, "portal_id": portal_id, "to_zone": to_zone }))
+}
+
+/// Set the time of day for the day-night cycle.
+///
+/// Params: `{ "time": f32 }` — 0.0/1.0 = midnight, 0.25 = dawn, 0.5 = noon, 0.75 = dusk.
+/// Returns `{ "ok": true, "time": f32 }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_set_time_of_day(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let time = params
+        .as_ref()
+        .and_then(|p| p.get("time"))
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| BrpError::internal("missing required param `time`"))? as f32;
+
+    let time = time.fract().abs(); // wrap to [0.0, 1.0)
+    world.resource_mut::<plugins::scene_lighting::TimeOfDay>().0 = time;
+    tracing::info!(time, "DM set time of day");
+    Ok(serde_json::json!({ "ok": true, "time": time }))
 }
 
 /// Toggle free-orbit mode on the camera.
