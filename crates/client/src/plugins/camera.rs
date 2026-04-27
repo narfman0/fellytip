@@ -6,9 +6,13 @@
 //! Drag-to-orbit is disabled by default (`free_orbit: false`); set `free_orbit`
 //! to `true` (e.g. via the `dm/set_camera_free` BRP method) to enable it.
 
-use bevy::input::mouse::AccumulatedMouseScroll;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::input::mouse::AccumulatedMouseScroll;
+use bevy::pbr::{DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion};
+use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
+use bevy::render::view::{ColorGrading, ColorGradingGlobal};
 use fellytip_shared::world::map::WorldMap;
 use std::f32::consts::PI;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
@@ -91,7 +95,39 @@ fn camera_transform(o: &OrbitCamera) -> Transform {
 fn spawn_camera(mut commands: Commands) {
     let orbit = OrbitCamera::default();
     let transform = camera_transform(&orbit);
-    commands.spawn((Camera3d::default(), transform, orbit));
+    commands.spawn((
+        Camera3d::default(),
+        Tonemapping::TonyMcMapface,
+        Bloom {
+            intensity: 0.15,
+            low_frequency_boost: 0.4,
+            low_frequency_boost_curvature: 0.95,
+            high_pass_frequency: 1.0,
+            prefilter: BloomPrefilter {
+                threshold: 0.8,
+                threshold_softness: 0.2,
+            },
+            composite_mode: BloomCompositeMode::Additive,
+            ..default()
+        },
+        DistanceFog {
+            color: Color::srgba(0.55, 0.65, 0.75, 1.0),
+            falloff: FogFalloff::ExponentialSquared { density: 0.008 },
+            directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
+            directional_light_exponent: 30.0,
+        },
+        ScreenSpaceAmbientOcclusion::default(),
+        ColorGrading {
+            global: ColorGradingGlobal {
+                exposure: 0.0,
+                post_saturation: 1.1,
+                ..default()
+            },
+            ..default()
+        },
+        transform,
+        orbit,
+    ));
 }
 
 fn update_orbit_camera(

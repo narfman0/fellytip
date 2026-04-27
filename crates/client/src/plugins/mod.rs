@@ -1,5 +1,6 @@
 pub mod battle;
 pub mod billboard_sprite;
+pub mod particles;
 pub mod camera;
 pub mod character_animation;
 pub mod class_selection;
@@ -35,3 +36,4 @@ pub use terrain::TerrainPlugin;
 pub use zone_cache::{ZoneCache, ZoneCachePlugin};
 #[allow(unused_imports)]
 pub use zone_renderer::{RoofTile, ZoneMeshMarker, ZoneRendererPlugin};
+pub use particles::ParticlesPlugin;

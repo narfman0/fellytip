@@ -112,6 +112,24 @@ pub struct ZoneNeighborMessage {
     pub zone_hops: Vec<(ZoneId, u8)>,
 }
 
+/// Sent by the server's `resolve_interrupts` system whenever an entity takes
+/// damage in the single-player host model.  The client particle system reads
+/// this message to spawn hit-effect particles at the target's world position.
+///
+/// MULTIPLAYER: register with MessageRegistry and route over the network.
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+pub struct ClientDamageMsg {
+    /// World position of the damaged target in Bevy space (x, y_up, z).
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    /// True when the source was a spell cast (drives SpellImpact particles).
+    pub is_spell: bool,
+    /// Optional spell colour as linear RGBA (fire=orange, frost=cyan, lightning=yellow).
+    /// None = melee hit (red burst).
+    pub spell_color: Option<[f32; 4]>,
+}
+
 // ── Plugin ───────────────────────────────────────────────────────────────────
 
 pub struct FellytipProtocolPlugin;
@@ -134,6 +152,7 @@ impl Plugin for FellytipProtocolPlugin {
         // ChooseClassMessage flows client→server; must be registered before
         // MessageWriter/MessageReader can be used.
         app.add_message::<ChooseClassMessage>();
+        app.add_message::<ClientDamageMsg>();
         // Messages are registered by the plugins that emit them (StoryPlugin, AiPlugin).
         // MULTIPLAYER: add_channel / register_message / register_component calls here.
     }

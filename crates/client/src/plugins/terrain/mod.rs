@@ -9,6 +9,7 @@ pub mod chunk;
 pub mod lod;
 pub mod manager;
 pub mod material;
+pub mod water_material;
 
 pub use manager::ChunkLifecycle;
 
@@ -28,6 +29,7 @@ use manager::{
     update_layer_visibility, ChunkManager, TerrainAssets,
 };
 use material::create_terrain_material;
+use water_material::{animate_water, create_water_material, WaterMaterialHandle};
 
 pub struct TerrainPlugin;
 
@@ -43,6 +45,7 @@ impl Plugin for TerrainPlugin {
                     rebuild_dirty_chunks,
                     apply_chunk_meshes,
                     update_layer_visibility,
+                    animate_water,
                 )
                     .chain(),
             );
@@ -65,7 +68,9 @@ fn setup_terrain_assets(
     apply_building_tiles(&buildings, &mut map);
 
     let material = create_terrain_material(&mut materials);
+    let water_mat = create_water_material(&mut materials);
     commands.insert_resource(TerrainAssets { material });
+    commands.insert_resource(WaterMaterialHandle(water_mat));
     commands.insert_resource(ChunkManager::default());
     commands.insert_resource(Settlements(settlements));
     commands.insert_resource(Buildings(buildings));
@@ -114,6 +119,7 @@ fn apply_world_meta(
     // Reset chunk manager so all chunks are rebuilt from the new map data.
     mgr.lod_cache.clear();
     mgr.mesh_cache.clear();
+    mgr.water_mesh_cache.clear();
     mgr.last_cam_chunk = None;
     // Spawned chunk entities will be despawned by apply_chunk_meshes on the
     // next frame (lod_cache is now empty, so all spawned are out-of-range).

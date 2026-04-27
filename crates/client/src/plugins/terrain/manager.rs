@@ -15,6 +15,7 @@ use fellytip_shared::world::map::WorldMap;
 
 use super::chunk::{build_chunk_mesh, ChunkCoord};
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
+use super::water_material::{build_water_mesh, WaterMaterialHandle, WaterOverlay};
 use crate::plugins::camera::OrbitCamera;
 use crate::{LocalPlayer, PredictedPosition};
 
@@ -40,10 +41,14 @@ pub struct ChunkLifecycle {
 pub struct ChunkManager {
     /// Entities currently representing visible chunks.
     pub spawned: HashMap<ChunkCoord, Entity>,
+    /// Water overlay entities (spawned alongside terrain chunks).
+    pub water_spawned: HashMap<ChunkCoord, Entity>,
     /// Most-recent LOD assigned to each visible chunk.
     pub lod_cache: HashMap<ChunkCoord, LodLevel>,
     /// Cached mesh handles keyed by (coord, lod) to avoid rebuilding unchanged meshes.
     pub mesh_cache: HashMap<(ChunkCoord, LodLevel), Handle<Mesh>>,
+    /// Cached water overlay mesh handles (built once per coord, LOD-independent).
+    pub water_mesh_cache: HashMap<ChunkCoord, Handle<Mesh>>,
     /// Chunks whose mesh must be (re)built this frame.
     pub dirty: HashSet<ChunkCoord>,
     /// Camera chunk from the previous frame — skip work when camera hasn't moved.
@@ -56,12 +61,14 @@ pub struct ChunkManager {
 impl Default for ChunkManager {
     fn default() -> Self {
         Self {
-            spawned:        HashMap::new(),
-            lod_cache:      HashMap::new(),
-            mesh_cache:     HashMap::new(),
-            dirty:          HashSet::new(),
-            last_cam_chunk: None,
-            render_radius:  20,
+            spawned:          HashMap::new(),
+            water_spawned:    HashMap::new(),
+            lod_cache:        HashMap::new(),
+            mesh_cache:       HashMap::new(),
+            water_mesh_cache: HashMap::new(),
+            dirty:            HashSet::new(),
+            last_cam_chunk:   None,
+            render_radius:    20,
         }
     }
 }
@@ -194,6 +201,14 @@ pub fn rebuild_dirty_chunks(
         let mesh = build_chunk_mesh(&map, coord, lod, transitions);
         let handle = meshes.add(mesh);
         mgr.mesh_cache.insert((coord, lod), handle);
+
+        // Build water overlay mesh (LOD-independent: always full resolution).
+        if !mgr.water_mesh_cache.contains_key(&coord) {
+            if let Some(water_mesh) = build_water_mesh(&map, coord.cx, coord.cy) {
+                let water_handle = meshes.add(water_mesh);
+                mgr.water_mesh_cache.insert(coord, water_handle);
+            }
+        }
     }
 }
 
@@ -214,6 +229,7 @@ pub fn apply_chunk_meshes(
     mut commands:  Commands,
     mut mgr:       ResMut<ChunkManager>,
     assets:        Res<TerrainAssets>,
+    water_mat:     Option<Res<WaterMaterialHandle>>,
     mut lifecycle: ResMut<ChunkLifecycle>,
 ) {
     // ── Despawn chunks no longer in lod_cache ─────────────────────────────────
@@ -228,6 +244,10 @@ pub fn apply_chunk_meshes(
         if let Some(entity) = mgr.spawned.remove(&coord) {
             lifecycle.newly_hidden.push((coord, entity));
             commands.entity(entity).despawn();
+        }
+        // Also despawn water overlay if it exists.
+        if let Some(water_entity) = mgr.water_spawned.remove(&coord) {
+            commands.entity(water_entity).despawn();
         }
     }
 
@@ -255,6 +275,19 @@ pub fn apply_chunk_meshes(
             )).id();
             mgr.spawned.insert(coord, entity);
             lifecycle.newly_visible.push((coord, entity));
+
+            // Spawn water overlay if this chunk has water tiles and we have the material.
+            if let Some(ref wmat) = water_mat {
+                if let Some(water_handle) = mgr.water_mesh_cache.get(&coord).cloned() {
+                    let water_entity = commands.spawn((
+                        Mesh3d(water_handle),
+                        MeshMaterial3d(wmat.0.clone()),
+                        Transform::IDENTITY,
+                        WaterOverlay,
+                    )).id();
+                    mgr.water_spawned.insert(coord, water_entity);
+                }
+            }
         }
     }
 }

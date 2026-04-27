@@ -40,6 +40,7 @@ use fellytip_shared::world::zone::{ZoneMembership, ZoneRegistry, OVERWORLD_ZONE,
 
 use super::billboard_sprite::{atlas_id_for_entity, BillboardSprites};
 use super::character_animation::{CharacterAnimState, CharacterAssets, CHARACTER_SCALE};
+use super::particles::{EmitterKind, ParticleEmitter};
 
 /// When `true`, draw a gizmo sphere at every entity with `WorldPosition` so NPCs
 /// are visible even when their GLB meshes haven't loaded yet.
@@ -51,6 +52,26 @@ pub struct CharacterDebugOverlay(pub bool);
 /// (depth_bias = -1.0) without affecting other gizmos.
 #[derive(GizmoConfigGroup, Default, Reflect)]
 pub struct CharacterDebugGizmos;
+
+/// Marker placed on the `SceneRoot` entity for a spawned windmill building.
+/// Used by `tag_windmill_children` to locate and tag the blade child node.
+#[derive(Component)]
+struct WindmillBuilding;
+
+/// Marker placed on whichever entity should spin — either the whole windmill
+/// or a named child node ("Blades", "Rotor", etc.) if one is found.
+#[derive(Component)]
+pub struct WindmillSpin;
+
+/// LOD component attached to tower-kind building parent entities.
+/// Hides `full_entity` (the procedural mesh group) and shows `simple_entity`
+/// (a flat-coloured cuboid) when the camera is beyond `distance_threshold`.
+#[derive(Component)]
+pub struct BuildingLod {
+    pub full_entity:        Entity,
+    pub simple_entity:      Entity,
+    pub distance_threshold: f32,
+}
 
 pub struct EntityRendererPlugin;
 
@@ -66,6 +87,9 @@ impl Plugin for EntityRendererPlugin {
                     spawn_entity_visuals,
                     spawn_building_visuals,
                     apply_faction_tint,
+                    tag_windmill_children,
+                    spin_windmills,
+                    update_building_lod,
                     flicker_lantern_lights,
                     occlude_fade_system,
                     sync_remote_transforms,
@@ -375,6 +399,13 @@ fn build_tiled_box_mesh(w: f32, h: f32, d: f32, tile_size: f32) -> Mesh {
     mesh
 }
 
+/// Spawn a hollow procedural tower and return `(full_group_entity, simple_box_entity,
+/// lod_anchor_entity)` so the caller can attach a `BuildingLod` component.
+///
+/// * `full_group_entity`  — invisible transform parent containing all wall/roof meshes.
+/// * `simple_box_entity`  — flat-coloured cuboid shown at distance.
+/// * `lod_anchor_entity`  — zero-size entity at the tower base used to measure
+///                          camera distance; holds the `BuildingLod` component.
 #[allow(clippy::too_many_arguments)]
 fn spawn_hollow_tower(
     commands: &mut Commands,
@@ -417,6 +448,54 @@ fn spawn_hollow_tower(
         tower_mats.roof_mat.clone()
     };
 
+    // The "simple" LOD box colour matches the wall colour (or a neutral stone grey).
+    let lod_color = wall_color_override.unwrap_or([0.55, 0.50, 0.45]);
+    let simple_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(lod_color[0], lod_color[1], lod_color[2]),
+        perceptual_roughness: 0.95,
+        metallic: 0.0,
+        ..default()
+    });
+
+    let total_h = floors as f32 * FLOOR_H;
+    let simple_mesh = meshes.add(Cuboid::new(base_width, total_h, base_width));
+    let simple_center_y = base_z + total_h * 0.5;
+
+    // Spawn the full detail group (transform-only parent; children added below).
+    let full_group = commands.spawn((
+        Transform::default(),
+        Visibility::Inherited,
+        BuildingVisual,
+    )).id();
+
+    // Spawn the simple LOD box (hidden by default; shown at distance).
+    let simple_entity = commands.spawn((
+        Mesh3d(simple_mesh),
+        MeshMaterial3d(simple_mat),
+        Transform::from_translation(Vec3::new(wx, simple_center_y, wy)),
+        Visibility::Hidden,
+        BuildingVisual,
+    )).id();
+
+    // LOD anchor entity placed at the tower base; holds the BuildingLod component
+    // so `update_building_lod` can measure camera distance from it.
+    let lod_threshold = match kind {
+        BuildingKind::CapitalTower => 120.0,
+        BuildingKind::Tower | BuildingKind::Keep => 100.0,
+        _ => 80.0,
+    };
+    commands.spawn((
+        Transform::from_translation(Vec3::new(wx, base_z, wy)),
+        GlobalTransform::default(),
+        BuildingLod {
+            full_entity: full_group,
+            simple_entity,
+            distance_threshold: lod_threshold,
+        },
+        BuildingVisual,
+    ));
+
+    // Spawn wall panels as children of the full_group.
     for floor in 0..floors {
         let w = (base_width * (1.0 - TAPER * floor as f32)).max(1.0);
         let hw = w * 0.5;
@@ -438,13 +517,14 @@ fn spawn_hollow_tower(
                 (WALL_T, w)
             };
             let mesh = meshes.add(build_tiled_box_mesh(mesh_w, FLOOR_H, mesh_d, TILE_SIZE));
-            commands.spawn((
+            let panel = commands.spawn((
                 Mesh3d(mesh),
                 MeshMaterial3d(wall_mat_handle.clone()),
                 Transform::from_translation(Vec3::new(wx + dx, center_y, wy + dz)),
                 BuildingVisual,
                 OccludeFade,
-            ));
+            )).id();
+            commands.entity(full_group).add_child(panel);
         }
 
         if floor > 0 {
@@ -455,24 +535,26 @@ fn spawn_hollow_tower(
                 (w - WALL_T * 2.0).max(0.2),
                 TILE_SIZE,
             ));
-            commands.spawn((
+            let slab = commands.spawn((
                 Mesh3d(slab_mesh),
                 MeshMaterial3d(roof_mat_handle.clone()),
                 Transform::from_translation(Vec3::new(wx, slab_y, wy)),
                 BuildingVisual,
-            ));
+            )).id();
+            commands.entity(full_group).add_child(slab);
         }
     }
 
     let top_w = (base_width * (1.0 - TAPER * floors as f32) * 1.15).max(1.2);
     let cap_y = base_z + floors as f32 * FLOOR_H + 0.4;
     let cap_mesh = meshes.add(build_tiled_box_mesh(top_w, 0.8, top_w, TILE_SIZE));
-    commands.spawn((
+    let cap = commands.spawn((
         Mesh3d(cap_mesh),
         MeshMaterial3d(roof_mat_handle.clone()),
         Transform::from_translation(Vec3::new(wx, cap_y, wy)),
         BuildingVisual,
-    ));
+    )).id();
+    commands.entity(full_group).add_child(cap);
 }
 
 /// Spawns (or respawns) local building entities whenever the `Buildings` resource changes.
@@ -529,13 +611,22 @@ fn spawn_building_visuals(
             continue;
         }
 
-        commands.spawn((
+        let mut ecmds = commands.spawn((
             SceneRoot(assets.scene_for(b.kind)),
             Transform::from_translation(translation)
                 .with_rotation(rotation)
                 .with_scale(Vec3::splat(2.0)),
             BuildingVisual,
         ));
+        if b.kind == BuildingKind::Windmill {
+            ecmds.insert(WindmillBuilding);
+        }
+        if b.kind == BuildingKind::CampfireStones {
+            ecmds.insert(ParticleEmitter {
+                kind: EmitterKind::Campfire,
+                timer: Timer::from_seconds(0.15, TimerMode::Repeating),
+            });
+        }
 
         if b.kind == BuildingKind::Lantern {
             // Unique phase per lantern so each flickers independently.
@@ -554,6 +645,78 @@ fn spawn_building_visuals(
                 LanternFlicker { phase },
                 BuildingVisual,
             ));
+            commands.spawn((
+                ParticleEmitter {
+                    kind: EmitterKind::Lantern,
+                    timer: Timer::from_seconds(0.2, TimerMode::Repeating),
+                },
+                Transform::from_translation(Vec3::new(wx, b.z + 2.5, wy)),
+                BuildingVisual,
+            ));
+        }
+    }
+}
+
+/// After a windmill GLB scene finishes loading, walk its children looking for a
+/// node named "Blades", "Rotor", or similar.  Tag it (or the root itself as a
+/// fallback) with `WindmillSpin` so the rotation system picks it up.
+fn tag_windmill_children(
+    mut commands: Commands,
+    windmill_q:   Query<Entity, Added<WindmillBuilding>>,
+    children_q:   Query<&Children>,
+    names_q:      Query<&Name>,
+) {
+    for root in &windmill_q {
+        // BFS over the scene hierarchy.
+        let mut stack = vec![root];
+        let mut blade_entity: Option<Entity> = None;
+        while let Some(e) = stack.pop() {
+            if let Ok(name) = names_q.get(e) {
+                let n = name.as_str().to_ascii_lowercase();
+                if n.contains("blade") || n.contains("rotor") || n.contains("fan") || n.contains("sail") {
+                    blade_entity = Some(e);
+                    break;
+                }
+            }
+            if let Ok(children) = children_q.get(e) {
+                stack.extend(children.iter());
+            }
+        }
+        // Tag the specific blade child, or fall back to the whole scene root.
+        let target = blade_entity.unwrap_or(root);
+        commands.entity(target).insert(WindmillSpin);
+    }
+}
+
+/// Rotate all entities tagged with `WindmillSpin` around their local Y axis.
+fn spin_windmills(
+    time: Res<Time>,
+    mut q: Query<&mut Transform, With<WindmillSpin>>,
+) {
+    for mut transform in &mut q {
+        transform.rotate_local_y(time.delta_secs() * 0.8);
+    }
+}
+
+/// Toggle visibility between the full procedural tower mesh group and a simple
+/// coloured cuboid based on camera distance.
+fn update_building_lod(
+    camera_q:       Query<&GlobalTransform, With<Camera>>,
+    lod_q:          Query<(&BuildingLod, &GlobalTransform)>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    let Ok(cam_gt) = camera_q.single() else { return };
+    let cam_pos = cam_gt.translation();
+    for (lod, transform) in &lod_q {
+        let dist = cam_pos.distance(transform.translation());
+        let show_full = dist < lod.distance_threshold;
+        if let Ok(mut vis) = visibility.get_mut(lod.full_entity) {
+            let desired = if show_full { Visibility::Inherited } else { Visibility::Hidden };
+            if *vis != desired { *vis = desired; }
+        }
+        if let Ok(mut vis) = visibility.get_mut(lod.simple_entity) {
+            let desired = if show_full { Visibility::Hidden } else { Visibility::Inherited };
+            if *vis != desired { *vis = desired; }
         }
     }
 }

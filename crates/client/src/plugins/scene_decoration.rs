@@ -76,7 +76,7 @@ impl Plugin for SceneDecorationPlugin {
         app.add_systems(Startup, setup_decoration_assets)
             .add_systems(
                 Update,
-                (finalize_decoration_assets, apply_decorations, grow_trees).chain(),
+                (finalize_decoration_assets, apply_decorations, grow_trees, sway_trees).chain(),
             );
     }
 }
@@ -107,6 +107,10 @@ struct TreeGrowth {
     mature_secs:  f32,
     age_secs:     f32,
 }
+
+/// Marker component placed on tree parent entities so `sway_trees` can animate them.
+#[derive(Component)]
+pub struct TreeSway;
 
 // ── Resources ─────────────────────────────────────────────────────────────────
 
@@ -383,6 +387,10 @@ fn apply_decorations(
                 if let Some(g) = growth {
                     entity_cmds.insert(g);
                 }
+                // Tag trees (and other growing plants) for wind sway animation.
+                if grows {
+                    entity_cmds.insert(TreeSway);
+                }
                 let parent = entity_cmds
                     .with_children(|p| {
                         for (mesh, mat) in &primitives {
@@ -422,6 +430,24 @@ fn grow_trees(
         if t >= 1.0 {
             cmds.entity(entity).remove::<TreeGrowth>();
         }
+    }
+}
+
+// ── Sway system ──────────────────────────────────────────────────────────────
+
+/// Applies a subtle sin-wave rotation oscillation to all tree entities tagged
+/// with `TreeSway`.  Uses world position as a phase offset so adjacent trees
+/// don't all sway in lockstep.
+fn sway_trees(
+    time: Res<Time>,
+    mut q: Query<(&mut Transform, &GlobalTransform), With<TreeSway>>,
+) {
+    let t = time.elapsed_secs();
+    for (mut transform, global) in &mut q {
+        let pos = global.translation();
+        let phase = (pos.x + pos.z) * 0.1;
+        let sway = (t * 0.8 + phase).sin() * 0.02; // ~1 degree
+        transform.rotation = Quat::from_rotation_z(sway);
     }
 }
 

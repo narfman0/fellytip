@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use bevy::{ecs::message::MessageWriter, prelude::*};
+use fellytip_shared::protocol::ClientDamageMsg;
 use fellytip_shared::{
     combat::{
         find_spell, hit_die_for_class, hp_on_level_up, xp_to_next_level,
@@ -433,10 +434,12 @@ type ParticipantQuery<'w, 's> = Query<
 fn resolve_interrupts(
     mut participants: ParticipantQuery,
     wildlife_loot_query: Query<(Entity, &WorldPosition, &Loot, &EntityKind), With<Loot>>,
+    positions_query: Query<&WorldPosition>,
     mut story_writer: MessageWriter<WriteStoryEvent>,
     mut reputation: ResMut<PlayerReputationMap>,
     tick: Res<crate::plugins::world_sim::WorldSimTick>,
     mut commands: Commands,
+    mut damage_writer: MessageWriter<ClientDamageMsg>,
 ) {
     // ── Phase 1: build lookup maps (immutable passes) ────────────────────────
     let id_to_entity: HashMap<CombatantId, Entity> = participants
@@ -538,6 +541,16 @@ fn resolve_interrupts(
                                 remaining = health.current,
                                 "Damage applied"
                             );
+                        }
+                        // Emit client-side particle message.
+                        if let Ok(pos) = positions_query.get(target_entity) {
+                            damage_writer.write(ClientDamageMsg {
+                                x: pos.x,
+                                y: pos.z,
+                                z: pos.y,
+                                is_spell: false,
+                                spell_color: None,
+                            });
                         }
                     }
                 }

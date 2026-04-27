@@ -3,6 +3,7 @@
 //! dim blue ambient light instead.
 
 use std::f32::consts::{PI, TAU};
+use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 use fellytip_shared::world::zone::{ZoneMembership, ZoneRegistry, WORLD_SUNKEN_REALM};
 use crate::LocalPlayer;
@@ -36,7 +37,7 @@ impl Plugin for SceneLightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TimeOfDay>()
             .add_systems(Startup, spawn_lights)
-            .add_systems(Update, update_day_night);
+            .add_systems(Update, (update_day_night, update_fog));
     }
 }
 
@@ -152,5 +153,33 @@ fn update_day_night(
         );
         // Night floor ~50 (moonlight), peak ~800 at solar zenith.
         amb.brightness = 50.0 + day_frac * 750.0;
+    }
+}
+
+fn update_fog(
+    mut fog_q: Query<&mut DistanceFog>,
+    player_q: Query<Option<&ZoneMembership>, With<LocalPlayer>>,
+    zone_registry: Option<Res<ZoneRegistry>>,
+) {
+    let is_underground = if let Ok(zone_membership) = player_q.single() {
+        if let (Some(registry), Some(membership)) = (&zone_registry, zone_membership) {
+            registry.get(membership.0)
+                .map(|z| z.world_id == WORLD_SUNKEN_REALM)
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    for mut fog in fog_q.iter_mut() {
+        if is_underground {
+            fog.color = Color::srgba(0.02, 0.02, 0.05, 1.0);
+            fog.falloff = FogFalloff::ExponentialSquared { density: 0.02 };
+        } else {
+            fog.color = Color::srgba(0.55, 0.65, 0.75, 1.0);
+            fog.falloff = FogFalloff::ExponentialSquared { density: 0.008 };
+        }
     }
 }
