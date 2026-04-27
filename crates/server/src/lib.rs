@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use fellytip_shared::{
     WORLD_SEED,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}, SpellSlots, Spellbook},
-    components::{AbilityScores, Experience, Health, PlayerStandings, SavingThrowProficiencies, WorldMeta, WorldPosition},
+    components::{AbilityModifiers, AbilityScores, Experience, Health, HitDice, PlayerStandings, SavingThrowProficiencies, WorldMeta, WorldPosition},
     protocol::ChooseClassMessage,
     world::{
         map::{find_surface_spawn, WorldMap, MAP_HEIGHT, MAP_WIDTH},
@@ -49,6 +49,9 @@ pub struct ServerGamePlugin {
 
 impl Plugin for ServerGamePlugin {
     fn build(&self, app: &mut App) {
+        app.register_type::<fellytip_shared::components::HitDice>()
+           .register_type::<fellytip_shared::components::AbilityModifiers>();
+
         app.insert_resource(MapGenConfig {
                 seed: self.seed,
                 width: self.width,
@@ -64,7 +67,8 @@ impl Plugin for ServerGamePlugin {
             .add_plugins(plugins::combat::CombatPlugin)
             .add_plugins(plugins::interest::InterestPlugin)
             .add_plugins(plugins::party::PartyPlugin)
-            .add_plugins(plugins::portal::PortalPlugin);
+            .add_plugins(plugins::portal::PortalPlugin)
+            .add_systems(Update, fellytip_shared::components::sync_ability_modifiers);
 
         if self.combat_test {
             app.add_plugins(plugins::combat_test::CombatTestPlugin);
@@ -205,6 +209,8 @@ fn spawn_player_on_class_choice(
 
     let spell_slots = SpellSlots::for_class(&class, level as u8);
     let spellbook   = Spellbook::for_class(&class);
+    let hit_dice    = HitDice::for_class_level(&class, level);
+    let ability_modifiers = AbilityModifiers::from_scores(&ability_scores);
 
     commands.spawn((
         WorldPosition { x: px, y: py, z: pz },
@@ -223,6 +229,8 @@ fn spawn_player_on_class_choice(
             wisdom:       wis_val,
             charisma:     cha_val,
         },
+        ability_modifiers,
+        hit_dice,
         ability_scores,
         saves,
         GameEntityId(player_uuid),
@@ -235,9 +243,7 @@ fn spawn_player_on_class_choice(
             last_valid_z: pz,
             ..default()
         },
-        world_meta,
-        spell_slots,
-        spellbook,
+        (world_meta, spell_slots, spellbook),
     ));
     tracing::info!(uuid = %player_uuid, x = px, y = py, z = pz, "Player spawned after class selection");
 }

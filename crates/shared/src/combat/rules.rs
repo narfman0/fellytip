@@ -433,6 +433,20 @@ pub fn xp_to_next_level(level: u32) -> u32 {
     }
 }
 
+/// Roll a D&D 5e saving throw.
+/// Returns the total: d20 + ability_modifier + (proficiency_bonus if proficient).
+pub fn roll_saving_throw(
+    ability_mod: i32,
+    proficient: bool,
+    level: u32,
+    rng: &mut impl rand::Rng,
+) -> i32 {
+    use rand::RngExt as _;
+    let d20: i32 = rng.random_range(1..=20_i32);
+    let prof = if proficient { proficiency_bonus(level) } else { 0 };
+    d20 + ability_mod + prof
+}
+
 /// HP gained on level-up: roll the class hit die (provided via `rng`) + CON mod, min 1.
 ///
 /// `rng` must yield values in `[1, hit_die_for_class(class)]`. The roll is clamped to

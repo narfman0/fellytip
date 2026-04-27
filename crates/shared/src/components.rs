@@ -47,8 +47,40 @@ pub struct Experience {
 }
 
 impl Experience {
+    /// SRD XP required to *reach* each level (index = level, 1-indexed).
+    pub const XP_THRESHOLDS: [u32; 21] = [
+        0,       // padding (unused)
+        0,       // level 1
+        300,     // to reach level 2
+        900,     // to reach level 3
+        2_700,   // to reach level 4
+        6_500,   // to reach level 5
+        14_000,  // to reach level 6
+        23_000,  // to reach level 7
+        34_000,  // to reach level 8
+        48_000,  // to reach level 9
+        64_000,  // to reach level 10
+        85_000,  // to reach level 11
+        100_000, // to reach level 12
+        120_000, // to reach level 13
+        140_000, // to reach level 14
+        165_000, // to reach level 15
+        195_000, // to reach level 16
+        225_000, // to reach level 17
+        265_000, // to reach level 18
+        305_000, // to reach level 19
+        355_000, // to reach level 20
+    ];
+
+    /// XP required to advance from `current_level` to the next level.
+    /// Returns 0 at level 20 (cap).
+    pub fn xp_to_next_level(current_level: u32) -> u32 {
+        let next = (current_level + 1).min(20) as usize;
+        Self::XP_THRESHOLDS[next]
+    }
+
     pub fn new() -> Self {
-        Self { xp: 0, level: 1, xp_to_next: 300 }
+        Self { xp: 0, level: 1, xp_to_next: Self::xp_to_next_level(1) }
     }
 }
 
@@ -350,6 +382,65 @@ impl AbilityScores {
 
 impl Default for AbilityScores {
     fn default() -> Self { Self::npc_grunt() }
+}
+
+// ── D&D 5e Hit Dice ───────────────────────────────────────────────────────────
+
+/// How many hit dice a character has and of what type.
+/// `count` = character level; `die` = hit die size (6, 8, 10, or 12).
+#[derive(Component, Clone, PartialEq, Debug, Serialize, Deserialize, Reflect)]
+#[reflect(Component)]
+pub struct HitDice {
+    pub die: u8,
+    pub count: u8,
+}
+
+impl HitDice {
+    pub fn for_class_level(class: &CharacterClass, level: u32) -> Self {
+        use crate::combat::types::hit_die_for_class;
+        Self { die: hit_die_for_class(class) as u8, count: level as u8 }
+    }
+    /// SRD average roll rounded up: (die / 2) + 1.
+    pub fn average_roll(&self) -> u8 {
+        (self.die / 2) + 1
+    }
+}
+
+// ── D&D 5e Ability Modifiers (derived) ───────────────────────────────────────
+
+/// Derived modifiers computed from `AbilityScores`.
+/// Updated reactively by `sync_ability_modifiers` when `AbilityScores` changes.
+#[derive(Component, Clone, PartialEq, Debug, Default, Serialize, Deserialize, Reflect)]
+#[reflect(Component)]
+pub struct AbilityModifiers {
+    pub strength:     i8,
+    pub dexterity:    i8,
+    pub constitution: i8,
+    pub intelligence: i8,
+    pub wisdom:       i8,
+    pub charisma:     i8,
+}
+
+impl AbilityModifiers {
+    pub fn from_scores(scores: &AbilityScores) -> Self {
+        Self {
+            strength:     scores.str_mod(),
+            dexterity:    scores.dex_mod(),
+            constitution: scores.con_mod(),
+            intelligence: scores.int_mod(),
+            wisdom:       scores.wis_mod(),
+            charisma:     scores.cha_mod(),
+        }
+    }
+}
+
+/// Reactively recompute `AbilityModifiers` whenever `AbilityScores` changes.
+pub fn sync_ability_modifiers(
+    mut query: Query<(&AbilityScores, &mut AbilityModifiers), Changed<AbilityScores>>,
+) {
+    for (scores, mut mods) in &mut query {
+        *mods = AbilityModifiers::from_scores(scores);
+    }
 }
 
 // ── D&D 5e SRD Saving Throw Proficiencies ────────────────────────────────────
