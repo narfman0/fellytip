@@ -1,3 +1,4 @@
+pub mod e2e_tests;
 pub mod interrupt;
 pub mod rules;
 pub mod spells;
