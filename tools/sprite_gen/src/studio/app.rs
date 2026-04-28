@@ -6,6 +6,7 @@ use crate::{
     layout::AtlasLayout,
     manifest::{to_ron, AtlasManifest},
     openai::OpenAiDalleGenerator,
+    stability::StabilityGenerator,
 };
 use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry};
 use std::{
@@ -18,6 +19,7 @@ use std::{
 pub enum BackendChoice {
     Mock,
     OpenAI,
+    StabilityAi,
 }
 
 pub struct StudioApp {
@@ -25,6 +27,7 @@ pub struct StudioApp {
     selected_entity: usize,
     backend: BackendChoice,
     openai_available: bool,
+    stability_available: bool,
 
     // Generation state — 4 variant slots
     generating: bool,
@@ -39,6 +42,10 @@ pub struct StudioApp {
     anim_generating: bool,
     anim_receiver: Option<Receiver<(usize, image::RgbaImage)>>,
     anim_timer: Instant,
+
+    // Approved base.png for the current entity (loaded from disk, persists across navigation)
+    approved_texture: Option<egui::TextureHandle>,
+    approved_loaded: bool,
 
     // Output dir
     output_dir: PathBuf,
@@ -60,12 +67,14 @@ impl StudioApp {
             .unwrap_or_else(|| PathBuf::from("assets/sprites"));
 
         let openai_available = std::env::var("SPRITE_GEN_API_KEY").is_ok();
+        let stability_available = std::env::var("STABILITY_API_KEY").is_ok();
 
         Self {
             bestiary,
             selected_entity: 0,
             backend: BackendChoice::Mock,
             openai_available,
+            stability_available,
             generating: false,
             gen_results: vec![None, None, None, None],
             selected_variant: None,
@@ -76,6 +85,8 @@ impl StudioApp {
             anim_generating: false,
             anim_receiver: None,
             anim_timer: Instant::now(),
+            approved_texture: None,
+            approved_loaded: false,
             output_dir,
             status: String::new(),
         }
@@ -85,10 +96,25 @@ impl StudioApp {
         self.bestiary.get(self.selected_entity)
     }
 
+    fn load_approved_base(&mut self, ctx: &egui::Context) {
+        self.approved_loaded = true;
+        let Some(entity_id) = self.current_entity().map(|e| e.id.clone()) else {
+            self.approved_texture = None;
+            return;
+        };
+        let path = self.output_dir.join(entity_id.as_str()).join("base.png");
+        self.approved_texture = image::open(&path)
+            .ok()
+            .map(|img| rgba_to_egui(ctx, &img.to_rgba8(), &format!("approved_{entity_id}")));
+    }
+
     fn make_generator(&self) -> Box<dyn SpriteGenerator + Send + Sync> {
         match self.backend {
             BackendChoice::Mock => Box::new(MockGenerator),
             BackendChoice::OpenAI => OpenAiDalleGenerator::from_env()
+                .map(|g| -> Box<dyn SpriteGenerator + Send + Sync> { Box::new(g) })
+                .unwrap_or_else(|_| Box::new(MockGenerator)),
+            BackendChoice::StabilityAi => StabilityGenerator::from_env()
                 .map(|g| -> Box<dyn SpriteGenerator + Send + Sync> { Box::new(g) })
                 .unwrap_or_else(|_| Box::new(MockGenerator)),
         }
@@ -186,8 +212,7 @@ impl StudioApp {
         self.selected_variant = None;
         self.generating = true;
 
-        let (tx, rx): (Sender<(usize, image::RgbaImage)>, Receiver<(usize, image::RgbaImage)>) =
-            mpsc::channel();
+        let (tx, rx) = mpsc::channel::<(usize, image::RgbaImage)>();
         self.gen_receiver = Some(rx);
 
         for variant in 0..4usize {
@@ -255,7 +280,7 @@ impl StudioApp {
         }
     }
 
-    fn approve_base_png(&mut self) {
+    fn approve_base_png(&mut self, ctx: &egui::Context) {
         let Some(variant_idx) = self.selected_variant else {
             self.status = "No variant selected.".into();
             return;
@@ -293,7 +318,11 @@ impl StudioApp {
             Ok(img) => {
                 let path = out_dir.join("base.png");
                 match img.save(&path) {
-                    Ok(_) => self.status = format!("Saved {}", path.display()),
+                    Ok(_) => {
+                        self.status = format!("Saved {}", path.display());
+                        self.approved_loaded = false;
+                        self.load_approved_base(ctx);
+                    }
                     Err(e) => self.status = format!("Save failed: {e}"),
                 }
             }
@@ -367,6 +396,8 @@ impl StudioApp {
                     self.preview_frame = 0;
                     self.anim_receiver = None;
                     self.anim_generating = false;
+                    self.approved_texture = None;
+                    self.approved_loaded = false;
                     self.status.clear();
                 }
             }
@@ -404,6 +435,7 @@ impl StudioApp {
                 .selected_text(match self.backend {
                     BackendChoice::Mock => "Mock",
                     BackendChoice::OpenAI => "OpenAI",
+                    BackendChoice::StabilityAi => "Stability AI",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.backend, BackendChoice::Mock, "Mock");
@@ -415,6 +447,21 @@ impl StudioApp {
                             egui::SelectableLabel::new(false, "OpenAI (set SPRITE_GEN_API_KEY)"),
                         );
                     }
+                    if self.stability_available {
+                        ui.selectable_value(
+                            &mut self.backend,
+                            BackendChoice::StabilityAi,
+                            "Stability AI",
+                        );
+                    } else {
+                        ui.add_enabled(
+                            false,
+                            egui::SelectableLabel::new(
+                                false,
+                                "Stability AI (set STABILITY_API_KEY)",
+                            ),
+                        );
+                    }
                 });
 
             let gen_btn = egui::Button::new("Generate 4 variants");
@@ -423,6 +470,18 @@ impl StudioApp {
             }
             if self.generating {
                 ui.spinner();
+            }
+        });
+
+        ui.separator();
+
+        // Approved base.png (persists across navigation)
+        ui.horizontal(|ui| {
+            ui.label("Approved base:");
+            if let Some(tex) = &self.approved_texture {
+                ui.add(egui::Image::new(tex).max_size(egui::vec2(64.0, 64.0)));
+            } else {
+                ui.weak("(none saved)");
             }
         });
 
@@ -475,7 +534,7 @@ impl StudioApp {
             .add_enabled(approve_enabled, egui::Button::new("Approve selected → save base.png"))
             .clicked()
         {
-            self.approve_base_png();
+            self.approve_base_png(ui.ctx());
         }
 
         if !self.status.is_empty() {
@@ -570,6 +629,9 @@ impl StudioApp {
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.approved_loaded {
+            self.load_approved_base(ctx);
+        }
         self.poll_gen_receiver(ctx);
         self.poll_anim_receiver(ctx);
         self.advance_anim_timer(ctx);

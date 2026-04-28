@@ -8,6 +8,7 @@ pub mod layout;
 pub mod manifest;
 pub mod openai;
 pub mod palette;
+pub mod stability;
 pub mod parallel;
 pub mod seeding;
 pub mod studio;
