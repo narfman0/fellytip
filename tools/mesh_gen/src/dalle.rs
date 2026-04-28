@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use base64::Engine as _;
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -26,12 +27,12 @@ impl DalleClient {
         Self { client: Client::new(), api_key }
     }
 
-    /// Generate a single reference image for `description`. Returns base64 data URL.
-    pub async fn generate_reference_image(&self, description: &str) -> Result<String> {
+    /// Generate a billboard sprite for `description`. Returns raw PNG bytes.
+    pub async fn generate_billboard_sprite(&self, description: &str) -> Result<Vec<u8>> {
         let prompt = format!(
-            "3D game asset reference sheet: {description}. \
-             Turntable views: front, 3/4, side, back on white background. \
-             Fantasy RPG art style, clean silhouette, suitable for 3D reconstruction."
+            "2D billboard sprite for a fantasy RPG game: {description}. \
+             Front-facing character portrait on a plain white background, \
+             clean silhouette, painterly game-art style."
         );
         let body = serde_json::json!({
             "model": "dall-e-3",
@@ -55,6 +56,7 @@ impl DalleClient {
             .next()
             .and_then(|d| d.b64_json)
             .ok_or_else(|| anyhow::anyhow!("No image data in DALL-E response"))?;
-        Ok(format!("data:image/png;base64,{b64}"))
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&b64)?;
+        Ok(bytes)
     }
 }
