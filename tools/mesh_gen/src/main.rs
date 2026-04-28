@@ -8,12 +8,15 @@ mod meshy;
 mod pipeline;
 
 use fellytip_shared::bestiary::load_bestiary;
-use pipeline::{Backend, Pipeline};
+use pipeline::{Backend, Pipeline, Stage};
 
 #[derive(Parser)]
-#[command(name = "mesh_gen", about = "GenAI 3D mesh pipeline: DALL-E → Meshy → GLB")]
+#[command(
+    name = "mesh_gen",
+    about = "3D asset pipeline: DALL-E sprite → Meshy static mesh → Meshy rigged+animated mesh"
+)]
 struct Cli {
-    /// Generate mesh for a specific bestiary entity by id
+    /// Generate assets for a specific bestiary entity by id
     #[arg(long)]
     entity: Option<String>,
 
@@ -25,7 +28,7 @@ struct Cli {
     #[arg(long)]
     name: Option<String>,
 
-    /// Generate meshes for all bestiary entities
+    /// Generate assets for all bestiary entities
     #[arg(long)]
     all: bool,
 
@@ -33,15 +36,43 @@ struct Cli {
     #[arg(long, default_value = "mock")]
     backend: BackendArg,
 
+    /// How far to run the pipeline
+    #[arg(long, default_value = "animated")]
+    stage: StageArg,
+
     /// Output directory for GLB files
     #[arg(long, default_value = "assets/models")]
     output: PathBuf,
+
+    /// Output directory for sprite PNG files
+    #[arg(long, default_value = "assets/sprites")]
+    sprite_output: PathBuf,
 }
 
 #[derive(ValueEnum, Clone)]
 enum BackendArg {
     Mock,
     Live,
+}
+
+#[derive(ValueEnum, Clone)]
+enum StageArg {
+    /// Only generate the billboard sprite PNG
+    Sprite,
+    /// Sprite + static textured GLB
+    Mesh,
+    /// Full pipeline: sprite + static mesh + rigged+animated GLB
+    Animated,
+}
+
+impl From<StageArg> for Stage {
+    fn from(s: StageArg) -> Self {
+        match s {
+            StageArg::Sprite => Stage::Sprite,
+            StageArg::Mesh => Stage::Mesh,
+            StageArg::Animated => Stage::Animated,
+        }
+    }
 }
 
 #[tokio::main]
@@ -51,6 +82,7 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let stage = Stage::from(cli.stage);
 
     let backend = match cli.backend {
         BackendArg::Mock => Backend::Mock,
@@ -66,36 +98,33 @@ async fn main() -> Result<()> {
         }
     };
 
-    let pipeline = Pipeline { backend, output_dir: cli.output };
+    let pipeline = Pipeline {
+        backend,
+        sprite_dir: cli.sprite_output,
+        model_dir: cli.output,
+    };
 
     if cli.all {
         let bestiary = load_bestiary_from_workspace()?;
         for entry in &bestiary {
-            let desc = format!(
-                "{} — {}",
-                entry.display_name,
-                entry.ai_prompt_base
-            );
+            let desc = format!("{} — {}", entry.display_name, entry.ai_prompt_base);
             let slug = entry.id.to_lowercase().replace(' ', "_");
-            pipeline.run(&slug, &desc).await?;
+            pipeline.run(&slug, &desc, stage).await?;
         }
     } else if let (Some(text), Some(name)) = (cli.text, cli.name) {
-        pipeline.run(&name, &text).await?;
+        pipeline.run(&name, &text, stage).await?;
     } else if let Some(entity_id) = cli.entity {
         let bestiary = load_bestiary_from_workspace()?;
         let entry = bestiary.iter()
             .find(|e| e.id.as_str().eq_ignore_ascii_case(&entity_id))
             .ok_or_else(|| anyhow::anyhow!("Entity '{entity_id}' not found in bestiary"))?;
-        let desc = format!(
-            "{} — {}",
-            entry.display_name,
-            entry.ai_prompt_base
-        );
+        let desc = format!("{} — {}", entry.display_name, entry.ai_prompt_base);
         let slug = entry.id.to_lowercase().replace(' ', "_");
-        pipeline.run(&slug, &desc).await?;
+        pipeline.run(&slug, &desc, stage).await?;
     } else {
         eprintln!("Specify --entity ID, --all, or --text DESC --name NAME");
-        eprintln!("Add --backend live to use real APIs (requires SPRITE_GEN_API_KEY + MESHY_API_KEY)");
+        eprintln!("  --stage sprite|mesh|animated  (default: animated = full pipeline)");
+        eprintln!("  --backend live                (requires SPRITE_GEN_API_KEY + MESHY_API_KEY)");
         std::process::exit(1);
     }
 
@@ -103,7 +132,6 @@ async fn main() -> Result<()> {
 }
 
 fn load_bestiary_from_workspace() -> Result<Vec<fellytip_shared::bestiary::BestiaryEntry>> {
-    // Walk up from cwd to find assets/bestiary.toml
     let mut dir = std::env::current_dir()?;
     loop {
         let p = dir.join("assets/bestiary.toml");
