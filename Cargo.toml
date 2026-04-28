@@ -9,6 +9,7 @@ members = [
     "tools/ralph",
     "tools/sprite_gen",
     "tools/worldwatch",
+    "tools/mesh_gen",
 ]
 
 [workspace.dependencies]
