@@ -131,8 +131,14 @@ fn tick_portal_cooldowns(
 /// For each non-trigger entity with a `ZoneMembership`, emit a
 /// `PlayerZoneTransition` when it enters any same-zone `PortalTrigger`'s
 /// radius. Entities with an active `PortalCooldown` are skipped.
+type MoverQuery<'w, 's> = Query<
+    'w, 's,
+    (Entity, &'static WorldPosition, &'static ZoneMembership),
+    (Without<PortalTrigger>, Without<PortalCooldown>),
+>;
+
 fn check_portal_triggers(
-    movers: Query<(Entity, &WorldPosition, &ZoneMembership), (Without<PortalTrigger>, Without<PortalCooldown>)>,
+    movers: MoverQuery,
     triggers: Query<(&PortalTrigger, &WorldPosition, &ZoneMembership)>,
     topology: Option<Res<ZoneTopology>>,
     mut out: MessageWriter<PlayerZoneTransition>,

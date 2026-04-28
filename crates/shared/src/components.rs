@@ -2,6 +2,7 @@
 
 use crate::combat::types::CharacterClass;
 use crate::world::faction::NpcRank;
+use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -543,6 +544,73 @@ impl SavingThrowProficiencies {
     }
 }
 
+// ── Action Economy (#126) ─────────────────────────────────────────────────────
+
+/// Which action economy slot an ability consumes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub enum ActionSlot {
+    /// Standard action: basic attack, use item, cast a spell.
+    Action,
+    /// Bonus action: off-hand attack, some class features.
+    BonusAction,
+    /// Reaction: opportunity attack, Shield spell.
+    Reaction,
+}
+
+/// Per-round action economy budget (D&D 5e: Action, Bonus Action, Reaction, movement).
+///
+/// In real-time mode, spent slots recharge after ~6 s (one D&D round) via
+/// `ActionCooldowns` on the server.  In future turn-based mode, all slots reset
+/// at the top of each combatant's turn.
+///
+/// Server-authoritative; replicated to clients so the HUD can render pip indicators.
+#[derive(Component, Clone, PartialEq, Debug, Serialize, Deserialize, Reflect)]
+#[reflect(Component)]
+pub struct ActionBudget {
+    /// Standard action (basic attack, spell, use item). Recharges after one round.
+    pub action: bool,
+    /// Bonus action (off-hand attack, some class features). Recharges after one round.
+    pub bonus_action: bool,
+    /// Reaction (opportunity attack). One per round.
+    pub reaction: bool,
+    /// Remaining movement this round in world units (default = PLAYER_SPEED × 6 s = 15.0).
+    pub movement_remaining: f32,
+}
+
+impl Default for ActionBudget {
+    fn default() -> Self {
+        Self {
+            action: true,
+            bonus_action: true,
+            reaction: true,
+            movement_remaining: 15.0,
+        }
+    }
+}
+
+impl ActionBudget {
+    /// Try to spend the given slot. Returns `true` if it was available and is now spent.
+    pub fn consume(&mut self, slot: ActionSlot) -> bool {
+        match slot {
+            ActionSlot::Action      => std::mem::replace(&mut self.action, false),
+            ActionSlot::BonusAction => std::mem::replace(&mut self.bonus_action, false),
+            ActionSlot::Reaction    => std::mem::replace(&mut self.reaction, false),
+        }
+    }
+
+    /// Restore all slots and reset movement to the default.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// Broadcast when a combatant spends an action slot — animation and audio hook.
+#[derive(Message, Clone, Debug)]
+pub struct ActionUsedEvent {
+    pub entity: Entity,
+    pub slot: ActionSlot,
+}
+
 // ── NPC Dialogue Flavor (#131) ────────────────────────────────────────────────
 
 /// Return a short greeting line for the given class and rank.
@@ -771,5 +839,50 @@ mod tests {
             let back: WildlifeKind = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
+    }
+
+    #[test]
+    fn action_budget_default_all_available() {
+        let b = ActionBudget::default();
+        assert!(b.action);
+        assert!(b.bonus_action);
+        assert!(b.reaction);
+        assert!(b.movement_remaining > 0.0);
+    }
+
+    #[test]
+    fn action_budget_consume_action() {
+        let mut b = ActionBudget::default();
+        assert!(b.consume(ActionSlot::Action));
+        assert!(!b.action);
+        assert!(b.bonus_action);
+        assert!(b.reaction);
+    }
+
+    #[test]
+    fn action_budget_cannot_double_spend() {
+        let mut b = ActionBudget::default();
+        assert!(b.consume(ActionSlot::BonusAction));
+        assert!(!b.consume(ActionSlot::BonusAction));
+    }
+
+    #[test]
+    fn action_budget_reset_restores_all() {
+        let mut b = ActionBudget::default();
+        b.consume(ActionSlot::Action);
+        b.consume(ActionSlot::BonusAction);
+        b.consume(ActionSlot::Reaction);
+        b.reset();
+        assert!(b.action);
+        assert!(b.bonus_action);
+        assert!(b.reaction);
+    }
+
+    #[test]
+    fn action_budget_serde_round_trip() {
+        let b = ActionBudget { action: false, bonus_action: true, reaction: false, movement_remaining: 7.5 };
+        let json = serde_json::to_string(&b).unwrap();
+        let back: ActionBudget = serde_json::from_str(&json).unwrap();
+        assert_eq!(b, back);
     }
 }

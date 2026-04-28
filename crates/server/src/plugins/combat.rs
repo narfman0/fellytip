@@ -20,7 +20,7 @@ use fellytip_shared::{
             CoreStats, Effect,
         },
     },
-    components::{EntityKind, Experience, Health, Pacifist, WorldPosition},
+    components::{ActionBudget, ActionSlot, ActionUsedEvent, EntityKind, Experience, Health, Pacifist, WorldPosition},
     inputs::ActionIntent,
     world::{
         ecology::RegionId,
@@ -139,11 +139,26 @@ pub struct PendingSpell {
     pub slot_level: u8,
 }
 
+/// D&D 5e round duration in real-time mode (seconds). Matches the 6-second initiative round.
+const ROUND_SECONDS: f32 = 6.0;
+
+/// Server-only cooldown timers that drive `ActionBudget` slot restoration.
+///
+/// Each field counts down in seconds; when it hits 0 the corresponding
+/// `ActionBudget` boolean is restored to `true`.
+#[derive(Component, Default)]
+pub struct ActionCooldowns {
+    pub action_cd:       f32,
+    pub bonus_action_cd: f32,
+    pub reaction_cd:     f32,
+}
+
 pub struct CombatPlugin;
 
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LocalPlayerInput>();
+        app.add_message::<ActionUsedEvent>();
         app.add_systems(
             FixedUpdate,
             check_faction_aggression
@@ -151,8 +166,38 @@ impl Plugin for CombatPlugin {
         );
         app.add_systems(
             FixedUpdate,
+            tick_action_cooldowns.before(process_player_input),
+        );
+        app.add_systems(
+            FixedUpdate,
             (process_player_input, initiate_attacks, initiate_abilities, initiate_spells, resolve_interrupts).chain(),
         );
+    }
+}
+
+// ── Action economy cooldown tick ─────────────────────────────────────────────
+
+/// Decrement real-time action cooldowns and restore slots when they expire.
+fn tick_action_cooldowns(
+    time: Res<Time>,
+    mut q: Query<(&mut ActionBudget, &mut ActionCooldowns)>,
+) {
+    let dt = time.delta_secs();
+    for (mut budget, mut cds) in &mut q {
+        restore_slot(&mut cds.action_cd, &mut budget.action, dt);
+        restore_slot(&mut cds.bonus_action_cd, &mut budget.bonus_action, dt);
+        restore_slot(&mut cds.reaction_cd, &mut budget.reaction, dt);
+    }
+}
+
+#[inline]
+fn restore_slot(cd: &mut f32, available: &mut bool, dt: f32) {
+    if *cd > 0.0 {
+        *cd -= dt;
+        if *cd <= 0.0 {
+            *cd = 0.0;
+            *available = true;
+        }
     }
 }
 
@@ -251,26 +296,49 @@ fn check_faction_aggression(
 
 // ── Input processing ──────────────────────────────────────────────────────────
 
+type PlayerBudgetQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, Option<&'static mut ActionBudget>, Option<&'static mut ActionCooldowns>),
+    Without<ExperienceReward>,
+>;
+
 /// Drain `LocalPlayerInput` actions and queue combat markers on the player entity.
 ///
 /// Movement is handled by `sync_pred_to_world` in the client (Update); this
 /// system only processes the action intents accumulated since the last tick.
 ///
+/// When the player entity has an `ActionBudget`, each action consumes the
+/// appropriate slot and starts a `ROUND_SECONDS` cooldown via `ActionCooldowns`.
+/// Actions are silently discarded when the relevant slot is spent.
+///
 /// MULTIPLAYER: restore MessageReceiver<PlayerInput> iteration over ClientOf
 /// entities and re-add the position-acceptance + sanity-timer logic.
 fn process_player_input(
     mut local_input: ResMut<LocalPlayerInput>,
-    player_q: Query<Entity, Without<ExperienceReward>>,
+    mut player_q: PlayerBudgetQuery,
     enemies: Query<(Entity, &CombatParticipant), With<ExperienceReward>>,
+    mut action_used: MessageWriter<ActionUsedEvent>,
     mut commands: Commands,
 ) {
-    let Ok(player_entity) = player_q.single() else { return };
+    let Ok((player_entity, mut budget_opt, mut cds_opt)) = player_q.single_mut() else { return };
+
     let pending_actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)> =
         local_input.actions.drain(..).collect();
 
     for (action, target_uuid) in pending_actions {
         match action {
             Some(ActionIntent::BasicAttack) => {
+                if let Some(budget) = budget_opt.as_deref_mut() {
+                    if !budget.consume(ActionSlot::Action) {
+                        tracing::debug!("BasicAttack blocked: Action slot spent");
+                        continue;
+                    }
+                    if let Some(cds) = cds_opt.as_deref_mut() {
+                        cds.action_cd = ROUND_SECONDS;
+                    }
+                    action_used.write(ActionUsedEvent { entity: player_entity, slot: ActionSlot::Action });
+                }
                 let target = if let Some(uuid) = target_uuid {
                     enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
                 } else {
@@ -284,6 +352,16 @@ fn process_player_input(
                 }
             }
             Some(ActionIntent::UseAbility(ability_id)) => {
+                if let Some(budget) = budget_opt.as_deref_mut() {
+                    if !budget.consume(ActionSlot::Action) {
+                        tracing::debug!("UseAbility blocked: Action slot spent");
+                        continue;
+                    }
+                    if let Some(cds) = cds_opt.as_deref_mut() {
+                        cds.action_cd = ROUND_SECONDS;
+                    }
+                    action_used.write(ActionUsedEvent { entity: player_entity, slot: ActionSlot::Action });
+                }
                 let target = if let Some(uuid) = target_uuid {
                     enemies.iter().find(|(_, p)| p.id.0 == uuid).map(|(e, _)| e)
                 } else {
@@ -431,6 +509,7 @@ type ParticipantQuery<'w, 's> = Query<
 >;
 
 /// Step each active interrupt stack; apply effects; award XP on kills.
+#[allow(clippy::too_many_arguments)]
 fn resolve_interrupts(
     mut participants: ParticipantQuery,
     wildlife_loot_query: Query<(Entity, &WorldPosition, &Loot, &EntityKind), With<Loot>>,
