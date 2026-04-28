@@ -11,7 +11,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContext, EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui};
 use fellytip_shared::{
-    components::{Experience, Health, PlayerStandings},
+    components::{ActionBudget, Experience, Health, PlayerStandings},
     world::faction::standing_tier,
 };
 use fellytip_server::plugins::party::PartyRegistry;
@@ -20,8 +20,17 @@ use crate::plugins::battle::{BattleLog, ClientStoryLog};
 use crate::plugins::debug_console::DebugConsole;
 use crate::plugins::pause_menu::PauseMenu;
 
-type LocalPlayerQuery<'w, 's> =
-    Query<'w, 's, (&'static Health, &'static Experience, Option<&'static PlayerStandings>), With<LocalPlayer>>;
+type LocalPlayerQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Health,
+        &'static Experience,
+        Option<&'static PlayerStandings>,
+        Option<&'static ActionBudget>,
+    ),
+    With<LocalPlayer>,
+>;
 
 /// Resource tracking whether the character screen is open.
 #[derive(Resource, Default)]
@@ -87,7 +96,7 @@ fn draw_hud(
         .title_bar(false)
         .show(ctx.ctx_mut()?, |ui| {
             match player_q.single() {
-                Ok((health, exp, _)) => {
+                Ok((health, exp, _, budget_opt)) => {
                     ui.heading(format!("Level {}", exp.level));
                     ui.separator();
                     let hp_frac =
@@ -104,6 +113,17 @@ fn draw_hud(
                         egui::ProgressBar::new(xp_frac)
                             .fill(egui::Color32::from_rgb(50, 100, 200)),
                     );
+                    if let Some(budget) = budget_opt {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            let ready   = egui::Color32::from_rgb(80, 180, 255);
+                            let spent   = egui::Color32::from_rgb(60, 60, 60);
+                            let pip = |avail: bool| if avail { ready } else { spent };
+                            ui.colored_label(pip(budget.action),       "● A");
+                            ui.colored_label(pip(budget.bonus_action), "● B");
+                            ui.colored_label(pip(budget.reaction),     "◆ R");
+                        });
+                    }
                 }
                 Err(_) => {
                     ui.label("Connecting…");
@@ -186,7 +206,7 @@ fn draw_char_screen(
         .open(&mut open)
         .show(ctx.ctx_mut()?, |ui| {
             match player_q.single() {
-                Ok((health, exp, standings_opt)) => {
+                Ok((health, exp, standings_opt, _)) => {
                     ui.heading(format!("Level {}", exp.level));
                     ui.separator();
 

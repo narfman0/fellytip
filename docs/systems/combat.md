@@ -37,8 +37,11 @@ The bridge runs in `FixedUpdate`. System ordering:
 **`check_faction_aggression`** (runs before `process_player_input`)
 Queries all faction NPCs without a pending attack and all players. For each NPC within 10 tiles of a player, inserts `PendingAttack` if the faction's `is_aggressive` flag is set or the player's standing tier is Hostile/Hated. Uses `PlayerReputationMap` and `FactionRegistry` resources. See `docs/systems/factions.md` for aggression rules.
 
+**`tick_action_cooldowns`** (runs before `process_player_input`)
+Decrements real-time CD timers on `ActionCooldowns` and restores the corresponding `ActionBudget` boolean when each timer reaches zero. Round duration = 6 s (`ROUND_SECONDS`).
+
 **`process_player_input`**
-Reads `PlayerInput` messages from each connected client. Applies movement to `WorldPosition`. When `BasicAttack` is present, inserts `PendingAttack`; when `UseAbility(id)` is present, inserts `PendingAbility`.
+Reads `PlayerInput` messages from each connected client. Applies movement to `WorldPosition`. When `BasicAttack` is present and the player's `ActionBudget.action` is available, consumes the slot, starts a 6 s `ActionCooldowns.action_cd`, emits `ActionUsedEvent`, and inserts `PendingAttack`. Actions requested while a slot is spent are silently discarded. If no `ActionBudget` is present the action always proceeds (backward-compatible). When `UseAbility(id)` is present the same Action-slot check applies before inserting `PendingAbility`.
 
 **`initiate_attacks`**
 Converts `PendingAttack` markers into `InterruptFrame::ResolvingAttack` values pushed onto the attacker's `InterruptStack`. Removes the marker.
@@ -71,8 +74,17 @@ On each level-up, HP increases by rolling the class hit die + CON modifier (mini
 | `ExperienceReward(u32)` | XP granted to the killer; only on NPCs and bosses. Set from CR table in `docs/dnd5e-srd-reference.md`. |
 | `PendingAttack { target }` | Transient marker; consumed by `initiate_attacks` |
 | `PendingAbility { target, ability_id }` | Transient marker; consumed by `initiate_abilities` |
+| `ActionCooldowns` | Server-only CD timers (`action_cd`, `bonus_action_cd`, `reaction_cd` in seconds) that drive `ActionBudget` restoration |
 | `PlayerEntity(Entity)` | Links a `ClientOf` entity to its spawned player entity |
 | `GameEntityId(Uuid)` | Stable cross-session identity on player entities; `CombatantId.0 == GameEntityId.0` for all players |
+
+## Shared action-economy components (replicated)
+
+| Component | Description |
+|---|---|
+| `ActionBudget` | Per-round booleans: `action`, `bonus_action`, `reaction` (true = available) plus `movement_remaining: f32`. Default = all true, 15.0 movement. Registered in `FellytipProtocolPlugin` for BRP inspection. |
+| `ActionSlot` | Enum: `Action`, `BonusAction`, `Reaction` — which slot an ability consumes. |
+| `ActionUsedEvent` | `Message` broadcast each time a player spends a slot; carries `entity` and `slot`. Hook for animation/audio. |
 
 ## Character classes
 
@@ -103,3 +115,5 @@ The Hollow King has three combat phases tracked by `BossPhase` component on the 
 ## Current state
 
 Basic attack (Space) → damage → death → XP loop is fully functional. StrongAttack (Q) is ability 1. Three character classes are implemented with class-appropriate modifiers and distinct abilities (ids 1–3). The dungeon boss ("The Hollow King") has phased abilities at 50% and 25% HP thresholds. Movement reactions (`ResolvingMovement`) are scaffolded but unimplemented. Faction alert state (`FactionAlertState`) raises NPC patrol radius and speed after any battle; see `docs/systems/factions.md`.
+
+Action economy is implemented in real-time mode: the player entity carries `ActionBudget` (all slots true on spawn) and `ActionCooldowns`. Each basic attack or ability use consumes the `Action` slot and starts a 6 s CD; attempts while the slot is spent are discarded. The HUD shows three pip indicators (● A, ● B, ◆ R) below the XP bar: bright = available, grey = spent. Bonus-action and reaction economy tracking is wired but not yet consumed by any specific ability.
