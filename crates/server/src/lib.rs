@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use fellytip_shared::{
     WORLD_SEED,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}, SpellSlots, Spellbook},
-    components::{AbilityModifiers, AbilityScores, Experience, Health, HitDice, PlayerStandings, SavingThrowProficiencies, WorldMeta, WorldPosition},
+    components::{AbilityModifiers, AbilityScores, ActionBudget, Experience, Health, HitDice, PlayerStandings, SavingThrowProficiencies, WorldMeta, WorldPosition},
     protocol::ChooseClassMessage,
     world::{
         map::{find_surface_spawn, WorldMap, MAP_HEIGHT, MAP_WIDTH},
@@ -16,7 +16,7 @@ use fellytip_shared::{
 use uuid::Uuid;
 
 use plugins::character_persistence::{load_character, load_local_player_uuid, save_character, store_local_player_uuid};
-use plugins::combat::{CombatParticipant, LastPlayerInput, PositionSanityTimer};
+use plugins::combat::{ActionCooldowns, CombatParticipant, LastPlayerInput, PositionSanityTimer};
 use plugins::persistence::Db;
 pub use plugins::map_gen::MapGenConfig;
 
@@ -244,6 +244,7 @@ fn spawn_player_on_class_choice(
             ..default()
         },
         (world_meta, spell_slots, spellbook),
+        (ActionBudget::default(), ActionCooldowns::default()),
     ));
     tracing::info!(uuid = %player_uuid, x = px, y = py, z = pz, "Player spawned after class selection");
 }
