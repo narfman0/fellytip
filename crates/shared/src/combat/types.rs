@@ -124,6 +124,19 @@ pub fn hit_die_for_class(class: &CharacterClass) -> i32 {
     }
 }
 
+/// SRD ASI levels per class — the character levels at which the class gains
+/// an Ability Score Improvement (+2 points).
+///
+/// Fighter has extra ASIs at 6 and 14; Rogue has an extra one at 10.
+/// All other classes use the standard set: 4, 8, 12, 16, 19.
+pub fn asi_levels_for_class(class: &CharacterClass) -> &'static [u32] {
+    match class {
+        CharacterClass::Fighter | CharacterClass::Warrior => &[4, 6, 8, 12, 14, 16, 19],
+        CharacterClass::Rogue => &[4, 8, 10, 12, 16, 19],
+        _ => &[4, 8, 12, 16, 19],
+    }
+}
+
 // ── Effects ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq)]
@@ -173,4 +186,34 @@ pub enum AttackRollResult {
     CriticalHit,
     Hit,
     Miss,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asi_levels_standard_classes() {
+        let standard = asi_levels_for_class(&CharacterClass::Wizard);
+        assert_eq!(standard, &[4, 8, 12, 16, 19]);
+        assert_eq!(asi_levels_for_class(&CharacterClass::Cleric), &[4, 8, 12, 16, 19]);
+        assert_eq!(asi_levels_for_class(&CharacterClass::Barbarian), &[4, 8, 12, 16, 19]);
+    }
+
+    #[test]
+    fn asi_levels_fighter_has_extras() {
+        let fighter = asi_levels_for_class(&CharacterClass::Fighter);
+        assert!(fighter.contains(&6));
+        assert!(fighter.contains(&14));
+        assert_eq!(fighter, &[4, 6, 8, 12, 14, 16, 19]);
+        assert_eq!(asi_levels_for_class(&CharacterClass::Warrior), fighter);
+    }
+
+    #[test]
+    fn asi_levels_rogue_has_extra_at_10() {
+        let rogue = asi_levels_for_class(&CharacterClass::Rogue);
+        assert!(rogue.contains(&10));
+        assert!(!rogue.contains(&6));
+        assert_eq!(rogue, &[4, 8, 10, 12, 16, 19]);
+    }
 }
