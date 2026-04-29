@@ -93,6 +93,8 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::ZoneRendererPlugin)
     .add_plugins(plugins::PortalRendererPlugin)
     .add_plugins(plugins::ParticlesPlugin)
+    .add_plugins(plugins::TargetSelectPlugin)
+    .add_plugins(plugins::FloatingTextPlugin)
     .add_plugins(plugins::ActionMenuPlugin);
 }
 
@@ -272,6 +274,7 @@ fn send_player_input(
     keyboard: Option<Res<ButtonInput<KeyCode>>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     egui_consumed: Option<Res<plugins::EguiPointerConsumed>>,
+    hovered_target: Option<Res<plugins::target_select::HoveredTarget>>,
     camera_q: Query<&OrbitCamera>,
     mut pred_q: Query<(&mut PredictedPosition, &EntityBounds), With<LocalPlayer>>,
     map: Option<Res<WorldMap>>,
@@ -426,7 +429,8 @@ fn send_player_input(
     }
 
     // Queue combat action intents for server-side processing.
-    // Left-click = basic attack (unless egui consumed the pointer).
+    // Left-click on a hovered enemy = targeted basic attack.
+    // Left-click on empty space = attack nearest enemy (fallback).
     let egui_over = egui_consumed.as_ref().is_some_and(|e| e.0);
     let lmb_attack = !egui_over && mouse.as_ref().is_some_and(|m| m.just_pressed(MouseButton::Left));
     let action = if lmb_attack || keyboard.just_pressed(KeyCode::KeyQ) {
@@ -437,7 +441,12 @@ fn send_player_input(
         None
     };
     if action.is_some() {
-        local_input.actions.push((action, None));
+        let target_uuid = if lmb_attack {
+            hovered_target.as_ref().and_then(|h| h.0.map(|(_, uuid)| uuid))
+        } else {
+            None
+        };
+        local_input.actions.push((action, target_uuid));
     }
 }
 

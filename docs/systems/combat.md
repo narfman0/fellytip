@@ -50,15 +50,32 @@ Converts `PendingAttack` markers into `InterruptFrame::ResolvingAttack` values p
 Converts `PendingAbility` markers into `InterruptFrame::ResolvingAbility` with pre-rolled dice (`[attack_d20, dmg_d8_1, dmg_d8_2]`) in `AbilityContext.rolls`. Removes the marker.
 
 **`resolve_interrupts`**
-Runs in eight phases each tick:
+Runs in several phases each tick:
 1. Build `id → Entity`, `Entity → XP reward`, and `Entity → player UUID` lookup maps.
 2. Build a `CombatState` snapshot from current `Health`, `CombatParticipant`, and `FactionMember` components. `CombatantSnapshot.faction` is populated from `FactionMember` when present.
-3. Step each non-empty `InterruptStack` once; collect effects.
-4. Apply effects via `get_mut` (avoids borrow conflicts with the step phase). Resolve killer UUID from `GameEntityId` on the attacker.
-4b. Apply faction standing deltas for each kill: look up the dead NPC's `FactionMember` and `FactionNpcRank`, call `kill_standing_delta(rank)`, and mutate `PlayerReputationMap`.
+3. Peek at each non-empty `InterruptStack`'s top frame; if it's `ResolvingAttack`, record `(entity, defender_id, attack_roll)` in `attack_meta` for miss/crit detection. Then call `step()` once per stack; collect effects.
+4. Apply effects via `get_mut` (avoids borrow conflicts with the step phase). For `TakeDamage`, emits `ClientDamageMsg` with `damage`, `is_critical` (attack_roll == 20), and `is_miss: false`. Resolve killer UUID from `GameEntityId` on the attacker.
+4b. Emit miss `ClientDamageMsg` (with `is_miss: true`, `damage: 0`) for any attack that produced no `TakeDamage` effect. The miss is positioned at the defender's world location.
+4c. Apply faction standing deltas for each kill.
 5. Award XP to attackers whose target died.
 6. Emit `WriteStoryEvent` for each death.
 7. Despawn dead entities.
+
+## Client-side combat feedback (`crates/client/src/plugins/`)
+
+**Entity picking (`target_select.rs`)**
+Each frame, projects every hostile entity's world position to viewport coordinates using `Camera::world_to_viewport`. The closest enemy within `PICK_RADIUS_PX` (60 px) of the cursor is stored in `HoveredTarget`. Left-clicking with a `HoveredTarget` sets the `target_uuid` in the attack intent, directing the server to attack that specific enemy.
+
+**Context menu (`action_menu.rs`)**
+Right-clicking captures the current `HoveredTarget` into `ActionMenuState.context`. If a hostile entity is hovered (`TargetContext::Hostile { uuid }`), the menu shows targeted combat options (Attack, Shove stub, Grapple stub, Class Action). Otherwise, a generic tile/empty-space menu is shown (Attack nearest, Ability, Dodge, Examine stub).
+
+**Floating combat text (`floating_text.rs`)**
+Listens to `ClientDamageMsg`. Each message spawns a `FloatEntry` in `FloatingTextQueue`:
+- Hit: white number, 14 px, fades over 1.2 s
+- Miss: grey "Miss!", 13 px, fades over 1.0 s
+- Critical hit: gold `"<dmg>!"`, 20 px, fades over 1.5 s
+
+Text positions are projected to screen each frame and float upward 40 px over the entry's lifetime.
 
 ## Levelling
 
