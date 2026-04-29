@@ -586,12 +586,28 @@ fn resolve_interrupts(
 
     // ── Phase 3: step each non-empty interrupt stack ─────────────────────────
     let mut all_effects: Vec<(CombatantId, Entity, Vec<Effect>)> = Vec::new();
+    // (attacker_entity, defender_combatant_id, attack_roll) — for miss/crit detection.
+    let mut attack_meta: Vec<(Entity, CombatantId, i32)> = Vec::new();
     for (entity, mut participant, _, _, _, _, _, _) in participants.iter_mut() {
         if participant.interrupt_stack.is_empty() {
             continue;
         }
+        // Peek at the top frame before step() pops it so we can detect misses and crits.
+        let pending_attack = match participant.interrupt_stack.0.last() {
+            Some(InterruptFrame::ResolvingAttack { ctx }) => {
+                Some((ctx.defender.clone(), ctx.attack_roll))
+            }
+            Some(InterruptFrame::ResolvingDamage { .. })
+            | Some(InterruptFrame::ResolvingAbility { .. })
+            | Some(InterruptFrame::ResolvingMovement { .. })
+            | Some(InterruptFrame::CastingSpell { .. })
+            | None => None,
+        };
         let mut rng_iter = std::iter::from_fn(|| Some(rand::random_range(1..=20)));
         let (effects, _done) = participant.interrupt_stack.step(&combat_state, &mut rng_iter);
+        if let Some((defender_id, attack_roll)) = pending_attack {
+            attack_meta.push((entity, defender_id, attack_roll));
+        }
         if !effects.is_empty() {
             all_effects.push((participant.id.clone(), entity, effects));
         }
@@ -621,14 +637,19 @@ fn resolve_interrupts(
                                 "Damage applied"
                             );
                         }
-                        // Emit client-side particle message.
+                        // Emit client-side combat feedback (particles + floating text).
                         if let Ok(pos) = positions_query.get(target_entity) {
+                            let is_critical = attack_meta.iter()
+                                .any(|(ae, _, roll)| ae == attacker_entity && *roll == 20);
                             damage_writer.write(ClientDamageMsg {
                                 x: pos.x,
                                 y: pos.z,
                                 z: pos.y,
                                 is_spell: false,
                                 spell_color: None,
+                                damage: *amount,
+                                is_miss: false,
+                                is_critical,
                             });
                         }
                     }
@@ -696,7 +717,34 @@ fn resolve_interrupts(
         }
     }
 
-    // ── Phase 4b: apply reputation deltas for kills ──────────────────────────
+    // ── Phase 4b: emit miss messages for attacks that dealt no damage ────────
+    {
+        let damage_dealers: std::collections::HashSet<Entity> = all_effects
+            .iter()
+            .filter(|(_, _, fx)| fx.iter().any(|e| matches!(e, Effect::TakeDamage { .. })))
+            .map(|(_, ae, _)| *ae)
+            .collect();
+        for (attacker_entity, defender_id, _) in &attack_meta {
+            if !damage_dealers.contains(attacker_entity) {
+                if let Some(&defender_entity) = id_to_entity.get(defender_id) {
+                    if let Ok(pos) = positions_query.get(defender_entity) {
+                        damage_writer.write(ClientDamageMsg {
+                            x: pos.x,
+                            y: pos.z,
+                            z: pos.y,
+                            is_spell: false,
+                            spell_color: None,
+                            damage: 0,
+                            is_miss: true,
+                            is_critical: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Phase 4c: apply reputation deltas for kills ──────────────────────────
     for (killer_uuid, target_entity) in &reputation_kills {
         if let Ok((_, _, _, _, _, _, Some(fm), rank)) = participants.get(*target_entity) {
             let rank = rank.map(|r| r.0).unwrap_or(fellytip_shared::world::faction::NpcRank::Grunt);

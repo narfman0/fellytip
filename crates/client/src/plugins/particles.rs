@@ -214,6 +214,7 @@ fn spawn_combat_particles(
     let mut rng = rand::rng();
 
     for msg in messages.read() {
+        if msg.is_miss { continue; }
         let origin = Vec3::new(msg.x, msg.y, msg.z);
         if msg.is_spell {
             // SpellImpact: 12 particles, colour by spell type, 0.2 s lifetime

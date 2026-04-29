@@ -112,9 +112,9 @@ pub struct ZoneNeighborMessage {
     pub zone_hops: Vec<(ZoneId, u8)>,
 }
 
-/// Sent by the server's `resolve_interrupts` system whenever an entity takes
-/// damage in the single-player host model.  The client particle system reads
-/// this message to spawn hit-effect particles at the target's world position.
+/// Sent by the server's `resolve_interrupts` system whenever an attack resolves
+/// (hit, miss, or critical) in the single-player host model.  The client reads
+/// this to spawn particles and floating combat text.
 ///
 /// MULTIPLAYER: register with MessageRegistry and route over the network.
 #[derive(Serialize, Deserialize, Debug, Clone, Message)]
@@ -128,6 +128,12 @@ pub struct ClientDamageMsg {
     /// Optional spell colour as linear RGBA (fire=orange, frost=cyan, lightning=yellow).
     /// None = melee hit (red burst).
     pub spell_color: Option<[f32; 4]>,
+    /// Damage dealt; 0 for misses.
+    pub damage: i32,
+    /// True when the attack roll missed — no damage was dealt.
+    pub is_miss: bool,
+    /// True when a natural 20 was rolled (damage doubled by SRD rules).
+    pub is_critical: bool,
 }
 
 // ── Plugin ───────────────────────────────────────────────────────────────────

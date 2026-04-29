@@ -1,6 +1,7 @@
 pub mod action_menu;
 pub mod battle;
 pub mod billboard_sprite;
+pub mod floating_text;
 pub mod particles;
 pub mod camera;
 pub mod character_animation;
@@ -15,6 +16,7 @@ pub mod scene_decoration;
 pub mod scene_lighting;
 pub mod settings;
 pub mod skybox;
+pub mod target_select;
 pub mod terrain;
 pub mod zone_cache;
 pub mod zone_renderer;
@@ -27,6 +29,7 @@ pub use character_animation::CharacterAnimationPlugin;
 pub use class_selection::{ClassSelectionPlugin, ClassSelectionState};
 pub use debug_console::{DebugConsole, DebugConsolePlugin};
 pub use entity_renderer::EntityRendererPlugin;
+pub use floating_text::FloatingTextPlugin;
 pub use hud::{CharScreen, HudPlugin};
 pub use map::{MapPlugin, MapWindow};
 pub use pause_menu::PauseMenuPlugin;
@@ -36,6 +39,7 @@ pub use scene_lighting::SceneLightingPlugin;
 #[allow(unused_imports)]
 pub use settings::{GraphicsSettings, SettingsPlugin};
 pub use skybox::SkyboxPlugin;
+pub use target_select::TargetSelectPlugin;
 pub use terrain::TerrainPlugin;
 #[allow(unused_imports)]
 pub use zone_cache::{ZoneCache, ZoneCachePlugin};
