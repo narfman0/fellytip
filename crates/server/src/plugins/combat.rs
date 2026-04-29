@@ -12,7 +12,7 @@ use bevy::{ecs::message::MessageWriter, prelude::*};
 use fellytip_shared::protocol::ClientDamageMsg;
 use fellytip_shared::{
     combat::{
-        find_spell, hit_die_for_class, hp_on_level_up, xp_to_next_level,
+        asi_levels_for_class, find_spell, hit_die_for_class, hp_on_level_up, xp_to_next_level,
         interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
         spells::{SpellSlots, Spellbook},
         types::{
@@ -20,7 +20,7 @@ use fellytip_shared::{
             CoreStats, Effect,
         },
     },
-    components::{ActionBudget, ActionSlot, ActionUsedEvent, EntityKind, Experience, Health, Pacifist, WorldPosition},
+    components::{AbilityScores, ActionBudget, ActionSlot, ActionUsedEvent, EntityKind, Experience, Health, Pacifist, PendingAsi, WorldPosition},
     inputs::ActionIntent,
     world::{
         ecology::RegionId,
@@ -172,6 +172,7 @@ impl Plugin for CombatPlugin {
             FixedUpdate,
             (process_player_input, initiate_attacks, initiate_abilities, initiate_spells, resolve_interrupts).chain(),
         );
+        app.add_systems(FixedUpdate, apply_npc_asi.after(resolve_interrupts));
     }
 }
 
@@ -781,6 +782,10 @@ fn resolve_interrupts(
                 health.max += gain;
                 health.current = health.max; // full heal on level-up
                 tracing::info!(level = exp.level, hp_gain = gain, "Level up!");
+                if asi_levels_for_class(&participant.class).contains(&exp.level) {
+                    commands.entity(attacker_entity).insert(PendingAsi);
+                    tracing::info!(level = exp.level, "ASI pending");
+                }
             }
         }
     }
@@ -798,6 +803,25 @@ fn resolve_interrupts(
     // ── Phase 8: spawn loot drops from dead wildlife (#115) ──────────────────
     for (pos, loot) in loot_spawns {
         commands.spawn((pos, loot));
+    }
+}
+
+type NpcAsiQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static CombatParticipant, &'static mut AbilityScores),
+    (With<PendingAsi>, With<EntityKind>),
+>;
+
+/// Resolve pending ASIs for NPCs: increase the primary stat by 2 and remove the marker.
+///
+/// NPCs carry `EntityKind`; player entities do not, so player ASIs stay pending
+/// until resolved via the UI (future work).
+fn apply_npc_asi(mut commands: Commands, mut q: NpcAsiQuery) {
+    for (entity, participant, mut scores) in &mut q {
+        *scores = scores.with_npc_asi(&participant.class);
+        commands.entity(entity).remove::<PendingAsi>();
+        tracing::info!(entity = ?entity, class = ?participant.class, "NPC ASI applied");
     }
 }
 

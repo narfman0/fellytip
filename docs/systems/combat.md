@@ -83,6 +83,20 @@ XP required to reach the next level is computed by `xp_to_next_level(level)` in 
 
 On each level-up, HP increases by rolling the class hit die + CON modifier (minimum 1), implemented in `hp_on_level_up()`. The player receives a full heal on level-up. Level is kept in sync between `Experience.level` and `CombatParticipant.level` so the proficiency bonus in attack rolls stays current.
 
+### Ability Score Improvements (ASI)
+
+When an entity reaches an ASI level, a `PendingAsi` marker component is inserted by the level-up logic in `resolve_interrupts`. ASI levels per class (SRD):
+
+| Class | ASI levels |
+|---|---|
+| Fighter / Warrior | 4, 6, 8, 12, 14, 16, 19 |
+| Rogue | 4, 8, 10, 12, 16, 19 |
+| All others | 4, 8, 12, 16, 19 |
+
+`asi_levels_for_class(class)` in `crates/shared/src/combat/types.rs` returns these sets.
+
+The `apply_npc_asi` system (FixedUpdate, after `resolve_interrupts`) immediately resolves `PendingAsi` for NPC entities (those carrying `EntityKind`) by calling `AbilityScores::with_npc_asi(class)`, which applies +2 to the class's primary stat (capped at 20). Player entities are left with `PendingAsi` pending UI resolution (future work).
+
 ## Server-only combat components
 
 | Component | Description |
@@ -91,6 +105,7 @@ On each level-up, HP increases by rolling the class hit die + CON modifier (mini
 | `ExperienceReward(u32)` | XP granted to the killer; only on NPCs and bosses. Set from CR table in `docs/dnd5e-srd-reference.md`. |
 | `PendingAttack { target }` | Transient marker; consumed by `initiate_attacks` |
 | `PendingAbility { target, ability_id }` | Transient marker; consumed by `initiate_abilities` |
+| `PendingAsi` | Marker inserted on ASI levels; resolved next tick for NPCs by `apply_npc_asi`; stays pending for players until UI |
 | `ActionCooldowns` | Server-only CD timers (`action_cd`, `bonus_action_cd`, `reaction_cd` in seconds) that drive `ActionBudget` restoration |
 | `PlayerEntity(Entity)` | Links a `ClientOf` entity to its spawned player entity |
 | `GameEntityId(Uuid)` | Stable cross-session identity on player entities; `CombatantId.0 == GameEntityId.0` for all players |

@@ -273,6 +273,15 @@ pub struct NavReplanTimer(pub u32);
 #[reflect(Component)]
 pub struct Pacifist;
 
+/// Marker: this entity has a pending Ability Score Improvement.
+///
+/// Added when the entity reaches an ASI level. NPC entities resolve it
+/// immediately on the next tick (primary stat +2). Player entities keep it
+/// pending until the player chooses scores via the UI (future work).
+#[derive(Component, Clone, Debug, Default, Reflect)]
+#[reflect(Component)]
+pub struct PendingAsi;
+
 // ── D&D 5e SRD Ability Scores ─────────────────────────────────────────────────
 
 /// The six D&D 5e SRD ability scores for a character or NPC.
@@ -378,6 +387,32 @@ impl AbilityScores {
                 intelligence: secondary, wisdom: 10, charisma: primary,
             },
         }
+    }
+
+    /// Return a copy of these scores with the NPC's primary stat increased by 2, capped at 20.
+    ///
+    /// The primary stat is determined by class following the same groupings as `for_class`.
+    /// Used by the NPC auto-ASI system when `PendingAsi` is resolved.
+    pub fn with_npc_asi(&self, class: &CharacterClass) -> Self {
+        let mut s = self.clone();
+        match class {
+            CharacterClass::Warrior | CharacterClass::Fighter | CharacterClass::Paladin | CharacterClass::Barbarian => {
+                s.strength = s.strength.saturating_add(2).min(20);
+            }
+            CharacterClass::Ranger | CharacterClass::Rogue | CharacterClass::Monk => {
+                s.dexterity = s.dexterity.saturating_add(2).min(20);
+            }
+            CharacterClass::Mage | CharacterClass::Wizard | CharacterClass::Sorcerer => {
+                s.intelligence = s.intelligence.saturating_add(2).min(20);
+            }
+            CharacterClass::Warlock | CharacterClass::Bard => {
+                s.charisma = s.charisma.saturating_add(2).min(20);
+            }
+            CharacterClass::Cleric | CharacterClass::Druid => {
+                s.wisdom = s.wisdom.saturating_add(2).min(20);
+            }
+        }
+        s
     }
 }
 
@@ -884,5 +919,34 @@ mod tests {
         let json = serde_json::to_string(&b).unwrap();
         let back: ActionBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(b, back);
+    }
+
+    #[test]
+    fn npc_asi_increases_primary_stat() {
+        use crate::combat::types::CharacterClass;
+        let base = AbilityScores { strength: 15, dexterity: 13, constitution: 14, intelligence: 8, wisdom: 10, charisma: 12 };
+        let after = base.with_npc_asi(&CharacterClass::Fighter);
+        assert_eq!(after.strength, 17);
+        assert_eq!(after.dexterity, 13); // unchanged
+
+        let base_rogue = AbilityScores::rogue();
+        let after_rogue = base_rogue.with_npc_asi(&CharacterClass::Rogue);
+        assert_eq!(after_rogue.dexterity, 17);
+
+        let base_wizard = AbilityScores::mage();
+        let after_wizard = base_wizard.with_npc_asi(&CharacterClass::Wizard);
+        assert_eq!(after_wizard.intelligence, 17);
+    }
+
+    #[test]
+    fn npc_asi_caps_at_20() {
+        use crate::combat::types::CharacterClass;
+        let near_cap = AbilityScores { strength: 19, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10, charisma: 10 };
+        let after = near_cap.with_npc_asi(&CharacterClass::Fighter);
+        assert_eq!(after.strength, 20);
+
+        let at_cap = AbilityScores { strength: 20, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10, charisma: 10 };
+        let after2 = at_cap.with_npc_asi(&CharacterClass::Warrior);
+        assert_eq!(after2.strength, 20);
     }
 }

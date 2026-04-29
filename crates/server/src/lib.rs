@@ -50,7 +50,8 @@ pub struct ServerGamePlugin {
 impl Plugin for ServerGamePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<fellytip_shared::components::HitDice>()
-           .register_type::<fellytip_shared::components::AbilityModifiers>();
+           .register_type::<fellytip_shared::components::AbilityModifiers>()
+           .register_type::<fellytip_shared::components::PendingAsi>();
 
         app.insert_resource(MapGenConfig {
                 seed: self.seed,
