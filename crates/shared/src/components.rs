@@ -759,6 +759,68 @@ mod tests {
     }
 
     #[test]
+    fn saving_throw_proficiencies_paladin() {
+        let s = SavingThrowProficiencies::paladin();
+        assert!(s.wisdom);
+        assert!(s.charisma);
+        assert!(!s.strength);
+    }
+
+    #[test]
+    fn saving_throw_proficiencies_ranger() {
+        let s = SavingThrowProficiencies::ranger();
+        assert!(s.strength);
+        assert!(s.dexterity);
+        assert!(!s.constitution);
+    }
+
+    #[test]
+    fn saving_throw_proficiencies_bard() {
+        let s = SavingThrowProficiencies::bard();
+        assert!(s.dexterity);
+        assert!(s.charisma);
+        assert!(!s.strength);
+    }
+
+    #[test]
+    fn saving_throw_proficiencies_sorcerer() {
+        let s = SavingThrowProficiencies::sorcerer();
+        assert!(s.constitution);
+        assert!(s.charisma);
+        assert!(!s.intelligence);
+    }
+
+    #[test]
+    fn saving_throw_proficiencies_for_class_covers_all_classes() {
+        use crate::combat::types::CharacterClass;
+        let cases = [
+            (CharacterClass::Warrior,   true,  false, true,  false, false, false),
+            (CharacterClass::Fighter,   true,  false, true,  false, false, false),
+            (CharacterClass::Barbarian, true,  false, true,  false, false, false),
+            (CharacterClass::Rogue,     false, true,  false, true,  false, false),
+            (CharacterClass::Bard,      false, true,  false, false, false, true),
+            (CharacterClass::Monk,      true,  true,  false, false, false, false),
+            (CharacterClass::Ranger,    true,  true,  false, false, false, false),
+            (CharacterClass::Paladin,   false, false, false, false, true,  true),
+            (CharacterClass::Cleric,    false, false, false, false, true,  true),
+            (CharacterClass::Warlock,   false, false, false, false, true,  true),
+            (CharacterClass::Mage,      false, false, false, true,  true,  false),
+            (CharacterClass::Wizard,    false, false, false, true,  true,  false),
+            (CharacterClass::Druid,     false, false, false, true,  true,  false),
+            (CharacterClass::Sorcerer,  false, false, true,  false, false, true),
+        ];
+        for (class, str, dex, con, int, wis, cha) in cases {
+            let s = SavingThrowProficiencies::for_class(&class);
+            assert_eq!(s.strength,     str, "{class:?} strength");
+            assert_eq!(s.dexterity,    dex, "{class:?} dexterity");
+            assert_eq!(s.constitution, con, "{class:?} constitution");
+            assert_eq!(s.intelligence, int, "{class:?} intelligence");
+            assert_eq!(s.wisdom,       wis, "{class:?} wisdom");
+            assert_eq!(s.charisma,     cha, "{class:?} charisma");
+        }
+    }
+
+    #[test]
     fn wildlife_kind_default_is_bison() {
         assert_eq!(WildlifeKind::default(), WildlifeKind::Bison);
     }
