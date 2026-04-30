@@ -11,10 +11,11 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContext, EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui};
 use fellytip_shared::{
+    combat::spells::SpellSlots,
     components::{ActionBudget, Experience, Health, PlayerStandings},
     world::faction::standing_tier,
 };
-use fellytip_server::plugins::party::PartyRegistry;
+use fellytip_server::plugins::{combat::CombatParticipant, party::PartyRegistry};
 use crate::LocalPlayer;
 use crate::plugins::battle::{BattleLog, ClientStoryLog};
 use crate::plugins::debug_console::DebugConsole;
@@ -28,6 +29,19 @@ type LocalPlayerQuery<'w, 's> = Query<
         &'static Experience,
         Option<&'static PlayerStandings>,
         Option<&'static ActionBudget>,
+    ),
+    With<LocalPlayer>,
+>;
+
+type CharScreenQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Health,
+        &'static Experience,
+        Option<&'static PlayerStandings>,
+        Option<&'static CombatParticipant>,
+        Option<&'static SpellSlots>,
     ),
     With<LocalPlayer>,
 >;
@@ -193,7 +207,7 @@ fn draw_party_hud(
 /// Draw the character screen overlay when 'C' is pressed.
 fn draw_char_screen(
     mut ctx: EguiContexts,
-    player_q: LocalPlayerQuery,
+    player_q: CharScreenQuery,
     mut char_screen: ResMut<CharScreen>,
 ) -> Result {
     if !char_screen.open {
@@ -206,8 +220,12 @@ fn draw_char_screen(
         .open(&mut open)
         .show(ctx.ctx_mut()?, |ui| {
             match player_q.single() {
-                Ok((health, exp, standings_opt, _)) => {
-                    ui.heading(format!("Level {}", exp.level));
+                Ok((health, exp, standings_opt, participant_opt, slots_opt)) => {
+                    if let Some(p) = participant_opt {
+                        ui.heading(format!("{:?}  —  Level {}", p.class, exp.level));
+                    } else {
+                        ui.heading(format!("Level {}", exp.level));
+                    }
                     ui.separator();
 
                     egui::Grid::new("char_stats").num_columns(2).spacing([20.0, 4.0]).show(ui, |ui| {
@@ -217,7 +235,43 @@ fn draw_char_screen(
                         ui.label("Experience:");
                         ui.label(format!("{}/{}", exp.xp, exp.xp_to_next));
                         ui.end_row();
+                        if let Some(p) = participant_opt {
+                            ui.label("Armour Class:");
+                            ui.label(format!("{}", p.armor_class));
+                            ui.end_row();
+                        }
                     });
+
+                    // Spell slots (spellcasting classes only).
+                    if let Some(slots) = slots_opt {
+                        let has_any = slots.max_slots.iter().any(|&s| s > 0);
+                        if has_any {
+                            ui.separator();
+                            ui.heading("Spell Slots");
+                            ui.separator();
+                            egui::Grid::new("spell_slots").num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
+                                ui.label("Level");
+                                ui.label("Used");
+                                ui.label("Max");
+                                ui.end_row();
+                                for level in 1..9usize {
+                                    let max = slots.max_slots[level];
+                                    if max > 0 {
+                                        let used = slots.used_slots[level];
+                                        let color = if used < max {
+                                            egui::Color32::from_rgb(100, 200, 100)
+                                        } else {
+                                            egui::Color32::from_rgb(140, 140, 140)
+                                        };
+                                        ui.colored_label(color, format!("{level}"));
+                                        ui.colored_label(color, format!("{used}"));
+                                        ui.colored_label(color, format!("{max}"));
+                                        ui.end_row();
+                                    }
+                                }
+                            });
+                        }
+                    }
 
                     ui.separator();
                     ui.heading("Faction Standing");

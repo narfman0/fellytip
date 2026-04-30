@@ -621,9 +621,21 @@ fn dm_choose_class(
         .to_owned();
 
     let class = match class_str.as_str() {
-        "Rogue"  => CharacterClass::Rogue,
-        "Mage"   => CharacterClass::Mage,
-        _        => CharacterClass::Warrior,
+        "Warrior"   => CharacterClass::Warrior,
+        "Rogue"     => CharacterClass::Rogue,
+        "Mage"      => CharacterClass::Mage,
+        "Fighter"   => CharacterClass::Fighter,
+        "Wizard"    => CharacterClass::Wizard,
+        "Cleric"    => CharacterClass::Cleric,
+        "Ranger"    => CharacterClass::Ranger,
+        "Paladin"   => CharacterClass::Paladin,
+        "Druid"     => CharacterClass::Druid,
+        "Bard"      => CharacterClass::Bard,
+        "Warlock"   => CharacterClass::Warlock,
+        "Sorcerer"  => CharacterClass::Sorcerer,
+        "Monk"      => CharacterClass::Monk,
+        "Barbarian" => CharacterClass::Barbarian,
+        _           => CharacterClass::Warrior,
     };
 
     world.write_message(ChooseClassMessage { class });
