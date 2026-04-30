@@ -389,6 +389,21 @@ impl AbilityScores {
         }
     }
 
+    /// Return a copy of these scores with all values clamped to `cap`.
+    ///
+    /// Use `cap = 20` for the standard SRD limit.  Certain magical effects (e.g. Tome of
+    /// Leadership and Influence) may raise the cap to 22–24 for a single score.
+    pub fn clamped(&self, cap: u8) -> Self {
+        Self {
+            strength:     self.strength.min(cap),
+            dexterity:    self.dexterity.min(cap),
+            constitution: self.constitution.min(cap),
+            intelligence: self.intelligence.min(cap),
+            wisdom:       self.wisdom.min(cap),
+            charisma:     self.charisma.min(cap),
+        }
+    }
+
     /// Return a copy of these scores with the NPC's primary stat increased by 2, capped at 20.
     ///
     /// The primary stat is determined by class following the same groupings as `for_class`.
@@ -937,6 +952,86 @@ mod tests {
         let json = serde_json::to_string(&b).unwrap();
         let back: ActionBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(b, back);
+    }
+
+    #[test]
+    fn for_class_fighter_grunt_primary_is_strength() {
+        use crate::world::faction::NpcRank;
+        let s = AbilityScores::for_class(&CharacterClass::Fighter, NpcRank::Grunt);
+        assert_eq!(s.strength, 12);
+        assert_eq!(s.intelligence, 8);
+        assert!(s.strength <= 20);
+    }
+
+    #[test]
+    fn for_class_barbarian_boss_str_and_con_are_primary() {
+        use crate::world::faction::NpcRank;
+        let s = AbilityScores::for_class(&CharacterClass::Barbarian, NpcRank::Boss);
+        assert_eq!(s.strength, 18);
+        assert_eq!(s.constitution, 18);
+        assert_eq!(s.intelligence, 8);
+    }
+
+    #[test]
+    fn for_class_mage_named_int_is_primary() {
+        use crate::world::faction::NpcRank;
+        let s = AbilityScores::for_class(&CharacterClass::Mage, NpcRank::Named);
+        assert_eq!(s.intelligence, 15);
+        assert_eq!(s.strength, 8);
+    }
+
+    #[test]
+    fn for_class_all_scores_within_standard_cap() {
+        use crate::world::faction::NpcRank;
+        for rank in [NpcRank::Grunt, NpcRank::Named, NpcRank::Boss] {
+            for class in [
+                CharacterClass::Warrior, CharacterClass::Fighter, CharacterClass::Barbarian,
+                CharacterClass::Paladin, CharacterClass::Ranger, CharacterClass::Monk,
+                CharacterClass::Rogue, CharacterClass::Bard, CharacterClass::Mage,
+                CharacterClass::Wizard, CharacterClass::Druid, CharacterClass::Cleric,
+                CharacterClass::Warlock, CharacterClass::Sorcerer,
+            ] {
+                let s = AbilityScores::for_class(&class, rank);
+                assert!(s.strength <= 20,     "{class:?} {rank:?} STR={}", s.strength);
+                assert!(s.dexterity <= 20,    "{class:?} {rank:?} DEX={}", s.dexterity);
+                assert!(s.constitution <= 20, "{class:?} {rank:?} CON={}", s.constitution);
+                assert!(s.intelligence <= 20, "{class:?} {rank:?} INT={}", s.intelligence);
+                assert!(s.wisdom <= 20,       "{class:?} {rank:?} WIS={}", s.wisdom);
+                assert!(s.charisma <= 20,     "{class:?} {rank:?} CHA={}", s.charisma);
+            }
+        }
+    }
+
+    #[test]
+    fn clamped_enforces_standard_cap() {
+        let over_cap = AbilityScores { strength: 22, dexterity: 15, constitution: 10,
+                                       intelligence: 10, wisdom: 10, charisma: 10 };
+        let c = over_cap.clamped(20);
+        assert_eq!(c.strength, 20);
+        assert_eq!(c.dexterity, 15); // within cap, unchanged
+    }
+
+    #[test]
+    fn clamped_extended_cap_permits_higher_values() {
+        let scores = AbilityScores { strength: 22, dexterity: 10, constitution: 10,
+                                     intelligence: 10, wisdom: 10, charisma: 10 };
+        let c = scores.clamped(22);
+        assert_eq!(c.strength, 22);
+        let c24 = scores.clamped(24);
+        assert_eq!(c24.strength, 22); // was already at 22 — stays unchanged
+    }
+
+    #[test]
+    fn clamped_all_scores_respected() {
+        let s = AbilityScores { strength: 25, dexterity: 23, constitution: 21,
+                                intelligence: 19, wisdom: 18, charisma: 20 };
+        let c = s.clamped(20);
+        assert_eq!(c.strength, 20);
+        assert_eq!(c.dexterity, 20);
+        assert_eq!(c.constitution, 20);
+        assert_eq!(c.intelligence, 19); // was already within cap
+        assert_eq!(c.wisdom, 18);
+        assert_eq!(c.charisma, 20);
     }
 
     #[test]

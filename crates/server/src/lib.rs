@@ -49,7 +49,8 @@ pub struct ServerGamePlugin {
 
 impl Plugin for ServerGamePlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<fellytip_shared::components::HitDice>()
+        app.register_type::<fellytip_shared::components::AbilityScores>()
+           .register_type::<fellytip_shared::components::HitDice>()
            .register_type::<fellytip_shared::components::AbilityModifiers>()
            .register_type::<fellytip_shared::components::PendingAsi>();
 
