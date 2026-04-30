@@ -461,6 +461,26 @@ pub fn hp_on_level_up(
     (die_roll + con_mod).max(1)
 }
 
+/// Calculate total max HP across all levels using the SRD average method.
+///
+/// - Level 1: `max_die + con_mod` (always maximum per SRD), minimum 1.
+/// - Level 2+: `(max_die / 2 + 1) + con_mod` (average rounded up) per level, minimum 1.
+///
+/// `die` is the hit die face count (e.g. 10 for d10); `level` is character level.
+pub fn calculate_max_hp(die: u8, level: u32, con_mod: i32) -> i32 {
+    if level == 0 {
+        return 0;
+    }
+    let max_die = die as i32;
+    let average = (max_die / 2) + 1;
+    // Level 1 always uses the full die value.
+    let level1 = (max_die + con_mod).max(1);
+    // Remaining levels use the average rounded up.
+    let remaining = level.saturating_sub(1) as i32;
+    let additional = remaining * (average + con_mod).max(1);
+    level1 + additional
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -595,6 +615,61 @@ mod tests {
         let warrior_hp = hp_on_level_up(&CharacterClass::Warrior, 0, &mut std::iter::once(8));
         let mage_hp    = hp_on_level_up(&CharacterClass::Mage,    0, &mut std::iter::once(8));
         assert!(warrior_hp >= mage_hp, "warrior={warrior_hp}, mage={mage_hp}");
+    }
+
+    // ── calculate_max_hp tests ────────────────────────────────────────────────
+
+    #[test]
+    fn max_hp_level_zero_is_zero() {
+        assert_eq!(calculate_max_hp(10, 0, 0), 0);
+    }
+
+    #[test]
+    fn max_hp_level1_warrior_no_con() {
+        // Warrior d10, CON mod 0: level 1 = max die = 10
+        assert_eq!(calculate_max_hp(10, 1, 0), 10);
+    }
+
+    #[test]
+    fn max_hp_level1_warrior_positive_con() {
+        // Warrior d10, CON mod +2: level 1 = 10 + 2 = 12
+        assert_eq!(calculate_max_hp(10, 1, 2), 12);
+    }
+
+    #[test]
+    fn max_hp_level2_warrior_no_con() {
+        // Warrior d10, CON mod 0: level 1 = 10, level 2 = average(d10) = 6 → total 16
+        assert_eq!(calculate_max_hp(10, 2, 0), 16);
+    }
+
+    #[test]
+    fn max_hp_level2_warrior_positive_con() {
+        // Warrior d10, CON +2: level 1 = 12, level 2 = (6+2) = 8 → total 20
+        assert_eq!(calculate_max_hp(10, 2, 2), 20);
+    }
+
+    #[test]
+    fn max_hp_level1_mage_no_con() {
+        // Mage d6, CON mod 0: level 1 = 6
+        assert_eq!(calculate_max_hp(6, 1, 0), 6);
+    }
+
+    #[test]
+    fn max_hp_level2_mage_no_con() {
+        // Mage d6, CON 0: level 1 = 6, level 2 = average(d6) = 4 → total 10
+        assert_eq!(calculate_max_hp(6, 2, 0), 10);
+    }
+
+    #[test]
+    fn max_hp_minimum_one_per_level() {
+        // d6, CON mod -5: level 1 = (6-5).max(1) = 1; level 2 = (4-5).max(1) = 1 → total 2
+        assert_eq!(calculate_max_hp(6, 2, -5), 2);
+    }
+
+    #[test]
+    fn max_hp_barbarian_d12_level3_no_con() {
+        // Barbarian d12, CON 0: level 1 = 12, level 2 = 7, level 3 = 7 → total 26
+        assert_eq!(calculate_max_hp(12, 3, 0), 26);
     }
 
     // ── Ability tests ─────────────────────────────────────────────────────────

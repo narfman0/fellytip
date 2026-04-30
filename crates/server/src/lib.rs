@@ -69,7 +69,10 @@ impl Plugin for ServerGamePlugin {
             .add_plugins(plugins::interest::InterestPlugin)
             .add_plugins(plugins::party::PartyPlugin)
             .add_plugins(plugins::portal::PortalPlugin)
-            .add_systems(Update, fellytip_shared::components::sync_ability_modifiers);
+            .add_systems(Update, (
+                fellytip_shared::components::sync_ability_modifiers,
+                fellytip_shared::components::sync_max_hp,
+            ));
 
         if self.combat_test {
             app.add_plugins(plugins::combat_test::CombatTestPlugin);
