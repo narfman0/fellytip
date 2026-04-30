@@ -479,6 +479,24 @@ pub fn sync_ability_modifiers(
     }
 }
 
+/// Reactively recalculate `Health.max` whenever `HitDice` or `AbilityScores` changes.
+/// Uses SRD average method: level 1 = max die + CON mod; level 2+ = average rounded up + CON mod.
+/// Each level contributes at minimum 1 HP. `Health.current` is clamped to the new maximum.
+#[allow(clippy::type_complexity)]
+pub fn sync_max_hp(
+    mut query: Query<
+        (&HitDice, &AbilityScores, &mut Health),
+        Or<(Changed<HitDice>, Changed<AbilityScores>)>,
+    >,
+) {
+    for (hit_dice, scores, mut health) in &mut query {
+        let con_mod = scores.con_mod() as i32;
+        let new_max = crate::combat::calculate_max_hp(hit_dice.die, hit_dice.count as u32, con_mod);
+        health.max = new_max;
+        health.current = health.current.min(new_max);
+    }
+}
+
 // ── D&D 5e SRD Saving Throw Proficiencies ────────────────────────────────────
 
 /// Which saving throws a character is proficient in (SRD class feature).
