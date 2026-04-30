@@ -20,7 +20,7 @@ use fellytip_shared::{
     world::{
         civilization::Settlements,
         faction::{FactionId, NpcRank, PlayerReputationMap},
-        map::{MAP_HALF_HEIGHT, MAP_HALF_WIDTH},
+        map::{MAP_HALF_HEIGHT, MAP_HALF_WIDTH, WorldMap},
         story::{StoryEvent, StoryEventKind, WriteStoryEvent},
         zone::{PortalKind, WorldId, WORLD_DEVILS_CASINO, WORLD_HIVEMIND_FUNGUS, ZoneTopology},
     },
@@ -260,6 +260,7 @@ pub fn spawn_bandit_groups(
     danger: Res<DangerLevel>,
     settlements: Option<Res<Settlements>>,
     existing_camps: Query<&BanditCamp>,
+    world_map: Option<Res<WorldMap>>,
 ) {
     // Only fire every BANDIT_SPAWN_INTERVAL ticks.
     if !tick.0.is_multiple_of(BANDIT_SPAWN_INTERVAL) {
@@ -310,6 +311,29 @@ pub fn spawn_bandit_groups(
             continue;
         }
 
+        // Prefer road tiles near the candidate point (radius 5).
+        let (spawn_wx, spawn_wy) = if let Some(ref map) = world_map {
+            let mut road_tile = None;
+            'road_search: for dy in -5i32..=5 {
+                for dx in -5i32..=5 {
+                    let cx = wx + dx as f32;
+                    let cy = wy + dy as f32;
+                    let ix = (cx + MAP_HALF_WIDTH as f32) as i64;
+                    let iy = (cy + MAP_HALF_HEIGHT as f32) as i64;
+                    if ix >= 0 && iy >= 0 && (ix as usize) < map.width && (iy as usize) < map.height {
+                        let idx = ix as usize + iy as usize * map.width;
+                        if map.road_tiles.get(idx).copied().unwrap_or(false) {
+                            road_tile = Some((cx, cy));
+                            break 'road_search;
+                        }
+                    }
+                }
+            }
+            road_tile.unwrap_or((wx, wy))
+        } else {
+            (wx, wy)
+        };
+
         // Determine group size and rank.
         let group_size = BANDIT_GROUP_SIZE_MIN
             + (seed % (BANDIT_GROUP_SIZE_MAX - BANDIT_GROUP_SIZE_MIN + 1) as u64) as u32;
@@ -320,8 +344,8 @@ pub fn spawn_bandit_groups(
         };
 
         // Spawn bandit group members.
-        let tile_x = (wx + MAP_HALF_WIDTH as f32) as u32;
-        let tile_y = (wy + MAP_HALF_HEIGHT as f32) as u32;
+        let tile_x = (spawn_wx + MAP_HALF_WIDTH as f32) as u32;
+        let tile_y = (spawn_wy + MAP_HALF_HEIGHT as f32) as u32;
 
         // Alternate Rogue / Barbarian per member.
         for i in 0..group_size {
@@ -340,7 +364,7 @@ pub fn spawn_bandit_groups(
             };
             let offset_x = (i % 3) as f32 * 1.5;
             let offset_y = (i / 3) as f32 * 1.5;
-            let pos = WorldPosition { x: wx + offset_x, y: wy + offset_y, z: 0.0 };
+            let pos = WorldPosition { x: spawn_wx + offset_x, y: spawn_wy + offset_y, z: 0.0 };
             commands.spawn((
                 pos.clone(),
                 Health { current: hp, max: hp },
@@ -386,7 +410,7 @@ pub fn spawn_bandit_groups(
         }
 
         tracing::info!(
-            wx, wy, group_size, ?tier, ?rank,
+            wx = spawn_wx, wy = spawn_wy, group_size, ?tier, ?rank,
             "Bandit group spawned"
         );
         // One spawn per tick.
@@ -426,93 +450,100 @@ pub fn spawn_portal_horrors(
         .filter(|p| p.kind == PortalKind::FungusPortal)
         .collect();
 
+    // Compute horror count from pressure: 1 + (pressure * 2) capped at 4.
+    let horror_count = (1 + (pressure.score * 2.0) as u32).min(4);
+
     // Casino horrors: Warlock "Void Gambler" CR 3 (HP 45, AC 13).
     for portal in &casino_portals {
-        // Deterministic jitter based on tick + portal id.
-        let jitter_seed = tick.0.wrapping_add(portal.id as u64 * 31337);
-        let jx = ((jitter_seed % 5) as f32) - 2.0;
-        let jy = ((jitter_seed.wrapping_mul(17) % 5) as f32) - 2.0;
-        let pos = WorldPosition { x: jx, y: jy, z: 0.0 };
-        let warlock_scores = AbilityScores { strength: 10, dexterity: 14, constitution: 14, intelligence: 14, wisdom: 12, charisma: 18 };
-        let warlock_mods = AbilityModifiers::from_scores(&warlock_scores);
-        commands.spawn((
-            pos.clone(),
-            Health { current: 45, max: 45 },
-            CombatParticipant {
-                id: CombatantId(Uuid::new_v4()),
-                interrupt_stack: InterruptStack::default(),
-                class: CharacterClass::Warlock,
-                level: 3,
-                armor_class: 13,
-                strength: warlock_scores.strength as i32,
-                dexterity: warlock_scores.dexterity as i32,
-                constitution: warlock_scores.constitution as i32,
-                intelligence: warlock_scores.intelligence as i32,
-                wisdom: warlock_scores.wisdom as i32,
-                charisma: warlock_scores.charisma as i32,
-            },
-            ExperienceReward(700),
-            FactionNpcRank(NpcRank::Named),
-            EntityKind::FactionNpc,
-            HomePosition(pos.clone()),
-            PortalHorror { world_origin: WORLD_DEVILS_CASINO },
-            NavPath::default(),
-            NavReplanTimer::default(),
-            // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
-            (
-                NpcClass(CharacterClass::Warlock),
-                NpcLevel(3),
-                warlock_scores,
-                warlock_mods,
-                HitDice::for_class_level(&CharacterClass::Warlock, 3),
-                SavingThrowProficiencies::for_class(&CharacterClass::Warlock),
-            ),
-        ));
-        tracing::info!(portal_id = portal.id, "Void Gambler spawned from CasinoPortal");
+        for horror_idx in 0..horror_count {
+            // Deterministic jitter based on tick + portal id + index.
+            let jitter_seed = tick.0.wrapping_add(portal.id as u64 * 31337).wrapping_add(horror_idx as u64 * 7);
+            let jx = ((jitter_seed % 5) as f32) - 2.0;
+            let jy = ((jitter_seed.wrapping_mul(17) % 5) as f32) - 2.0;
+            let pos = WorldPosition { x: jx, y: jy, z: 0.0 };
+            let warlock_scores = AbilityScores { strength: 10, dexterity: 14, constitution: 14, intelligence: 14, wisdom: 12, charisma: 18 };
+            let warlock_mods = AbilityModifiers::from_scores(&warlock_scores);
+            commands.spawn((
+                pos.clone(),
+                Health { current: 45, max: 45 },
+                CombatParticipant {
+                    id: CombatantId(Uuid::new_v4()),
+                    interrupt_stack: InterruptStack::default(),
+                    class: CharacterClass::Warlock,
+                    level: 3,
+                    armor_class: 13,
+                    strength: warlock_scores.strength as i32,
+                    dexterity: warlock_scores.dexterity as i32,
+                    constitution: warlock_scores.constitution as i32,
+                    intelligence: warlock_scores.intelligence as i32,
+                    wisdom: warlock_scores.wisdom as i32,
+                    charisma: warlock_scores.charisma as i32,
+                },
+                ExperienceReward(700),
+                FactionNpcRank(NpcRank::Named),
+                EntityKind::FactionNpc,
+                HomePosition(pos.clone()),
+                PortalHorror { world_origin: WORLD_DEVILS_CASINO },
+                NavPath::default(),
+                NavReplanTimer::default(),
+                // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+                (
+                    NpcClass(CharacterClass::Warlock),
+                    NpcLevel(3),
+                    warlock_scores,
+                    warlock_mods,
+                    HitDice::for_class_level(&CharacterClass::Warlock, 3),
+                    SavingThrowProficiencies::for_class(&CharacterClass::Warlock),
+                ),
+            ));
+            tracing::info!(portal_id = portal.id, horror_idx, horror_count, "Void Gambler spawned from CasinoPortal");
+        }
     }
 
     // Fungus horrors: Druid "Spore Wraith" CR 2 (HP 33, AC 11).
     for portal in &fungus_portals {
-        let jitter_seed = tick.0.wrapping_add(portal.id as u64 * 42069);
-        let jx = ((jitter_seed % 5) as f32) - 2.0;
-        let jy = ((jitter_seed.wrapping_mul(23) % 5) as f32) - 2.0;
-        let pos = WorldPosition { x: jx, y: jy, z: 0.0 };
-        let druid_scores = AbilityScores { strength: 10, dexterity: 12, constitution: 14, intelligence: 12, wisdom: 16, charisma: 10 };
-        let druid_mods = AbilityModifiers::from_scores(&druid_scores);
-        commands.spawn((
-            pos.clone(),
-            Health { current: 33, max: 33 },
-            CombatParticipant {
-                id: CombatantId(Uuid::new_v4()),
-                interrupt_stack: InterruptStack::default(),
-                class: CharacterClass::Druid,
-                level: 2,
-                armor_class: 11,
-                strength: druid_scores.strength as i32,
-                dexterity: druid_scores.dexterity as i32,
-                constitution: druid_scores.constitution as i32,
-                intelligence: druid_scores.intelligence as i32,
-                wisdom: druid_scores.wisdom as i32,
-                charisma: druid_scores.charisma as i32,
-            },
-            ExperienceReward(450),
-            FactionNpcRank(NpcRank::Named),
-            EntityKind::FactionNpc,
-            HomePosition(pos.clone()),
-            PortalHorror { world_origin: WORLD_HIVEMIND_FUNGUS },
-            NavPath::default(),
-            NavReplanTimer::default(),
-            // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
-            (
-                NpcClass(CharacterClass::Druid),
-                NpcLevel(2),
-                druid_scores,
-                druid_mods,
-                HitDice::for_class_level(&CharacterClass::Druid, 2),
-                SavingThrowProficiencies::for_class(&CharacterClass::Druid),
-            ),
-        ));
-        tracing::info!(portal_id = portal.id, "Spore Wraith spawned from FungusPortal");
+        for horror_idx in 0..horror_count {
+            let jitter_seed = tick.0.wrapping_add(portal.id as u64 * 42069).wrapping_add(horror_idx as u64 * 13);
+            let jx = ((jitter_seed % 5) as f32) - 2.0;
+            let jy = ((jitter_seed.wrapping_mul(23) % 5) as f32) - 2.0;
+            let pos = WorldPosition { x: jx, y: jy, z: 0.0 };
+            let druid_scores = AbilityScores { strength: 10, dexterity: 12, constitution: 14, intelligence: 12, wisdom: 16, charisma: 10 };
+            let druid_mods = AbilityModifiers::from_scores(&druid_scores);
+            commands.spawn((
+                pos.clone(),
+                Health { current: 33, max: 33 },
+                CombatParticipant {
+                    id: CombatantId(Uuid::new_v4()),
+                    interrupt_stack: InterruptStack::default(),
+                    class: CharacterClass::Druid,
+                    level: 2,
+                    armor_class: 11,
+                    strength: druid_scores.strength as i32,
+                    dexterity: druid_scores.dexterity as i32,
+                    constitution: druid_scores.constitution as i32,
+                    intelligence: druid_scores.intelligence as i32,
+                    wisdom: druid_scores.wisdom as i32,
+                    charisma: druid_scores.charisma as i32,
+                },
+                ExperienceReward(450),
+                FactionNpcRank(NpcRank::Named),
+                EntityKind::FactionNpc,
+                HomePosition(pos.clone()),
+                PortalHorror { world_origin: WORLD_HIVEMIND_FUNGUS },
+                NavPath::default(),
+                NavReplanTimer::default(),
+                // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+                (
+                    NpcClass(CharacterClass::Druid),
+                    NpcLevel(2),
+                    druid_scores,
+                    druid_mods,
+                    HitDice::for_class_level(&CharacterClass::Druid, 2),
+                    SavingThrowProficiencies::for_class(&CharacterClass::Druid),
+                ),
+            ));
+            tracing::info!(portal_id = portal.id, horror_idx, horror_count, "Spore Wraith spawned from FungusPortal");
+        }
     }
 }
 
@@ -771,6 +802,88 @@ fn spawn_bounty_hunter(commands: &mut Commands, near: &WorldPosition, rank: NpcR
             SavingThrowProficiencies::for_class(&class),
         ),
     ));
+}
+
+// ── Issue #97: Auto-raid generation ──────────────────────────────────────────
+
+/// Generate warfront events from hostile faction military buildup.
+///
+/// Runs every 200 ticks. For each faction with military_strength > 20.0 and
+/// is_aggressive == true, creates a new WarfrontEvent if no active warfront
+/// exists for that faction. Max 3 active warfronts at a time.
+pub fn auto_generate_raids(
+    mut warfront_registry: ResMut<WarfrontRegistry>,
+    registry: Res<super::FactionRegistry>,
+    pop: Res<super::FactionPopulationState>,
+    tick: Res<WorldSimTick>,
+) {
+    if !tick.0.is_multiple_of(200) || tick.0 == 0 {
+        return;
+    }
+
+    // Count active (unresolved) warfronts.
+    let active_count = warfront_registry.fronts.iter().filter(|f| !f.resolved).count();
+    if active_count >= 3 {
+        return;
+    }
+
+    for faction in &registry.factions {
+        if !faction.is_aggressive || faction.resources.military_strength <= 20.0 {
+            continue;
+        }
+
+        // Check if this faction already has an active warfront.
+        let has_active = warfront_registry.fronts.iter().any(|f| {
+            f.attacker_faction == faction.id && !f.resolved
+        });
+        if has_active {
+            continue;
+        }
+
+        // Find the nearest hostile settlement (by territory centroid / settlement position).
+        let attacker_centroid_x = pop.settlements.values()
+            .filter(|s| s.faction_id == faction.id)
+            .map(|s| s.home_x)
+            .sum::<f32>()
+            / (pop.settlements.values().filter(|s| s.faction_id == faction.id).count().max(1) as f32);
+        let attacker_centroid_y = pop.settlements.values()
+            .filter(|s| s.faction_id == faction.id)
+            .map(|s| s.home_y)
+            .sum::<f32>()
+            / (pop.settlements.values().filter(|s| s.faction_id == faction.id).count().max(1) as f32);
+
+        // Find nearest hostile settlement from other factions.
+        let target = pop.settlements.values()
+            .filter(|s| s.faction_id != faction.id && !s.collapsed)
+            .min_by(|a, b| {
+                let da = (a.home_x - attacker_centroid_x).powi(2) + (a.home_y - attacker_centroid_y).powi(2);
+                let db = (b.home_x - attacker_centroid_x).powi(2) + (b.home_y - attacker_centroid_y).powi(2);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+        let Some(target) = target else { continue };
+
+        // Recheck limit before inserting.
+        let active_now = warfront_registry.fronts.iter().filter(|f| !f.resolved).count();
+        if active_now >= 3 {
+            break;
+        }
+
+        warfront_registry.fronts.push(WarfrontEvent {
+            attacker_faction: faction.id.clone(),
+            defender_faction: target.faction_id.clone(),
+            target_settlement_id: target.settlement_id,
+            target_x: target.home_x,
+            target_y: target.home_y,
+            resolved: false,
+        });
+        tracing::info!(
+            faction = %faction.id.0,
+            target = %target.settlement_id,
+            military = faction.resources.military_strength,
+            "auto_generate_raids: WarfrontEvent created from military buildup"
+        );
+    }
 }
 
 // ── Unit tests ─────────────────────────────────────────────────────────────────

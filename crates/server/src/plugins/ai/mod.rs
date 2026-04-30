@@ -46,7 +46,7 @@ pub use population::{
 };
 pub use surface_danger::{
     update_danger_levels, spawn_bandit_groups, spawn_portal_horrors,
-    resolve_warfront_events, update_threat_registry,
+    resolve_warfront_events, update_threat_registry, auto_generate_raids,
     BanditCamp, DangerLevel, DangerTier, PortalHorror,
     ThreatRegistry, WarfrontRegistry,
 };
@@ -237,12 +237,13 @@ impl Plugin for AiPlugin {
                 run_battle_rounds,
                 wander_npcs,
                 sync_player_standings,
-                // Surface danger systems (issues #117-#121)
+                // Surface danger systems (issues #117-#121, #97)
                 update_danger_levels,
                 spawn_bandit_groups,
                 spawn_portal_horrors,
                 resolve_warfront_events,
                 update_threat_registry,
+                auto_generate_raids,
             ).chain(),
         );
         app.add_systems(
