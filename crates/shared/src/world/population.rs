@@ -344,7 +344,6 @@ fn nearest_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::cave::generate_cave_layer;
     use crate::world::map::{TileColumn, TileLayer, TileKind};
     use crate::world::zone::WORLD_SURFACE;
 
