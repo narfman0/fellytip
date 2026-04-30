@@ -63,9 +63,21 @@ pub fn class_to_str(class: &CharacterClass) -> &'static str {
 
 pub fn class_from_str(s: &str) -> CharacterClass {
     match s {
-        "Rogue" => CharacterClass::Rogue,
-        "Mage"  => CharacterClass::Mage,
-        _       => CharacterClass::Warrior,
+        "Warrior"   => CharacterClass::Warrior,
+        "Rogue"     => CharacterClass::Rogue,
+        "Mage"      => CharacterClass::Mage,
+        "Fighter"   => CharacterClass::Fighter,
+        "Wizard"    => CharacterClass::Wizard,
+        "Cleric"    => CharacterClass::Cleric,
+        "Ranger"    => CharacterClass::Ranger,
+        "Paladin"   => CharacterClass::Paladin,
+        "Druid"     => CharacterClass::Druid,
+        "Bard"      => CharacterClass::Bard,
+        "Warlock"   => CharacterClass::Warlock,
+        "Sorcerer"  => CharacterClass::Sorcerer,
+        "Monk"      => CharacterClass::Monk,
+        "Barbarian" => CharacterClass::Barbarian,
+        _           => CharacterClass::Warrior,
     }
 }
 
@@ -289,5 +301,44 @@ fn autosave_players(
             pos.y,
             pos.z,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn class_roundtrip_all_classes() {
+        let classes = [
+            CharacterClass::Warrior,
+            CharacterClass::Rogue,
+            CharacterClass::Mage,
+            CharacterClass::Fighter,
+            CharacterClass::Wizard,
+            CharacterClass::Cleric,
+            CharacterClass::Ranger,
+            CharacterClass::Paladin,
+            CharacterClass::Druid,
+            CharacterClass::Bard,
+            CharacterClass::Warlock,
+            CharacterClass::Sorcerer,
+            CharacterClass::Monk,
+            CharacterClass::Barbarian,
+        ];
+        for class in &classes {
+            let s = class_to_str(class);
+            let back = class_from_str(s);
+            assert_eq!(
+                std::mem::discriminant(class),
+                std::mem::discriminant(&back),
+                "class_from_str({s:?}) did not round-trip back to the same variant"
+            );
+        }
+    }
+
+    #[test]
+    fn class_from_str_unknown_defaults_to_warrior() {
+        assert!(matches!(class_from_str("Barbarian Warrior"), CharacterClass::Warrior));
     }
 }
