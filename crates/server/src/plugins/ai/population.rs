@@ -17,7 +17,7 @@ use fellytip_shared::{
         types::{CharacterClass, CombatantId},
         SpellSlots, Spellbook,
     },
-    components::{EconomicRole, EconomicRoleKind, EntityKind, FactionBadge, GrowthStage, Health, NavPath, NavReplanTimer, PlayerStandings, WorldPosition},
+    components::{AbilityModifiers, AbilityScores, EconomicRole, EconomicRoleKind, EntityKind, FactionBadge, GrowthStage, Health, HitDice, NavPath, NavReplanTimer, NpcClass, NpcLevel, PlayerStandings, SavingThrowProficiencies, WorldPosition},
     world::{
         civilization::{AbandonedSettlement, RuinsTile, SettlementKind, Settlements},
         ecology::RegionId,
@@ -175,17 +175,15 @@ pub(crate) fn faction_npc_bundle(
     level: u32,
 ) -> impl Bundle {
     let class = class_for_faction_grunt(&faction_id, 0);
-    let scores = fellytip_shared::components::AbilityScores::for_class(
-        &class,
-        fellytip_shared::world::faction::NpcRank::Grunt,
-    );
+    let scores = AbilityScores::for_class(&class, NpcRank::Grunt);
+    let modifiers = AbilityModifiers::from_scores(&scores);
     (
         pos.clone(),
         Health { current: 20, max: 20 },
         crate::plugins::combat::CombatParticipant {
             id: CombatantId(Uuid::new_v4()),
             interrupt_stack: InterruptStack::default(),
-            class,
+            class: class.clone(),
             level,
             // Leather armour, DEX 10 → AC 11 (SRD: 11 + DEX mod)
             armor_class: 11,
@@ -203,6 +201,17 @@ pub(crate) fn faction_npc_bundle(
         CurrentGoal(None),
         HomePosition(pos),
         EntityKind::FactionNpc,
+        // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+        (
+            NpcClass(class.clone()),
+            NpcLevel(level),
+            scores,
+            modifiers,
+            HitDice::for_class_level(&class, level),
+            SavingThrowProficiencies::for_class(&class),
+            SpellSlots::for_class(&class, level as u8),
+            Spellbook::for_class(&class),
+        ),
     )
 }
 
@@ -299,10 +308,8 @@ pub fn spawn_faction_npcs(
                 z: settlement.z,
             };
             let npc_class = class_for_faction_grunt(&faction.id, npc_idx);
-            let scores = fellytip_shared::components::AbilityScores::for_class(
-                &npc_class,
-                NpcRank::Grunt,
-            );
+            let scores = AbilityScores::for_class(&npc_class, NpcRank::Grunt);
+            let modifiers = AbilityModifiers::from_scores(&scores);
             let economic_role = assign_economic_role(
                 npc_idx,
                 is_capital,
@@ -334,8 +341,17 @@ pub fn spawn_faction_npcs(
                 NavPath::default(),
                 NavReplanTimer::default(),
                 economic_role,
-                SpellSlots::for_class(&npc_class, 1),
-                Spellbook::for_class(&npc_class),
+                // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+                (
+                    NpcClass(npc_class.clone()),
+                    NpcLevel(1),
+                    scores,
+                    modifiers,
+                    HitDice::for_class_level(&npc_class, 1),
+                    SavingThrowProficiencies::for_class(&npc_class),
+                    SpellSlots::for_class(&npc_class, 1),
+                    Spellbook::for_class(&npc_class),
+                ),
             ));
             tracing::debug!(
                 faction = %faction.name,
@@ -533,6 +549,8 @@ pub fn tick_population_system(
                         &next.faction_id,
                         tick.0 as usize,
                     );
+                    let child_scores = AbilityScores::for_class(&child_class, NpcRank::Grunt);
+                    let child_mods = AbilityModifiers::from_scores(&child_scores);
                     commands.spawn((
                         pos.clone(),
                         Health { current: 5, max: 5 },
@@ -542,12 +560,12 @@ pub fn tick_population_system(
                             class: child_class.clone(),
                             level: 1,
                             armor_class: 8,
-                            strength: 8,
-                            dexterity: 8,
-                            constitution: 8,
-                            intelligence: 10,
-                            wisdom: 10,
-                            charisma: 10,
+                            strength: child_scores.strength as i32,
+                            dexterity: child_scores.dexterity as i32,
+                            constitution: child_scores.constitution as i32,
+                            intelligence: child_scores.intelligence as i32,
+                            wisdom: child_scores.wisdom as i32,
+                            charisma: child_scores.charisma as i32,
                         },
                         ExperienceReward(5),
                         FactionMember(next.faction_id.clone()),
@@ -559,8 +577,17 @@ pub fn tick_population_system(
                         GrowthStage(0.0),
                         NavPath::default(),
                         NavReplanTimer::default(),
-                        SpellSlots::for_class(&child_class, 1),
-                        Spellbook::for_class(&child_class),
+                        // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+                        (
+                            NpcClass(child_class.clone()),
+                            NpcLevel(1),
+                            child_scores,
+                            child_mods,
+                            HitDice::for_class_level(&child_class, 1),
+                            SavingThrowProficiencies::for_class(&child_class),
+                            SpellSlots::for_class(&child_class, 1),
+                            Spellbook::for_class(&child_class),
+                        ),
                     ));
                     tracing::debug!(faction = %next.faction_id.0, "Child NPC spawned");
                 }
@@ -577,6 +604,8 @@ pub fn tick_population_system(
                     let jitter = ((tick.0 as f32 * 0.47).sin() * 0.5, (tick.0 as f32 * 0.71).cos() * 0.5);
                     let pos = WorldPosition { x: x + jitter.0, y: y + jitter.1, z };
                     let child_class = class_for_faction_grunt(&next.faction_id, tick.0 as usize + 1);
+                    let econ_scores = AbilityScores::for_class(&child_class, NpcRank::Grunt);
+                    let econ_mods = AbilityModifiers::from_scores(&econ_scores);
                     commands.spawn((
                         pos.clone(),
                         Health { current: 5, max: 5 },
@@ -586,12 +615,12 @@ pub fn tick_population_system(
                             class: child_class.clone(),
                             level: 1,
                             armor_class: 8,
-                            strength: 8,
-                            dexterity: 8,
-                            constitution: 8,
-                            intelligence: 10,
-                            wisdom: 10,
-                            charisma: 10,
+                            strength: econ_scores.strength as i32,
+                            dexterity: econ_scores.dexterity as i32,
+                            constitution: econ_scores.constitution as i32,
+                            intelligence: econ_scores.intelligence as i32,
+                            wisdom: econ_scores.wisdom as i32,
+                            charisma: econ_scores.charisma as i32,
                         },
                         ExperienceReward(5),
                         FactionMember(next.faction_id.clone()),
@@ -603,8 +632,17 @@ pub fn tick_population_system(
                         GrowthStage(0.0),
                         NavPath::default(),
                         NavReplanTimer::default(),
-                        SpellSlots::for_class(&child_class, 1),
-                        Spellbook::for_class(&child_class),
+                        // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+                        (
+                            NpcClass(child_class.clone()),
+                            NpcLevel(1),
+                            econ_scores,
+                            econ_mods,
+                            HitDice::for_class_level(&child_class, 1),
+                            SavingThrowProficiencies::for_class(&child_class),
+                            SpellSlots::for_class(&child_class, 1),
+                            Spellbook::for_class(&child_class),
+                        ),
                     ));
                     tracing::debug!(faction = %next.faction_id.0, "Economy growth: child NPC spawned");
                 }
@@ -934,10 +972,8 @@ pub fn spawn_underground_raid(
         };
         // Underground raid NPCs: Warlock bias (dark underground class, issue #130).
         let raid_class = class_for_faction_grunt(&underground_fid, i as usize);
-        let raid_scores = fellytip_shared::components::AbilityScores::for_class(
-            &raid_class,
-            NpcRank::Grunt,
-        );
+        let raid_scores = AbilityScores::for_class(&raid_class, NpcRank::Grunt);
+        let raid_mods = AbilityModifiers::from_scores(&raid_scores);
         commands.spawn((
             pos.clone(),
             Health { current: 25, max: 25 },
@@ -972,8 +1008,17 @@ pub fn spawn_underground_raid(
                 zone_route: zone_route.clone(),
             },
             fellytip_shared::world::zone::ZoneMembership(deepest_id),
-            SpellSlots::for_class(&raid_class, 2),
-            Spellbook::for_class(&raid_class),
+            // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+            (
+                NpcClass(raid_class.clone()),
+                NpcLevel(2),
+                raid_scores,
+                raid_mods,
+                HitDice::for_class_level(&raid_class, 2),
+                SavingThrowProficiencies::for_class(&raid_class),
+                SpellSlots::for_class(&raid_class, 2),
+                Spellbook::for_class(&raid_class),
+            ),
         ));
     }
 

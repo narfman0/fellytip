@@ -9,7 +9,7 @@
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use crate::combat::types::CharacterClass;
-use crate::components::{ActionBudget, EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, PlayerStandings, SavingThrowProficiencies, WildlifeKind, WorldMeta, WorldPosition};
+use crate::components::{ActionBudget, EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, NpcClass, NpcLevel, PlayerStandings, SavingThrowProficiencies, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
 use crate::world::zone::{InteriorTile, Portal, WorldId, ZoneAnchor, ZoneId, ZoneKind};
 use serde::{Deserialize, Serialize};
@@ -157,6 +157,9 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<GameEntityId>();
         app.register_type::<SavingThrowProficiencies>();
         app.register_type::<ActionBudget>();
+        app.register_type::<CharacterClass>();
+        app.register_type::<NpcClass>();
+        app.register_type::<NpcLevel>();
         // ChooseClassMessage flows client→server; must be registered before
         // MessageWriter/MessageReader can be used.
         app.add_message::<ChooseClassMessage>();

@@ -282,6 +282,31 @@ pub struct Pacifist;
 #[reflect(Component)]
 pub struct PendingAsi;
 
+// ── NPC Class + Level ──────────────────────────────────────────────────────────
+
+/// The character class of a sentient NPC — added to all faction NPCs at spawn.
+///
+/// Drives ability score arrays (`AbilityScores::for_class`), combat action
+/// selection (`npc_ability_id` in the combat plugin), dialogue flavor
+/// (`greeting_flavor`), and behavior profiles.
+#[derive(
+    Component, Clone, PartialEq, Debug,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub struct NpcClass(pub CharacterClass);
+
+/// The current level of a sentient NPC — added to all faction NPCs at spawn.
+///
+/// Affects proficiency bonus, hit dice count, and ASI thresholds.
+/// See `proficiency_bonus()` in `crates/shared/src/combat/types.rs`.
+#[derive(
+    Component, Clone, PartialEq, Debug, Default,
+    Serialize, Deserialize, Reflect,
+)]
+#[reflect(Component)]
+pub struct NpcLevel(pub u32);
+
 // ── D&D 5e SRD Ability Scores ─────────────────────────────────────────────────
 
 /// The six D&D 5e SRD ability scores for a character or NPC.
@@ -1061,5 +1086,42 @@ mod tests {
         let at_cap = AbilityScores { strength: 20, dexterity: 10, constitution: 10, intelligence: 10, wisdom: 10, charisma: 10 };
         let after2 = at_cap.with_npc_asi(&CharacterClass::Warrior);
         assert_eq!(after2.strength, 20);
+    }
+
+    #[test]
+    fn npc_class_wraps_character_class() {
+        use crate::combat::types::CharacterClass;
+        let cls = NpcClass(CharacterClass::Fighter);
+        assert_eq!(cls.0, CharacterClass::Fighter);
+        let cls2 = NpcClass(CharacterClass::Warlock);
+        assert_ne!(cls, cls2);
+    }
+
+    #[test]
+    fn npc_level_default_is_zero() {
+        let lvl = NpcLevel::default();
+        assert_eq!(lvl.0, 0);
+    }
+
+    #[test]
+    fn npc_level_serde_round_trip() {
+        let lvl = NpcLevel(5);
+        let json = serde_json::to_string(&lvl).unwrap();
+        let back: NpcLevel = serde_json::from_str(&json).unwrap();
+        assert_eq!(lvl, back);
+    }
+
+    #[test]
+    fn npc_class_serde_round_trip() {
+        use crate::combat::types::CharacterClass;
+        for class in [
+            CharacterClass::Fighter, CharacterClass::Wizard, CharacterClass::Rogue,
+            CharacterClass::Warlock, CharacterClass::Druid, CharacterClass::Barbarian,
+        ] {
+            let c = NpcClass(class.clone());
+            let json = serde_json::to_string(&c).unwrap();
+            let back: NpcClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(c, back);
+        }
     }
 }

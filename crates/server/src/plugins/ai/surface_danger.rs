@@ -16,7 +16,7 @@ use fellytip_shared::{
         interrupt::InterruptStack,
         types::{CharacterClass, CombatantId},
     },
-    components::{EntityKind, FactionBadge, Health, NavPath, NavReplanTimer, PlayerStandings, WorldPosition},
+    components::{AbilityModifiers, AbilityScores, EntityKind, FactionBadge, Health, HitDice, NavPath, NavReplanTimer, NpcClass, NpcLevel, PlayerStandings, SavingThrowProficiencies, WorldPosition},
     world::{
         civilization::Settlements,
         faction::{FactionId, NpcRank, PlayerReputationMap},
@@ -330,8 +330,9 @@ pub fn spawn_bandit_groups(
             } else {
                 CharacterClass::Barbarian
             };
-            let scores =
-                fellytip_shared::components::AbilityScores::for_class(&class, rank);
+            let scores = AbilityScores::for_class(&class, rank);
+            let mods = AbilityModifiers::from_scores(&scores);
+            let level = if rank == NpcRank::Named { 3 } else { 1 };
             let (hp, ac, xp_reward) = match rank {
                 NpcRank::Grunt => (20, 12, 50),
                 NpcRank::Named => (35, 14, 200),
@@ -346,8 +347,8 @@ pub fn spawn_bandit_groups(
                 CombatParticipant {
                     id: CombatantId(Uuid::new_v4()),
                     interrupt_stack: InterruptStack::default(),
-                    class,
-                    level: if rank == NpcRank::Named { 3 } else { 1 },
+                    class: class.clone(),
+                    level,
                     armor_class: ac,
                     strength: scores.strength as i32,
                     dexterity: scores.dexterity as i32,
@@ -372,6 +373,15 @@ pub fn spawn_bandit_groups(
                 },
                 NavPath::default(),
                 NavReplanTimer::default(),
+                // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+                (
+                    NpcClass(class.clone()),
+                    NpcLevel(level),
+                    scores,
+                    mods,
+                    HitDice::for_class_level(&class, level),
+                    SavingThrowProficiencies::for_class(&class),
+                ),
             ));
         }
 
@@ -423,6 +433,8 @@ pub fn spawn_portal_horrors(
         let jx = ((jitter_seed % 5) as f32) - 2.0;
         let jy = ((jitter_seed.wrapping_mul(17) % 5) as f32) - 2.0;
         let pos = WorldPosition { x: jx, y: jy, z: 0.0 };
+        let warlock_scores = AbilityScores { strength: 10, dexterity: 14, constitution: 14, intelligence: 14, wisdom: 12, charisma: 18 };
+        let warlock_mods = AbilityModifiers::from_scores(&warlock_scores);
         commands.spawn((
             pos.clone(),
             Health { current: 45, max: 45 },
@@ -432,12 +444,12 @@ pub fn spawn_portal_horrors(
                 class: CharacterClass::Warlock,
                 level: 3,
                 armor_class: 13,
-                strength: 10,
-                dexterity: 14,
-                constitution: 14,
-                intelligence: 14,
-                wisdom: 12,
-                charisma: 18,
+                strength: warlock_scores.strength as i32,
+                dexterity: warlock_scores.dexterity as i32,
+                constitution: warlock_scores.constitution as i32,
+                intelligence: warlock_scores.intelligence as i32,
+                wisdom: warlock_scores.wisdom as i32,
+                charisma: warlock_scores.charisma as i32,
             },
             ExperienceReward(700),
             FactionNpcRank(NpcRank::Named),
@@ -446,6 +458,15 @@ pub fn spawn_portal_horrors(
             PortalHorror { world_origin: WORLD_DEVILS_CASINO },
             NavPath::default(),
             NavReplanTimer::default(),
+            // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+            (
+                NpcClass(CharacterClass::Warlock),
+                NpcLevel(3),
+                warlock_scores,
+                warlock_mods,
+                HitDice::for_class_level(&CharacterClass::Warlock, 3),
+                SavingThrowProficiencies::for_class(&CharacterClass::Warlock),
+            ),
         ));
         tracing::info!(portal_id = portal.id, "Void Gambler spawned from CasinoPortal");
     }
@@ -456,6 +477,8 @@ pub fn spawn_portal_horrors(
         let jx = ((jitter_seed % 5) as f32) - 2.0;
         let jy = ((jitter_seed.wrapping_mul(23) % 5) as f32) - 2.0;
         let pos = WorldPosition { x: jx, y: jy, z: 0.0 };
+        let druid_scores = AbilityScores { strength: 10, dexterity: 12, constitution: 14, intelligence: 12, wisdom: 16, charisma: 10 };
+        let druid_mods = AbilityModifiers::from_scores(&druid_scores);
         commands.spawn((
             pos.clone(),
             Health { current: 33, max: 33 },
@@ -465,12 +488,12 @@ pub fn spawn_portal_horrors(
                 class: CharacterClass::Druid,
                 level: 2,
                 armor_class: 11,
-                strength: 10,
-                dexterity: 12,
-                constitution: 14,
-                intelligence: 12,
-                wisdom: 16,
-                charisma: 10,
+                strength: druid_scores.strength as i32,
+                dexterity: druid_scores.dexterity as i32,
+                constitution: druid_scores.constitution as i32,
+                intelligence: druid_scores.intelligence as i32,
+                wisdom: druid_scores.wisdom as i32,
+                charisma: druid_scores.charisma as i32,
             },
             ExperienceReward(450),
             FactionNpcRank(NpcRank::Named),
@@ -479,6 +502,15 @@ pub fn spawn_portal_horrors(
             PortalHorror { world_origin: WORLD_HIVEMIND_FUNGUS },
             NavPath::default(),
             NavReplanTimer::default(),
+            // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+            (
+                NpcClass(CharacterClass::Druid),
+                NpcLevel(2),
+                druid_scores,
+                druid_mods,
+                HitDice::for_class_level(&CharacterClass::Druid, 2),
+                SavingThrowProficiencies::for_class(&CharacterClass::Druid),
+            ),
         ));
         tracing::info!(portal_id = portal.id, "Spore Wraith spawned from FungusPortal");
     }
@@ -690,11 +722,12 @@ pub fn update_threat_registry(
 fn spawn_bounty_hunter(commands: &mut Commands, near: &WorldPosition, rank: NpcRank, tick: u64) {
     let iron_wolves = FactionId(SmolStr::new("iron_wolves"));
     let class = CharacterClass::Ranger;
-    let scores = fellytip_shared::components::AbilityScores::for_class(&class, rank);
+    let scores = AbilityScores::for_class(&class, rank);
+    let mods = AbilityModifiers::from_scores(&scores);
     let (hp, ac, level, xp_reward) = match rank {
-        NpcRank::Grunt => (20, 13, 1, 50),
-        NpcRank::Named => (40, 15, 5, 300),
-        NpcRank::Boss => (65, 17, 8, 700),
+        NpcRank::Grunt => (20, 13, 1u32, 50),
+        NpcRank::Named => (40, 15, 5u32, 300),
+        NpcRank::Boss => (65, 17, 8u32, 700),
     };
     // Spawn slightly offset from player position.
     let offset = (tick % 5) as f32 * 3.0 + 5.0;
@@ -709,7 +742,7 @@ fn spawn_bounty_hunter(commands: &mut Commands, near: &WorldPosition, rank: NpcR
         CombatParticipant {
             id: CombatantId(Uuid::new_v4()),
             interrupt_stack: InterruptStack::default(),
-            class,
+            class: class.clone(),
             level,
             armor_class: ac,
             strength: scores.strength as i32,
@@ -728,6 +761,15 @@ fn spawn_bounty_hunter(commands: &mut Commands, near: &WorldPosition, rank: NpcR
         EntityKind::FactionNpc,
         NavPath::default(),
         NavReplanTimer::default(),
+        // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
+        (
+            NpcClass(class.clone()),
+            NpcLevel(level),
+            scores,
+            mods,
+            HitDice::for_class_level(&class, level),
+            SavingThrowProficiencies::for_class(&class),
+        ),
     ));
 }
 
