@@ -536,7 +536,7 @@ pub fn tick_population_system(
             .map(|f| f.resources.military_strength)
             .unwrap_or(0.0);
         let targets = faction_hostile_targets.get(&state.faction_id).map(|v| v.as_slice()).unwrap_or(&[]);
-        let (next, effects) = tick_population(state, targets, None);
+        let (mut next, effects) = tick_population(state, targets, None);
 
         for effect in effects {
             match effect {
@@ -648,8 +648,30 @@ pub fn tick_population_system(
                 }
                 PopulationEffect::Starvation { settlement_id } => {
                     tracing::warn!(%settlement_id, faction = %next.faction_id.0, "Starvation: NPC died");
-                    // A story event is worth emitting here for narrative purposes.
-                    // The actual adult_count decrement already happened in the pure function.
+                    // Emit famine story event when food is critically low and starvation is prolonged.
+                    if next.economy.food_supply < next.economy.food_consumption * 0.1
+                        && next.economy.starve_ticks > 100
+                    {
+                        story_events.write(WriteStoryEvent(StoryEvent {
+                            id: Uuid::new_v4(),
+                            tick: tick.0,
+                            world_day: (tick.0 / 300) as u32,
+                            kind: StoryEventKind::FamineStrike {
+                                faction_id: next.faction_id.clone(),
+                                settlement_id: next.settlement_id,
+                            },
+                            participants: vec![],
+                            location: Some(IVec2::new(next.home_x as i32, next.home_y as i32)),
+                            lore_tags: vec!["famine".into(), "starvation".into()],
+                        }));
+                        tracing::warn!(
+                            %settlement_id,
+                            faction = %next.faction_id.0,
+                            food = next.economy.food_supply,
+                            starve_ticks = next.economy.starve_ticks,
+                            "Famine grips settlement — population starving"
+                        );
+                    }
                 }
                 PopulationEffect::SettlementCollapsed { settlement_id, faction_id, x, y, .. } => {
                     tracing::warn!(%settlement_id, faction = %faction_id.0, "Settlement collapsed");
@@ -665,6 +687,11 @@ pub fn tick_population_system(
                 }
             }
         }
+        // Passive military recovery: adults contribute to military readiness.
+        let recruit_rate = (next.adult_count as f32 * 0.005).min(0.5);
+        next.military_strength = (next.military_strength + recruit_rate)
+            .min(next.adult_count as f32 * 2.0);
+
         pop.settlements.insert(sid, next);
     }
 }
@@ -1104,6 +1131,8 @@ pub fn tick_settlement_economy(
 pub fn tick_siege_counters(
     mut pop: ResMut<FactionPopulationState>,
     war_party_q: Query<(&WarPartyMember, &WorldPosition)>,
+    tick: Res<WorldSimTick>,
+    mut story_events: MessageWriter<WriteStoryEvent>,
 ) {
     use fellytip_shared::world::population::BATTLE_RADIUS;
 
@@ -1122,6 +1151,30 @@ pub fn tick_siege_counters(
     for (sid, state) in pop.settlements.iter_mut() {
         if *sieged.get(sid).unwrap_or(&false) {
             state.economy.siege_ticks = state.economy.siege_ticks.saturating_add(1);
+
+            // Siege auto-surrender: prolonged siege with low military → collapse.
+            if state.economy.siege_ticks > 1000 && state.military_strength <= 5.0 {
+                state.military_strength = 0.0;
+                state.collapsed = true;
+                story_events.write(WriteStoryEvent(StoryEvent {
+                    id: Uuid::new_v4(),
+                    tick: tick.0,
+                    world_day: (tick.0 / 300) as u32,
+                    kind: StoryEventKind::SiegeSurrender {
+                        faction_id: state.faction_id.clone(),
+                        settlement_id: *sid,
+                    },
+                    participants: vec![],
+                    location: Some(IVec2::new(state.home_x as i32, state.home_y as i32)),
+                    lore_tags: vec!["siege".into(), "surrender".into(), "collapse".into()],
+                }));
+                tracing::warn!(
+                    settlement = %sid,
+                    faction = %state.faction_id.0,
+                    siege_ticks = state.economy.siege_ticks,
+                    "Settlement surrendered after prolonged siege"
+                );
+            }
         } else {
             state.economy.siege_ticks = 0;
         }

@@ -53,6 +53,10 @@ pub enum StoryEventKind {
     PredatorExtinction  { species: crate::world::ecology::SpeciesId, region: crate::world::ecology::RegionId },
     /// Wildlife loot was dropped at a location (#115).
     WildlifeLootDropped { region: crate::world::ecology::RegionId },
+    /// A settlement is gripped by famine with critically low food supply (#95).
+    FamineStrike        { faction_id: FactionId, settlement_id: Uuid },
+    /// A settlement surrendered after a prolonged siege (#95).
+    SiegeSurrender      { faction_id: FactionId, settlement_id: Uuid },
 }
 
 // ── Story event ───────────────────────────────────────────────────────────────
