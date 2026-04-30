@@ -73,11 +73,15 @@ impl Experience {
         355_000, // to reach level 20
     ];
 
-    /// XP required to advance from `current_level` to the next level.
-    /// Returns 0 at level 20 (cap).
+    /// XP required to advance from `current_level` to `current_level + 1` (incremental).
+    /// Returns 0 at level 20 (cap — no further advancement).
     pub fn xp_to_next_level(current_level: u32) -> u32 {
-        let next = (current_level + 1).min(20) as usize;
-        Self::XP_THRESHOLDS[next]
+        if current_level >= 20 {
+            return 0;
+        }
+        let current_idx = current_level as usize;
+        let next_idx = (current_level + 1) as usize;
+        Self::XP_THRESHOLDS[next_idx] - Self::XP_THRESHOLDS[current_idx]
     }
 
     pub fn new() -> Self {
@@ -1123,5 +1127,31 @@ mod tests {
             let back: NpcClass = serde_json::from_str(&json).unwrap();
             assert_eq!(c, back);
         }
+    }
+
+    #[test]
+    fn experience_xp_to_next_level_returns_incremental_not_cumulative() {
+        // SRD table: cumulative totals → level 1=0, level 2=300, level 3=900, level 4=2700
+        // Incremental: level 1→2 = 300, level 2→3 = 600, level 3→4 = 1800
+        assert_eq!(Experience::xp_to_next_level(1),  300);
+        assert_eq!(Experience::xp_to_next_level(2),  600);
+        assert_eq!(Experience::xp_to_next_level(3),  1_800);
+        assert_eq!(Experience::xp_to_next_level(4),  3_800);
+        assert_eq!(Experience::xp_to_next_level(9),  16_000);
+        assert_eq!(Experience::xp_to_next_level(19), 50_000);
+    }
+
+    #[test]
+    fn experience_xp_to_next_level_returns_zero_at_cap() {
+        assert_eq!(Experience::xp_to_next_level(20), 0);
+        assert_eq!(Experience::xp_to_next_level(21), 0);
+    }
+
+    #[test]
+    fn experience_new_starts_at_level1_with_correct_xp_to_next() {
+        let e = Experience::new();
+        assert_eq!(e.level, 1);
+        assert_eq!(e.xp, 0);
+        assert_eq!(e.xp_to_next, 300);
     }
 }

@@ -7,7 +7,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::combat::{
-        interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
+        interrupt::{AbilityContext, InterruptFrame, InterruptStack},
         rules::{apply_effects, resolve_ability, resolve_spell},
         spells::SpellSlots,
         types::{
