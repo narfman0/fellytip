@@ -21,10 +21,10 @@ use fellytip_shared::{
     components::{EntityKind, GrowthStage, Health, WildlifeKind, WorldPosition},
     world::{
         ecology::{
-            AnimalState, apply_spatial_balance, EcologyEvent, EcologyRole,
+            AnimalState, apply_spatial_balance, cave_carrying_capacity, EcologyEvent, EcologyRole,
             FarmPlotState, FloraKind, FloraState, LootKind,
             Population, RegionEcology, RegionId, SpeciesId, tick_ecology,
-            tree_growth_rate,
+            tree_growth_rate, CAVE_HERBIVORE, CAVE_PREDATOR,
         },
         map::{smooth_surface_at, TileKind, WorldMap, MAP_WIDTH, MAP_HALF_WIDTH, MAP_HALF_HEIGHT, CHUNK_TILES},
         story::{StoryEvent, StoryEventKind, WriteStoryEvent},
@@ -130,6 +130,7 @@ impl Plugin for EcologyPlugin {
         app.add_systems(
             WorldSimSchedule,
             (
+                apply_pressure_to_cave_ecology,
                 run_ecology_tick,
                 apply_balance_dynamics,
                 sync_wildlife_entities,
@@ -225,6 +226,46 @@ pub fn seed_ecology(map: Res<WorldMap>, mut state: ResMut<EcologyState>) {
                 alpha,
                 beta,
                 delta,
+            });
+        }
+    }
+
+    // ── Underground / cave regions ────────────────────────────────────────────
+    // Seed cave ecology for each macro-region that has a cave tile as its
+    // dominant walkable surface. Cave species use halved birth rates (slower
+    // reproduction in resource-scarce cave environments).
+    for ry in 0..MACRO_GRID {
+        for rx in 0..MACRO_GRID {
+            let cx = (rx * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
+            let cy = (ry * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
+
+            let Some(col) = map.column_at(cx, cy) else { continue };
+            // Look for a cave layer (non-walkable surface layers are skipped by the main loop).
+            let cave_layer = col.layers.iter().find(|l| {
+                matches!(l.kind, TileKind::CaveFloor | TileKind::CrystalCave | TileKind::LavaFloor)
+            });
+            let Some(cave_layer) = cave_layer else { continue };
+
+            let base_k = cave_carrying_capacity(cave_layer.kind);
+            // Cave birth rate is half the standard surface rate (slower reproduction).
+            let cave_r = 0.05; // half of typical surface r ≈ 0.1
+
+            let region_id = RegionId(smol_str::SmolStr::new(format!("cave_{rx}_{ry}")));
+            state.regions.push(RegionEcology {
+                region: region_id,
+                prey: Population {
+                    species: SpeciesId(smol_str::SmolStr::new(CAVE_HERBIVORE)),
+                    count: base_k * 0.4, // start at ~40% of carrying capacity
+                },
+                predator: Population {
+                    species: SpeciesId(smol_str::SmolStr::new(CAVE_PREDATOR)),
+                    count: (base_k * 0.05).max(1.0),
+                },
+                r: cave_r,
+                k: base_k,
+                alpha: 0.003,
+                beta: 0.1,
+                delta: 0.024,
             });
         }
     }
@@ -977,6 +1018,51 @@ fn flush_ecology_to_db(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// ── Issue #84: Pressure-driven cave carrying capacity reduction ───────────────
+
+/// Apply underground pressure to reduce carrying capacity of cave ecology regions.
+///
+/// Each tick, cave regions' effective carrying capacity is reduced proportional
+/// to underground pressure: pressure_factor = 1.0 - (pressure * 0.3).min(0.5).
+/// At max pressure (1.0) this gives a 30% cap reduction (not exceeding 50%).
+pub fn apply_pressure_to_cave_ecology(
+    mut ecology: ResMut<EcologyState>,
+    pressure: Res<crate::plugins::ai::UndergroundPressure>,
+    map: Option<Res<WorldMap>>,
+) {
+    let Some(map) = map else { return };
+
+    let pressure_factor = 1.0 - (pressure.score * 0.3).min(0.5) as f64;
+
+    for region in ecology.regions.iter_mut() {
+        // Only apply to cave regions (prefixed with "cave_").
+        if !region.region.0.starts_with("cave_") {
+            continue;
+        }
+
+        // Determine base carrying capacity from tile kind.
+        // Parse region coordinates from the id to sample the map.
+        let s = match region.region.0.strip_prefix("cave_") {
+            Some(s) => s,
+            None => continue,
+        };
+        let mut parts = s.splitn(2, '_');
+        let rx: usize = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let ry: usize = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let cx = (rx * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
+        let cy = (ry * MACRO_REGION_SIZE + MACRO_REGION_SIZE / 2) as f32 - MAP_HALF_WIDTH as f32;
+
+        let Some(col) = map.column_at(cx, cy) else { continue };
+        let cave_layer = col.layers.iter().find(|l| {
+            matches!(l.kind, TileKind::CaveFloor | TileKind::CrystalCave | TileKind::LavaFloor)
+        });
+        let Some(cave_layer) = cave_layer else { continue };
+
+        let base_k = cave_carrying_capacity(cave_layer.kind);
+        region.k = base_k * pressure_factor;
+    }
+}
 
 /// Extract (x, y) tile-space center for a macro-region ID of the form "macro_{rx}_{ry}".
 /// Returns (0, 0) for unrecognised IDs.

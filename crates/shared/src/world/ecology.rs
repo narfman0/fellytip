@@ -329,6 +329,15 @@ pub fn apply_spatial_balance(
     events
 }
 
+// ── Cave creature type constants ─────────────────────────────────────────────
+
+/// Cave herbivore species id: slow-reproducing fungus-eater.
+pub const CAVE_HERBIVORE: &str = "cave_grub";
+/// Cave predator species id: cave predator.
+pub const CAVE_PREDATOR: &str = "troglodyte";
+/// Fungus-zone specific colonial organism species id.
+pub const MYCONID_COLONY: &str = "myconid";
+
 // ── Cave ecology ─────────────────────────────────────────────────────────────
 
 /// Carrying capacity for prey species based on the dominant cave biome near a
