@@ -3,6 +3,7 @@
 //! All types here are pure data — no ECS, no I/O.
 
 use crate::world::faction::FactionId;
+use bevy::reflect::Reflect;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
@@ -39,7 +40,7 @@ impl Default for CoreStats {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Reflect)]
 pub enum CharacterClass {
     // ── Legacy player-facing aliases (kept for save compatibility) ────────────
     Warrior,
