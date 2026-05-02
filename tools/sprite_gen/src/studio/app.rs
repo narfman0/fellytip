@@ -1,18 +1,14 @@
 //! Main application state and UI for the Sprite Studio.
 
 use crate::{
-    assembler::assemble_atlas,
     generator::{FrameRequest, MockGenerator, SpriteGenerator},
-    layout::AtlasLayout,
-    manifest::{to_ron, AtlasManifest},
     openai::OpenAiDalleGenerator,
     stability::StabilityGenerator,
 };
 use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry, StylePreset};
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
-    time::Instant,
+    sync::mpsc::{self, Receiver},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,14 +33,6 @@ pub struct StudioApp {
     gen_images: Vec<Option<image::RgbaImage>>,
     selected_variant: Option<usize>,
     gen_receiver: Option<Receiver<(usize, image::RgbaImage)>>,
-
-    // Animation preview
-    selected_anim: usize,
-    preview_frame: usize,
-    preview_textures: Vec<egui::TextureHandle>,
-    anim_generating: bool,
-    anim_receiver: Option<Receiver<(usize, image::RgbaImage)>>,
-    anim_timer: Instant,
 
     // Approved base.png for the current entity (loaded from disk, persists across navigation)
     approved_texture: Option<egui::TextureHandle>,
@@ -98,12 +86,6 @@ impl StudioApp {
             gen_images: vec![None, None, None, None],
             selected_variant: None,
             gen_receiver: None,
-            selected_anim: 0,
-            preview_frame: 0,
-            preview_textures: Vec::new(),
-            anim_generating: false,
-            anim_receiver: None,
-            anim_timer: Instant::now(),
             approved_texture: None,
             approved_loaded: false,
             output_dir,
@@ -176,60 +158,6 @@ impl StudioApp {
         }
     }
 
-    fn poll_anim_receiver(&mut self, ctx: &egui::Context) {
-        if let Some(rx) = &self.anim_receiver {
-            let mut done_count = 0;
-            loop {
-                match rx.try_recv() {
-                    Ok((idx, img)) => {
-                        let label = format!("anim_frame_{}", idx);
-                        let tex = rgba_to_egui(ctx, &img, &label);
-                        if idx < self.preview_textures.len() {
-                            self.preview_textures[idx] = tex;
-                        } else {
-                            // Fill gaps with empty if needed
-                            while self.preview_textures.len() < idx {
-                                // placeholder — won't be shown until filled
-                                self.preview_textures.push(tex.clone());
-                            }
-                            self.preview_textures.push(tex);
-                        }
-                        done_count += 1;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        self.anim_generating = false;
-                        self.anim_receiver = None;
-                        break;
-                    }
-                }
-            }
-            if done_count > 0 {
-                ctx.request_repaint();
-            }
-        }
-    }
-
-    fn advance_anim_timer(&mut self, ctx: &egui::Context) {
-        if self.preview_textures.is_empty() {
-            return;
-        }
-        let fps = self
-            .current_entity()
-            .and_then(|e| e.animations.get(self.selected_anim))
-            .map(|a| a.fps as f32)
-            .unwrap_or(4.0)
-            .max(1.0);
-        let frame_dur = std::time::Duration::from_secs_f32(1.0 / fps);
-        if self.anim_timer.elapsed() >= frame_dur {
-            self.preview_frame = (self.preview_frame + 1) % self.preview_textures.len();
-            self.anim_timer = Instant::now();
-            ctx.request_repaint();
-        } else {
-            ctx.request_repaint_after(frame_dur.saturating_sub(self.anim_timer.elapsed()));
-        }
-    }
-
     fn spawn_generate_variants(&mut self) {
         if self.bestiary.is_empty() {
             return;
@@ -270,48 +198,6 @@ impl StudioApp {
         }
     }
 
-    fn spawn_generate_anim_frames(&mut self) {
-        if self.bestiary.is_empty() {
-            return;
-        }
-        let entry = self.bestiary[self.selected_entity].clone();
-        let anim = match entry.animations.get(self.selected_anim) {
-            Some(a) => a.clone(),
-            None => return,
-        };
-        let style = self.selected_style_value().to_string();
-
-        self.preview_textures.clear();
-        self.preview_frame = 0;
-        self.anim_generating = true;
-
-        let frame_count = anim.frames as usize;
-        let (tx, rx): (Sender<(usize, image::RgbaImage)>, _) = mpsc::channel();
-        self.anim_receiver = Some(rx);
-
-        for frame in 0..frame_count {
-            let tx = tx.clone();
-            let entry = entry.clone();
-            let anim_name = anim.name.clone();
-            let style = style.clone();
-            let generator = self.make_generator();
-            std::thread::spawn(move || {
-                let req = FrameRequest {
-                    entity_id: entry.id.as_str(),
-                    animation: anim_name.as_str(),
-                    direction: 0,
-                    frame: frame as u32,
-                    tile_size: 64,
-                    base_prompt: &entry.ai_prompt_base,
-                    style: &style,
-                };
-                if let Ok(img) = generator.generate(req) {
-                    let _ = tx.send((frame, img));
-                }
-            });
-        }
-    }
-
     fn approve_base_png(&mut self, ctx: &egui::Context) {
         let Some(variant_idx) = self.selected_variant else {
             self.status = "No variant selected.".into();
@@ -343,51 +229,6 @@ impl StudioApp {
         }
     }
 
-    fn approve_atlas(&mut self) {
-        let Some(entry) = self.current_entity() else {
-            return;
-        };
-        let entry = entry.clone();
-        let anim = match entry.animations.get(self.selected_anim) {
-            Some(a) => a.clone(),
-            None => return,
-        };
-        let out_dir = self.output_dir.join(entry.id.as_str());
-        if let Err(e) = std::fs::create_dir_all(&out_dir) {
-            self.status = format!("Failed to create dir: {e}");
-            return;
-        }
-
-        let generator = self.make_generator();
-        let layout = AtlasLayout::from_entry(&entry);
-        match assemble_atlas(generator.as_ref() as &(dyn SpriteGenerator + Sync), &entry, &layout, 4) {
-            Ok(atlas) => {
-                let png_path = out_dir.join(format!("{}.png", anim.name));
-                let ron_path = out_dir.join(format!("{}.ron", anim.name));
-                if let Err(e) = atlas.save(&png_path) {
-                    self.status = format!("Atlas save failed: {e}");
-                    return;
-                }
-                let manifest = AtlasManifest::from(&layout);
-                match to_ron(&manifest) {
-                    Ok(ron_text) => {
-                        if let Err(e) = std::fs::write(&ron_path, ron_text) {
-                            self.status = format!("RON save failed: {e}");
-                            return;
-                        }
-                        self.status = format!(
-                            "Atlas saved to {} and {}",
-                            png_path.display(),
-                            ron_path.display()
-                        );
-                    }
-                    Err(e) => self.status = format!("RON serialization failed: {e}"),
-                }
-            }
-            Err(e) => self.status = format!("Atlas generation failed: {e}"),
-        }
-    }
-
     fn show_entity_list(&mut self, ui: &mut egui::Ui) {
         ui.heading("Entities");
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -400,7 +241,6 @@ impl StudioApp {
                 };
                 if ui.selectable_label(selected, label).clicked() && self.selected_entity != i {
                     self.selected_entity = i;
-                    self.selected_anim = 0;
                     self.gen_results = vec![None, None, None, None];
                     self.gen_images = vec![None, None, None, None];
                     self.selected_variant = None;
@@ -412,10 +252,6 @@ impl StudioApp {
                     }
                     self.gen_receiver = None;
                     self.generating = false;
-                    self.preview_textures.clear();
-                    self.preview_frame = 0;
-                    self.anim_receiver = None;
-                    self.anim_generating = false;
                     self.approved_texture = None;
                     self.approved_loaded = false;
                     self.status.clear();
@@ -575,90 +411,6 @@ impl StudioApp {
             ui.label(&self.status);
         }
     }
-
-    fn show_anim_preview_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Animation preview");
-
-        let Some(entry) = self.bestiary.get(self.selected_entity).cloned() else {
-            return;
-        };
-
-        if entry.animations.is_empty() {
-            ui.label("No animations defined.");
-            return;
-        }
-
-        // Animation selector
-        ui.horizontal(|ui| {
-            ui.label("Anim:");
-            let current_anim_name = entry
-                .animations
-                .get(self.selected_anim)
-                .map(|a| a.name.as_str())
-                .unwrap_or("—");
-            egui::ComboBox::from_id_salt("anim_select")
-                .selected_text(current_anim_name)
-                .show_ui(ui, |ui| {
-                    for (i, anim) in entry.animations.iter().enumerate() {
-                        if ui
-                            .selectable_label(self.selected_anim == i, anim.name.as_str())
-                            .clicked()
-                            && self.selected_anim != i
-                        {
-                            self.selected_anim = i;
-                            self.preview_textures.clear();
-                            self.preview_frame = 0;
-                            self.anim_receiver = None;
-                            self.anim_generating = false;
-                        }
-                    }
-                });
-
-            // Frame navigation
-            let frame_total = self.preview_textures.len().max(1);
-            if ui.button("◄").clicked() && self.preview_frame > 0 {
-                self.preview_frame -= 1;
-                self.anim_timer = Instant::now();
-            }
-            ui.label(format!("frame {}/{}", self.preview_frame + 1, frame_total));
-            if ui.button("►").clicked() && self.preview_frame + 1 < frame_total {
-                self.preview_frame += 1;
-                self.anim_timer = Instant::now();
-            }
-
-            let fps = entry
-                .animations
-                .get(self.selected_anim)
-                .map(|a| a.fps)
-                .unwrap_or(4);
-            ui.label(format!("FPS: {}", fps));
-        });
-
-        // Frame thumbnail
-        if let Some(tex) = self.preview_textures.get(self.preview_frame) {
-            ui.add(egui::Image::new(tex).max_size(egui::vec2(128.0, 128.0)));
-        } else {
-            ui.allocate_space(egui::vec2(128.0, 128.0));
-        }
-
-        ui.horizontal(|ui| {
-            let gen_btn = egui::Button::new("Generate frames");
-            if ui.add_enabled(!self.anim_generating, gen_btn).clicked() {
-                self.spawn_generate_anim_frames();
-            }
-            if self.anim_generating {
-                ui.spinner();
-            }
-
-            let approve_enabled = !self.preview_textures.is_empty();
-            if ui
-                .add_enabled(approve_enabled, egui::Button::new("Approve → atlas"))
-                .clicked()
-            {
-                self.approve_atlas();
-            }
-        });
-    }
 }
 
 impl eframe::App for StudioApp {
@@ -667,8 +419,6 @@ impl eframe::App for StudioApp {
             self.load_approved_base(ctx);
         }
         self.poll_gen_receiver(ctx);
-        self.poll_anim_receiver(ctx);
-        self.advance_anim_timer(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.columns(2, |cols| {
@@ -677,22 +427,9 @@ impl eframe::App for StudioApp {
                     self.show_entity_list(ui);
                 });
 
-                // Right panel — generation + animation preview
+                // Right panel — generation
                 cols[1].group(|ui| {
-                    // Split right panel vertically
-                    let available = ui.available_height();
-                    let top_height = available * 0.6;
-
-                    egui::Frame::default().show(ui, |ui| {
-                        ui.set_min_height(top_height);
-                        self.show_generation_panel(ui);
-                    });
-
-                    ui.separator();
-
-                    egui::Frame::default().show(ui, |ui| {
-                        self.show_anim_preview_panel(ui);
-                    });
+                    self.show_generation_panel(ui);
                 });
             });
         });
