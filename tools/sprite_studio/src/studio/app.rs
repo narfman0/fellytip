@@ -7,6 +7,7 @@ use crate::{
 };
 use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry, StylePreset};
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::mpsc::{self, Receiver},
 };
@@ -18,6 +19,26 @@ pub enum BackendChoice {
     StabilityAi,
 }
 
+struct EntityGenState {
+    generating: bool,
+    gen_results: Vec<Option<egui::TextureHandle>>,
+    gen_images: Vec<Option<image::RgbaImage>>,
+    selected_variant: Option<usize>,
+    gen_receiver: Option<Receiver<(usize, image::RgbaImage)>>,
+}
+
+impl EntityGenState {
+    fn new() -> Self {
+        Self {
+            generating: false,
+            gen_results: vec![None, None, None, None],
+            gen_images: vec![None, None, None, None],
+            selected_variant: None,
+            gen_receiver: None,
+        }
+    }
+}
+
 pub struct StudioApp {
     bestiary: Vec<BestiaryEntry>,
     styles: Vec<StylePreset>,
@@ -27,12 +48,8 @@ pub struct StudioApp {
     openai_available: bool,
     stability_available: bool,
 
-    // Generation state — 4 variant slots
-    generating: bool,
-    gen_results: Vec<Option<egui::TextureHandle>>,
-    gen_images: Vec<Option<image::RgbaImage>>,
-    selected_variant: Option<usize>,
-    gen_receiver: Option<Receiver<(usize, image::RgbaImage)>>,
+    // Per-entity generation state — keyed by bestiary index
+    entity_gen: HashMap<usize, EntityGenState>,
 
     // Approved base.png for the current entity (loaded from disk, persists across navigation)
     approved_texture: Option<egui::TextureHandle>,
@@ -81,11 +98,7 @@ impl StudioApp {
             backend,
             openai_available,
             stability_available,
-            generating: false,
-            gen_results: vec![None, None, None, None],
-            gen_images: vec![None, None, None, None],
-            selected_variant: None,
-            gen_receiver: None,
+            entity_gen: HashMap::new(),
             approved_texture: None,
             approved_loaded: false,
             output_dir,
@@ -128,33 +141,49 @@ impl StudioApp {
         }
     }
 
-    fn poll_gen_receiver(&mut self, ctx: &egui::Context) {
-        if let Some(rx) = &self.gen_receiver {
-            let mut done_count = 0;
-            loop {
-                match rx.try_recv() {
-                    Ok((idx, img)) => {
-                        let label = format!("variant_{}", idx);
-                        self.gen_results[idx] = Some(rgba_to_egui(ctx, &img, &label));
-                        self.gen_images[idx] = Some(img);
-                        done_count += 1;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        self.generating = false;
-                        self.gen_receiver = None;
-                        break;
+    // Poll every active per-entity receiver so background generation continues when navigated away.
+    fn poll_all_gen_receivers(&mut self, ctx: &egui::Context) {
+        let entity_indices: Vec<usize> = self.entity_gen.keys().cloned().collect();
+        let mut any_update = false;
+
+        for entity_idx in entity_indices {
+            let state = self.entity_gen.get_mut(&entity_idx).unwrap();
+            if state.gen_receiver.is_none() {
+                continue;
+            }
+
+            // Drain the channel into a local vec to avoid holding &state.gen_receiver
+            // while mutating other state fields.
+            let mut received: Vec<(usize, image::RgbaImage)> = Vec::new();
+            let mut disconnected = false;
+            if let Some(rx) = &state.gen_receiver {
+                loop {
+                    match rx.try_recv() {
+                        Ok(item) => received.push(item),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
                     }
                 }
             }
-            // Check if all 4 slots are filled
-            if self.gen_results.iter().all(|r| r.is_some()) {
-                self.generating = false;
-                self.gen_receiver = None;
+
+            for (idx, img) in received {
+                let label = format!("variant_{}_{}", entity_idx, idx);
+                state.gen_results[idx] = Some(rgba_to_egui(ctx, &img, &label));
+                state.gen_images[idx] = Some(img);
+                any_update = true;
             }
-            if done_count > 0 {
-                ctx.request_repaint();
+
+            if disconnected || state.gen_results.iter().all(|r| r.is_some()) {
+                state.generating = false;
+                state.gen_receiver = None;
             }
+        }
+
+        if any_update {
+            ctx.request_repaint();
         }
     }
 
@@ -162,15 +191,11 @@ impl StudioApp {
         if self.bestiary.is_empty() {
             return;
         }
-        let entry = self.bestiary[self.selected_entity].clone();
+        let entity_idx = self.selected_entity;
+        let entry = self.bestiary[entity_idx].clone();
         let style = self.selected_style_value().to_string();
-        self.gen_results = vec![None, None, None, None];
-        self.gen_images = vec![None, None, None, None];
-        self.selected_variant = None;
-        self.generating = true;
 
         let (tx, rx) = mpsc::channel::<(usize, image::RgbaImage)>();
-        self.gen_receiver = Some(rx);
 
         for variant in 0..4usize {
             let tx = tx.clone();
@@ -196,14 +221,30 @@ impl StudioApp {
                 }
             });
         }
+
+        let state = self.entity_gen.entry(entity_idx).or_insert_with(EntityGenState::new);
+        state.gen_results = vec![None, None, None, None];
+        state.gen_images = vec![None, None, None, None];
+        state.selected_variant = None;
+        state.generating = true;
+        state.gen_receiver = Some(rx);
     }
 
     fn approve_base_png(&mut self, ctx: &egui::Context) {
-        let Some(variant_idx) = self.selected_variant else {
+        let entity_idx = self.selected_entity;
+        let Some(variant_idx) = self
+            .entity_gen
+            .get(&entity_idx)
+            .and_then(|s| s.selected_variant)
+        else {
             self.status = "No variant selected.".into();
             return;
         };
-        let Some(img) = self.gen_images[variant_idx].clone() else {
+        let Some(img) = self
+            .entity_gen
+            .get(&entity_idx)
+            .and_then(|s| s.gen_images[variant_idx].clone())
+        else {
             self.status = "Variant image not available.".into();
             return;
         };
@@ -234,24 +275,28 @@ impl StudioApp {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (i, entry) in self.bestiary.iter().enumerate() {
                 let selected = self.selected_entity == i;
-                let label = if selected {
-                    format!("> {}", entry.display_name)
-                } else {
-                    format!("  {}", entry.display_name)
+
+                let gen_indicator = match self.entity_gen.get(&i) {
+                    Some(s) if s.generating => " ⏳",
+                    Some(s) if s.gen_results.iter().any(|r| r.is_some()) => " ✓",
+                    _ => "",
                 };
+
+                let label = if selected {
+                    format!("> {}{}", entry.display_name, gen_indicator)
+                } else {
+                    format!("  {}{}", entry.display_name, gen_indicator)
+                };
+
                 if ui.selectable_label(selected, label).clicked() && self.selected_entity != i {
                     self.selected_entity = i;
-                    self.gen_results = vec![None, None, None, None];
-                    self.gen_images = vec![None, None, None, None];
-                    self.selected_variant = None;
                     // Sync style selector to the new entity's default
                     if let Some(e) = self.bestiary.get(i) {
                         if let Some(idx) = self.styles.iter().position(|s| s.name == e.ai_style) {
                             self.selected_style = idx;
                         }
                     }
-                    self.gen_receiver = None;
-                    self.generating = false;
+                    // Generation state is kept in entity_gen — background work continues.
                     self.approved_texture = None;
                     self.approved_loaded = false;
                     self.status.clear();
@@ -261,7 +306,8 @@ impl StudioApp {
     }
 
     fn show_generation_panel(&mut self, ui: &mut egui::Ui) {
-        let Some(entry) = self.bestiary.get(self.selected_entity).cloned() else {
+        let entity_idx = self.selected_entity;
+        let Some(entry) = self.bestiary.get(entity_idx).cloned() else {
             ui.label("No entity selected.");
             return;
         };
@@ -271,12 +317,11 @@ impl StudioApp {
         ui.horizontal(|ui| {
             ui.label("Prompt:");
             ui.add(
-                egui::TextEdit::singleline(
-                    &mut entry.ai_prompt_base.clone(),
-                )
-                .desired_width(ui.available_width()),
+                egui::TextEdit::singleline(&mut entry.ai_prompt_base.clone())
+                    .desired_width(ui.available_width()),
             );
         });
+
         if !self.styles.is_empty() {
             ui.horizontal(|ui| {
                 ui.label("Style:");
@@ -334,11 +379,16 @@ impl StudioApp {
                     }
                 });
 
+            let generating = self
+                .entity_gen
+                .get(&entity_idx)
+                .map(|s| s.generating)
+                .unwrap_or(false);
             let gen_btn = egui::Button::new("Generate 4 variants");
-            if ui.add_enabled(!self.generating, gen_btn).clicked() {
+            if ui.add_enabled(!generating, gen_btn).clicked() {
                 self.spawn_generate_variants();
             }
-            if self.generating {
+            if generating {
                 ui.spinner();
             }
         });
@@ -357,10 +407,25 @@ impl StudioApp {
 
         ui.separator();
 
+        // Pre-extract per-slot data to avoid holding an entity_gen borrow inside closures.
+        let selected_variant = self
+            .entity_gen
+            .get(&entity_idx)
+            .and_then(|s| s.selected_variant);
+        let variant_textures: Vec<Option<egui::TextureHandle>> = (0..4)
+            .map(|i| {
+                self.entity_gen
+                    .get(&entity_idx)
+                    .and_then(|s| s.gen_results[i].clone())
+            })
+            .collect();
+
+        let mut new_selected = selected_variant;
+
         // 4 variant thumbnails
         ui.horizontal(|ui| {
-            for i in 0..4 {
-                let is_selected = self.selected_variant == Some(i);
+            for (i, tex_slot) in variant_textures.iter().enumerate() {
+                let is_selected = selected_variant == Some(i);
                 let frame = egui::Frame::default()
                     .stroke(if is_selected {
                         egui::Stroke::new(3.0, egui::Color32::YELLOW)
@@ -369,37 +434,50 @@ impl StudioApp {
                     })
                     .inner_margin(2.0);
 
-                frame.show(ui, |ui| {
-                    let label = if is_selected {
-                        format!("{} ✓", i + 1)
-                    } else {
-                        format!("{}", i + 1)
-                    };
+                let clicked = frame
+                    .show(ui, |ui| {
+                        let label = if is_selected {
+                            format!("{} ✓", i + 1)
+                        } else {
+                            format!("{}", i + 1)
+                        };
 
-                    if let Some(tex) = &self.gen_results[i] {
-                        let img = egui::Image::new(tex)
-                            .max_size(egui::vec2(80.0, 80.0))
-                            .sense(egui::Sense::click());
-                        let resp = ui.add(img);
-                        ui.label(&label);
-                        if resp.clicked() {
-                            self.selected_variant = Some(i);
+                        if let Some(tex) = tex_slot {
+                            let img = egui::Image::new(tex)
+                                .max_size(egui::vec2(80.0, 80.0))
+                                .sense(egui::Sense::click());
+                            let resp = ui.add(img);
+                            ui.label(&label);
+                            resp.clicked()
+                        } else {
+                            let (resp, _painter) = ui.allocate_painter(
+                                egui::vec2(80.0, 80.0),
+                                egui::Sense::click(),
+                            );
+                            ui.label(&label);
+                            // Empty slot is not clickable
+                            let _ = resp;
+                            false
                         }
-                    } else {
-                        let (resp, _painter) =
-                            ui.allocate_painter(egui::vec2(80.0, 80.0), egui::Sense::click());
-                        ui.label(&label);
-                        if resp.clicked() && self.gen_results[i].is_some() {
-                            self.selected_variant = Some(i);
-                        }
-                    }
-                });
+                    })
+                    .inner;
+
+                if clicked {
+                    new_selected = Some(i);
+                }
             }
         });
 
+        if new_selected != selected_variant {
+            self.entity_gen
+                .entry(entity_idx)
+                .or_insert_with(EntityGenState::new)
+                .selected_variant = new_selected;
+        }
+
         ui.separator();
 
-        let approve_enabled = self.selected_variant.is_some();
+        let approve_enabled = selected_variant.is_some();
         if ui
             .add_enabled(approve_enabled, egui::Button::new("Approve selected → save base.png"))
             .clicked()
@@ -418,7 +496,7 @@ impl eframe::App for StudioApp {
         if !self.approved_loaded {
             self.load_approved_base(ctx);
         }
-        self.poll_gen_receiver(ctx);
+        self.poll_all_gen_receivers(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.columns(2, |cols| {
