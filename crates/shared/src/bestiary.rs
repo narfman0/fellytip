@@ -78,9 +78,6 @@ pub enum BestiaryError {
     #[error("duplicate entity id `{0}`")]
     DuplicateId(SmolStr),
 
-    #[error("entity `{0}` must declare at least one animation")]
-    NoAnimations(SmolStr),
-
     #[error("entity `{id}` has invalid directions value {value} (expected 4 or 8)")]
     BadDirections { id: SmolStr, value: u8 },
 
@@ -139,9 +136,6 @@ fn validate(entries: &[BestiaryEntry]) -> Result<(), BestiaryError> {
                 value: e.directions,
             });
         }
-        if e.animations.is_empty() {
-            return Err(BestiaryError::NoAnimations(e.id.clone()));
-        }
         for a in &e.animations {
             if a.frames == 0 {
                 return Err(BestiaryError::ZeroFrames {
@@ -166,11 +160,6 @@ directions = 8
 ai_prompt_base = "goblin scout"
 ai_style = "pixel art"
 palette_seed = "forest_green"
-
-[[entity.animation]]
-name = "idle"
-frames = 4
-fps = 4
 "#;
 
     #[test]
@@ -181,9 +170,7 @@ fps = 4
         assert_eq!(e.id.as_str(), "goblin_scout");
         assert_eq!(e.display_name, "Goblin Scout");
         assert_eq!(e.directions, 8);
-        assert_eq!(e.animations.len(), 1);
-        assert_eq!(e.animations[0].name.as_str(), "idle");
-        assert_eq!(e.animations[0].frames, 4);
+        assert!(e.animations.is_empty());
     }
 
     #[test]
@@ -230,11 +217,6 @@ directions     = 8
 ai_prompt_base = "goblin scout"
 ai_style       = "tiny"
 palette_seed   = "forest_green"
-
-[[entity.animation]]
-name   = "idle"
-frames = 4
-fps    = 4
 "#;
         let b = parse_bestiary(src).unwrap();
         assert_eq!(b.resolve_style("tiny"), "pixel art, 32x32");
@@ -246,21 +228,6 @@ fps    = 4
         let src = format!("{MINIMAL}\n{MINIMAL}");
         let err = parse_bestiary(&src).unwrap_err();
         assert!(matches!(err, BestiaryError::DuplicateId(ref id) if id.as_str() == "goblin_scout"));
-    }
-
-    #[test]
-    fn rejects_missing_animations() {
-        let src = r#"
-[[entity]]
-id = "empty"
-display_name = "Empty"
-directions = 8
-ai_prompt_base = "x"
-ai_style = "y"
-palette_seed = "z"
-"#;
-        let err = parse_bestiary(src).unwrap_err();
-        assert!(matches!(err, BestiaryError::NoAnimations(ref id) if id.as_str() == "empty"));
     }
 
     #[test]
