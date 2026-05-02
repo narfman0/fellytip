@@ -24,7 +24,12 @@ cargo run -p fellytip-client -- --headless
 # Preview the generated world as ASCII art
 cargo run -p world_gen -- --seed 42
 cargo run -p world_gen -- --seed 42 --width 120 --height 50
+
+# Sprite + 3D mesh studio — browse entities, generate sprites, approve atlas images
+cargo run -p character_studio
 ```
+
+See [`tools/character_studio/README.md`](tools/character_studio/README.md) for backend setup (OpenAI / Stability AI / Mock) and the `MESHY_API_KEY` env var for 3D mesh generation.
 
 **Note:** Always run commands from the workspace root (`fellytip/`), not from inside a crate directory. The server and client run in separate terminals and connect automatically on localhost.
 
