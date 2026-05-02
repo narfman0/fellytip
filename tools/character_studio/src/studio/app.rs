@@ -1016,7 +1016,7 @@ impl StudioApp {
 
     fn show_entity_list(&mut self, ui: &mut egui::Ui) {
         ui.heading("Entities");
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("entity_list").show(ui, |ui| {
             for (i, entry) in self.bestiary.iter().enumerate() {
                 let selected = self.selected_entity == i;
 
@@ -1521,6 +1521,7 @@ impl eframe::App for StudioApp {
                 cols[1].group(|ui| {
                     let height = ui.available_height();
                     egui::ScrollArea::vertical()
+                        .id_salt("generation_panel")
                         .max_height(height)
                         .show(ui, |ui| {
                             self.show_generation_panel(ui);
