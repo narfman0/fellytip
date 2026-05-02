@@ -1108,6 +1108,13 @@ impl StudioApp {
         });
     }
 
+    fn spawn_preview(&self, entity_id: &str) {
+        let _ = std::process::Command::new("cargo")
+            .args(["run", "--quiet", "-p", "preview", "--", entity_id])
+            .current_dir(find_repo_root())
+            .spawn();
+    }
+
     fn show_generation_panel(&mut self, ui: &mut egui::Ui) {
         let entity_idx = self.selected_entity;
         let Some(_entry) = self.bestiary.get(entity_idx) else {
@@ -1116,7 +1123,19 @@ impl StudioApp {
         };
 
         let display_name = self.bestiary[entity_idx].display_name.clone();
-        ui.heading(format!("Entity: {}", display_name));
+        let entity_id = self.bestiary[entity_idx].id.clone();
+        let stage = self.entity_stage.get(&entity_idx).copied().unwrap_or(PipelineStage::Draft);
+
+        ui.horizontal(|ui| {
+            ui.heading(format!("Entity: {}", display_name));
+            let preview_enabled = stage >= PipelineStage::MeshDone;
+            if ui
+                .add_enabled(preview_enabled, egui::Button::new("\u{1f50d} Preview"))
+                .clicked()
+            {
+                self.spawn_preview(entity_id.as_str());
+            }
+        });
 
         ui.horizontal(|ui| {
             ui.label("Prompt:");
@@ -1547,6 +1566,23 @@ fn find_assets_dir() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn find_repo_root() -> std::path::PathBuf {
+    let mut dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            let content = std::fs::read_to_string(&cargo_toml).unwrap_or_default();
+            if content.contains("[workspace]") {
+                return dir;
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
 fn scan_stage(models_dir: &std::path::Path, sprites_dir: &std::path::Path, id: &str) -> PipelineStage {
