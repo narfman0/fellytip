@@ -1,7 +1,8 @@
 [package]
-name    = "character_studio"
-version = "0.1.0"
-edition = "2021"
+name        = "character_studio"
+version     = "0.1.0"
+edition     = "2021"
+default-run = "character_studio"
 
 [dependencies]
 fellytip-shared = { workspace = true }
