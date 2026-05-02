@@ -22,7 +22,7 @@ See `docs/` for product documentation:
 | `tools/worldwatch` | Async egui dashboard — live world inspector + DM control panel over BRP |
 | `tools/world_gen` | ASCII world preview: `cargo run -p world_gen -- --seed N` |
 | `tools/sprite_gen` | Sprite atlas generator: `cargo run -p sprite_gen -- --all` (mock) or `--backend dalle --api-key sk-...` |
-| `tools/mesh_gen` | 3-stage 3D pipeline: `cargo run -p mesh_gen -- --all` (mock) or `--backend live` (requires `SPRITE_GEN_API_KEY` + `MESHY_API_KEY`). Stages: `--stage sprite` (DALL-E PNG), `--stage mesh` (Meshy image-to-3d GLB), `--stage animated` (Meshy text-to-3d rigged GLB, default). Outputs to `assets/sprites/` and `assets/models/`. |
+| `tools/mesh_gen` | Rigged+animated 3D model pipeline: `cargo run -p mesh_gen -- --all` (mock) or `--backend live` (requires `MESHY_API_KEY`). Uses Meshy text-to-3d to produce animated GLBs. Outputs to `assets/models/`. Sprite generation is handled by `sprite_gen`. |
 
 ### Bestiary
 
