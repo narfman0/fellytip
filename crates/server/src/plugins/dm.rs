@@ -23,6 +23,7 @@
 //! | `dm/force_underground_pressure` | Force pressure score to 1.0 for tests |
 //! | `dm/query_portals`              | List all portal trigger positions      |
 //! | `dm/spawn_wildlife`             | Spawn a wildlife entity at a world position |
+//! | `dm/list_settlements`           | Return all settlement names + world-space coords |
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
@@ -32,6 +33,7 @@ use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
     components::{EntityKind, GrowthStage, Health, WildlifeKind, WorldPosition},
     world::{
+        civilization::Settlements,
         ecology::RegionId,
         faction::FactionId,
         population::WAR_PARTY_SIZE,
@@ -385,4 +387,56 @@ pub fn dm_query_portals(In(_params): In<Option<Value>>, world: &mut World) -> Br
         .collect();
     tracing::debug!(count = portals.len(), "DM queried portals");
     Ok(json!(portals))
+}
+
+// ── dm/list_settlements ───────────────────────────────────────────────────────
+
+/// List all generated settlements with their world-space coordinates.
+///
+/// Params: `{}` (none required); optional `{ "kind": "Capital" | "Town" }` to filter.
+/// Returns a JSON array of `{ "name": str, "kind": str, "x": f32, "y": f32, "z": f32 }`.
+/// `x`/`y` are already in Bevy world-space (tile_x − MAP_HALF_WIDTH + 0.5).
+pub fn dm_list_settlements(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    use fellytip_shared::world::civilization::SettlementKind;
+    use fellytip_shared::world::map::{MAP_HALF_WIDTH, MAP_HALF_HEIGHT};
+
+    let kind_filter: Option<String> = opt(&params, "kind");
+
+    let settlements = world
+        .get_resource::<Settlements>()
+        .ok_or_else(|| BrpError::internal("Settlements resource not found"))?;
+
+    let list: Vec<Value> = settlements
+        .0
+        .iter()
+        .filter(|s| {
+            kind_filter.as_deref().is_none_or(|k| {
+                let label = match s.kind {
+                    SettlementKind::Capital => "Capital",
+                    SettlementKind::Town    => "Town",
+                    _                        => "Other",
+                };
+                label.eq_ignore_ascii_case(k)
+            })
+        })
+        .map(|s| {
+            let world_x = s.x - MAP_HALF_WIDTH as f32;
+            let world_y = s.y - MAP_HALF_HEIGHT as f32;
+            let kind_str = match s.kind {
+                SettlementKind::Capital => "Capital",
+                SettlementKind::Town    => "Town",
+                _                        => "Other",
+            };
+            json!({
+                "name":  s.name,
+                "kind":  kind_str,
+                "x":     world_x,
+                "y":     world_y,
+                "z":     s.z,
+            })
+        })
+        .collect();
+
+    tracing::debug!(count = list.len(), "DM listed settlements");
+    Ok(json!(list))
 }

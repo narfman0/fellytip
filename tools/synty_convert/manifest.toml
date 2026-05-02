@@ -1,0 +1,193 @@
+# Synty Polygon Fantasy Kingdom — priority FBX → GLB conversion manifest.
+# Only converts the ~65 assets needed by Fellytip's rendering pipeline.
+# Run via: blender --background --python tools/synty_convert/convert.py -- <src_fbx_dir> <dst_asset_dir>
+# src_fbx_dir  = path to the flat FBX folder in the Synty source pack
+# dst_asset_dir = crates/client/assets  (GLBs land in synty/buildings/ and synty/nature/)
+
+# ── Preset houses (10 unique designs for settlement variety) ─────────────────
+[[convert]]
+src = "SM_Bld_Preset_House_01_A_Optimized.fbx"
+dst = "synty/buildings/house_01.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_02_A_Optimized.fbx"
+dst = "synty/buildings/house_02.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_03_Optimized.fbx"
+dst = "synty/buildings/house_03.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_04_Optimized.fbx"
+dst = "synty/buildings/house_04.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_05_Optimized.fbx"
+dst = "synty/buildings/house_05.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_06_Optimized.fbx"
+dst = "synty/buildings/house_06.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_07_Optimized.fbx"
+dst = "synty/buildings/house_07.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_08_Optimized.fbx"
+dst = "synty/buildings/house_08.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_09_A_Optimized.fbx"
+dst = "synty/buildings/house_09.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_10_Optimized.fbx"
+dst = "synty/buildings/house_10.glb"
+
+# ── Specialty buildings ────────────────────────────────────────────────────────
+[[convert]]
+src = "SM_Bld_Preset_Tavern_01_Optimized.fbx"
+dst = "synty/buildings/tavern.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_Tower_01_Optimized.fbx"
+dst = "synty/buildings/tower.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_Windmill_01_Base_Optimized.fbx"
+dst = "synty/buildings/windmill_base.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_House_Windmill_01_Blades_Optimized.fbx"
+dst = "synty/buildings/windmill_blades.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_Blacksmith_01_Optimized.fbx"
+dst = "synty/buildings/blacksmith.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_Church_01_A_Optimized.fbx"
+dst = "synty/buildings/church.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_Stables_01_Optimized.fbx"
+dst = "synty/buildings/stables.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_Hut_01_Optimized.fbx"
+dst = "synty/buildings/hut_01.glb"
+
+[[convert]]
+src = "SM_Bld_Preset_Hut_02_Optimized.fbx"
+dst = "synty/buildings/hut_02.glb"
+
+# ── Round (broadleaf) trees ────────────────────────────────────────────────────
+[[convert]]
+src = "SM_Env_Tree_Round_01.fbx"
+dst = "synty/nature/tree_round_01.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Round_02.fbx"
+dst = "synty/nature/tree_round_02.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Round_03.fbx"
+dst = "synty/nature/tree_round_03.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Round_04.fbx"
+dst = "synty/nature/tree_round_04.glb"
+
+# ── Large trees ────────────────────────────────────────────────────────────────
+[[convert]]
+src = "SM_Env_Tree_Large_01.fbx"
+dst = "synty/nature/tree_large_01.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Large_02.fbx"
+dst = "synty/nature/tree_large_02.glb"
+
+# ── Thin (conifer-like) trees ──────────────────────────────────────────────────
+[[convert]]
+src = "SM_Env_Tree_Thin_01.fbx"
+dst = "synty/nature/tree_thin_01.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Thin_02.fbx"
+dst = "synty/nature/tree_thin_02.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Thin_03.fbx"
+dst = "synty/nature/tree_thin_03.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Thin_04.fbx"
+dst = "synty/nature/tree_thin_04.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Thin_05.fbx"
+dst = "synty/nature/tree_thin_05.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Thin_06.fbx"
+dst = "synty/nature/tree_thin_06.glb"
+
+# ── Pine clusters (conifer biome density) ─────────────────────────────────────
+[[convert]]
+src = "SM_Env_Tree_Pine_Cluster_01.fbx"
+dst = "synty/nature/tree_pine_cluster_01.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Pine_Cluster_02.fbx"
+dst = "synty/nature/tree_pine_cluster_02.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Pine_Cluster_04.fbx"
+dst = "synty/nature/tree_pine_cluster_04.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Pine_Cluster_05.fbx"
+dst = "synty/nature/tree_pine_cluster_05.glb"
+
+# ── Dead trees (desert / tundra biomes) ───────────────────────────────────────
+[[convert]]
+src = "SM_Env_Tree_Dead_01.fbx"
+dst = "synty/nature/tree_dead_01.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Dead_02.fbx"
+dst = "synty/nature/tree_dead_02.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Dead_03.fbx"
+dst = "synty/nature/tree_dead_03.glb"
+
+[[convert]]
+src = "SM_Env_Tree_Dead_04.fbx"
+dst = "synty/nature/tree_dead_04.glb"
+
+# ── Bushes ─────────────────────────────────────────────────────────────────────
+[[convert]]
+src = "SM_Env_Bush_01.fbx"
+dst = "synty/nature/bush_01.glb"
+
+[[convert]]
+src = "SM_Env_Bush_02.fbx"
+dst = "synty/nature/bush_02.glb"
+
+[[convert]]
+src = "SM_Env_Bush_03.fbx"
+dst = "synty/nature/bush_03.glb"
+
+[[convert]]
+src = "SM_Env_Bush_04.fbx"
+dst = "synty/nature/bush_04.glb"
+
+[[convert]]
+src = "SM_Env_Bush_05.fbx"
+dst = "synty/nature/bush_05.glb"
+
+[[convert]]
+src = "SM_Env_Bush_06.fbx"
+dst = "synty/nature/bush_06.glb"

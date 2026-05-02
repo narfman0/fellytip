@@ -55,6 +55,7 @@ impl Plugin for TerrainPlugin {
 fn setup_terrain_assets(
     mut commands:  Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server:  Res<AssetServer>,
 ) {
     // Regenerate the world map on the client with the default seed.  If the
     // server used a different seed it will send WorldMeta and apply_world_meta
@@ -67,7 +68,7 @@ fn setup_terrain_assets(
     let buildings = generate_buildings(&settlements, &map, WORLD_SEED);
     apply_building_tiles(&buildings, &mut map);
 
-    let material = create_terrain_material(&mut materials);
+    let material = create_terrain_material(&mut materials, &asset_server);
     let water_mat = create_water_material(&mut materials);
     commands.insert_resource(TerrainAssets { material });
     commands.insert_resource(WaterMaterialHandle(water_mat));

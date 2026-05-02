@@ -4,7 +4,7 @@
 //! The terrain system shares a single `StandardMaterial { vertex_colors: true }` so
 //! every chunk uses one draw-call regardless of how many biomes it spans.
 
-use bevy::math::Vec3;
+use bevy::math::{Affine2, Vec2, Vec3};
 use bevy::prelude::*;
 use fellytip_shared::world::map::{TileKind, WorldMap};
 
@@ -78,15 +78,21 @@ pub fn corner_biome_color(map: &WorldMap, gx: usize, gy: usize) -> [f32; 4] {
 
 /// Create the one shared terrain material.
 ///
-/// Bevy 0.18 applies `ATTRIBUTE_COLOR` vertex data automatically when the mesh
-/// carries that attribute — no field needed on `StandardMaterial`.  Setting
-/// `base_color = WHITE` makes the PBR base-colour a neutral identity so the
-/// vertex colour passes through unmodified.
+/// Vertex colors (from `biome_color`) act as a multiplicative tint over the
+/// Synty ground grass texture, giving textural detail across all biomes.
+/// Desert tiles tint the grass yellow-brown, tundra near-white, etc.
+///
+/// One texture repeat per 4 world-units gives visible poly detail without
+/// excessive tiling at typical zoom levels.
 pub fn create_terrain_material(
     materials: &mut Assets<StandardMaterial>,
+    asset_server: &AssetServer,
 ) -> Handle<StandardMaterial> {
     materials.add(StandardMaterial {
         base_color: Color::WHITE,
+        base_color_texture: Some(asset_server.load("synty/textures/PFK_Texture_Ground_Grass_01.png")),
+        // 1 repeat per 4 world-units (tile is 1 unit, so 4 tiles per repeat).
+        uv_transform: Affine2::from_scale(Vec2::splat(0.25)),
         perceptual_roughness: 0.88,
         metallic: 0.0,
         reflectance: 0.3,

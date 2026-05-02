@@ -73,7 +73,7 @@ impl Default for OrbitCamera {
             min_pitch: 0.40,
             max_pitch: PI * 0.5 - 0.02,
             min_distance: 1.0,
-            max_distance: 11.0,
+            max_distance: 150.0,
             orbit_speed: 0.005,
             zoom_speed: 4.0,
             free_orbit: false,

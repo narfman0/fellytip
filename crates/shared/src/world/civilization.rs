@@ -112,6 +112,10 @@ pub struct Building {
     /// per-faction art direction without server queries.
     #[serde(default)]
     pub faction_id: Option<String>,
+    /// Visual variant index (0–9) used by the renderer to pick among Synty preset
+    /// house models. Derived deterministically from the building UUID.
+    #[serde(default)]
+    pub style_variant: u8,
 }
 
 /// Bevy resource holding all procedurally generated buildings.
@@ -914,8 +918,10 @@ fn make_building(
         .filter(|l| l.is_surface_kind() && l.walkable)
         .map(|l| l.z_top)
         .fold(f32::NEG_INFINITY, f32::max);
+    let id = deterministic_uuid(rng);
+    let style_variant = (id.as_u128() % 10) as u8;
     Building {
-        id: deterministic_uuid(rng),
+        id,
         settlement_id,
         kind,
         tx,
@@ -923,6 +929,7 @@ fn make_building(
         z,
         rotation: (rng.random::<u8>() % 4),
         faction_id: None,
+        style_variant,
     }
 }
 
@@ -942,8 +949,10 @@ fn make_cave_building(
         .filter(|l| l.walkable && matches!(l.kind, TileKind::CaveFloor | TileKind::CrystalCave))
         .map(|l| l.z_top)
         .fold(f32::NEG_INFINITY, f32::max);
+    let id = deterministic_uuid(rng);
+    let style_variant = (id.as_u128() % 10) as u8;
     Building {
-        id: deterministic_uuid(rng),
+        id,
         settlement_id,
         kind,
         tx,
@@ -951,6 +960,7 @@ fn make_cave_building(
         z,
         rotation: (rng.random::<u8>() % 4),
         faction_id: None,
+        style_variant,
     }
 }
 

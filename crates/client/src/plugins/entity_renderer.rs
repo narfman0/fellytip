@@ -3,12 +3,12 @@
 //! Every entity that arrives from the server with a `WorldPosition` + `Replicated`
 //! gets a visual component inserted directly:
 //!
-//! | `EntityKind`  | Visual                                      |
-//! |---------------|---------------------------------------------|
-//! | absent        | Kenney `characterMedium` GLB                | ← player
-//! | `FactionNpc`  | Kenney `characterLarge{Male/Female}`        |
-//! | `Wildlife`    | Kenney Prototype Kit animal GLB (3 species) |
-//! | `Settlement`  | Kenney Fantasy Town Kit GLB scene          |
+//! | `EntityKind`  | Visual                                           |
+//! |---------------|--------------------------------------------------|
+//! | absent        | Kenney `characterMedium` GLB                     | ← player
+//! | `FactionNpc`  | Kenney `characterLarge{Male/Female}`             |
+//! | `Wildlife`    | Kenney Prototype Kit animal GLB (3 species)      |
+//! | `Building`    | Synty Polygon Fantasy Kingdom preset GLBs        |
 //!
 //! A separate system keeps the Bevy `Transform` in sync as the server pushes
 //! position updates.
@@ -162,43 +162,23 @@ struct TowerMaterials {
     roof_mat: Handle<StandardMaterial>,
 }
 
-/// GLB scene handles for all [`BuildingKind`] variants.
+/// GLB scene handles for building visuals. Houses 01-10 are Synty preset models
+/// selected by building-ID hash for settlement variety.
 #[derive(Resource)]
 struct BuildingAssets {
-    tent_detailed:   Handle<Scene>,
-    tent_small:      Handle<Scene>,
-    campfire_stones: Handle<Scene>,
-    windmill:        Handle<Scene>,
-    stall:           Handle<Scene>,
-    stall_bench:     Handle<Scene>,
-    stall_green:     Handle<Scene>,
-    stall_red:       Handle<Scene>,
-    fountain:        Handle<Scene>,
-    lantern:         Handle<Scene>,
-}
-
-impl BuildingAssets {
-    fn scene_for(&self, kind: BuildingKind) -> Handle<Scene> {
-        match kind {
-            BuildingKind::TentDetailed   => self.tent_detailed.clone(),
-            BuildingKind::TentSmall      => self.tent_small.clone(),
-            BuildingKind::CampfireStones => self.campfire_stones.clone(),
-            BuildingKind::Windmill       => self.windmill.clone(),
-            BuildingKind::Stall          => self.stall.clone(),
-            BuildingKind::StallBench     => self.stall_bench.clone(),
-            BuildingKind::StallGreen     => self.stall_green.clone(),
-            BuildingKind::StallRed       => self.stall_red.clone(),
-            BuildingKind::Fountain       => self.fountain.clone(),
-            BuildingKind::Lantern        => self.lantern.clone(),
-            // Multi-story interior building kinds have no GLB scene yet —
-            // they are purely zone-graph metadata. Fall back to a generic asset.
-            BuildingKind::Tavern
-            | BuildingKind::Barracks
-            | BuildingKind::Tower
-            | BuildingKind::Keep
-            | BuildingKind::CapitalTower => self.tent_detailed.clone(),
-        }
-    }
+    // Synty Polygon Fantasy Kingdom — 10 preset house variants.
+    synty_houses:     [Handle<Scene>; 10],
+    // Synty specialty buildings.
+    synty_tavern:     Handle<Scene>,
+    synty_blacksmith: Handle<Scene>,
+    synty_church:     Handle<Scene>,
+    synty_stables:    Handle<Scene>,
+    synty_huts:       [Handle<Scene>; 2],
+    // Synty windmill — base and blades are separate GLBs spawned as siblings.
+    windmill_base:    Handle<Scene>,
+    windmill_blades:  Handle<Scene>,
+    // Kenney campfire (no Synty equivalent; used for campfire particle anchor).
+    campfire_stones:  Handle<Scene>,
 }
 
 fn generate_stone_texture(images: &mut Assets<Image>) -> Handle<Image> {
@@ -250,17 +230,22 @@ fn generate_stone_texture(images: &mut Assets<Image>) -> Handle<Image> {
 }
 
 fn setup_building_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let s = |p: &str| asset_server.load(format!("synty/buildings/{p}#Scene0"));
     commands.insert_resource(BuildingAssets {
-        tent_detailed:   asset_server.load("nature/tent_detailedClosed.glb#Scene0"),
-        tent_small:      asset_server.load("nature/tent_smallClosed.glb#Scene0"),
-        campfire_stones: asset_server.load("nature/campfire_stones.glb#Scene0"),
-        windmill:        asset_server.load("town/windmill.glb#Scene0"),
-        stall:           asset_server.load("town/stall.glb#Scene0"),
-        stall_bench:     asset_server.load("town/stall-bench.glb#Scene0"),
-        stall_green:     asset_server.load("town/stall-green.glb#Scene0"),
-        stall_red:       asset_server.load("town/stall-red.glb#Scene0"),
-        fountain:        asset_server.load("town/fountain-round.glb#Scene0"),
-        lantern:         asset_server.load("town/lantern.glb#Scene0"),
+        synty_houses: [
+            s("house_01.glb"), s("house_02.glb"), s("house_03.glb"),
+            s("house_04.glb"), s("house_05.glb"), s("house_06.glb"),
+            s("house_07.glb"), s("house_08.glb"), s("house_09.glb"),
+            s("house_10.glb"),
+        ],
+        synty_tavern:     s("tavern.glb"),
+        synty_blacksmith: s("blacksmith.glb"),
+        synty_church:     s("church.glb"),
+        synty_stables:    s("stables.glb"),
+        synty_huts:       [s("hut_01.glb"), s("hut_02.glb")],
+        windmill_base:    s("windmill_base.glb"),
+        windmill_blades:  s("windmill_blades.glb"),
+        campfire_stones:  asset_server.load("nature/campfire_stones.glb#Scene0"),
     });
 }
 
@@ -585,21 +570,16 @@ fn spawn_building_visuals(
         let translation = Vec3::new(wx, b.z, wy);
         let rotation = Quat::from_rotation_y(b.rotation as f32 * FRAC_PI_2);
 
-        if matches!(b.kind, BuildingKind::CapitalTower | BuildingKind::Tower | BuildingKind::Keep | BuildingKind::Tavern | BuildingKind::Barracks) {
-            // Determine world art direction for this building's world.
-            // Use z < 0 as underground heuristic (Sunken Realm = WorldId 1).
+        // Procedural towers for multi-floor interior buildings (Tavern now uses Synty GLB).
+        if matches!(b.kind, BuildingKind::CapitalTower | BuildingKind::Tower | BuildingKind::Keep | BuildingKind::Barracks) {
             let world_id = if b.z < 0.0 { 1u32 } else { 0u32 };
             let art = art_dir.get(world_id);
-
-            // If the building has a faction, use faction archetype colors;
-            // otherwise use world art direction building colors.
             let (wall_color, roof_color) = if let Some(ref fid) = b.faction_id {
                 let arch = faction_archetype(fid.as_str());
                 (Some(arch.tower_wall_color), Some(arch.tower_roof_color))
             } else {
                 (Some(art.building_wall_color), Some(art.building_roof_color))
             };
-
             spawn_hollow_tower(
                 &mut commands,
                 &mut meshes,
@@ -613,25 +593,65 @@ fn spawn_building_visuals(
             continue;
         }
 
-        let mut ecmds = commands.spawn((
-            SceneRoot(assets.scene_for(b.kind)),
-            Transform::from_translation(translation)
-                .with_rotation(rotation)
-                .with_scale(Vec3::splat(2.0)),
-            BuildingVisual,
-        ));
-        if b.kind == BuildingKind::Windmill {
-            ecmds.insert(WindmillBuilding);
+        // Pick a Synty GLB scene based on building kind and the deterministic style_variant.
+        let id_hash = b.style_variant as usize;
+        let scene: Option<Handle<Scene>> = match b.kind {
+            // Camps and outposts → small huts.
+            BuildingKind::TentSmall | BuildingKind::TentDetailed
+                => Some(assets.synty_huts[id_hash % 2].clone()),
+            // Craft / trade buildings — each stall type gets a fitting Synty preset.
+            BuildingKind::Stall | BuildingKind::StallGreen
+                => Some(assets.synty_stables.clone()),
+            BuildingKind::StallBench | BuildingKind::StallRed
+                => Some(assets.synty_blacksmith.clone()),
+            // Capital center landmark → church / large civic building.
+            BuildingKind::Fountain
+                => Some(assets.synty_church.clone()),
+            // Faction tavern → Synty tavern preset.
+            BuildingKind::Tavern
+                => Some(assets.synty_tavern.clone()),
+            // Windmill base (blades spawned as a separate sibling below).
+            BuildingKind::Windmill
+                => Some(assets.windmill_base.clone()),
+            // Campfire → Kenney model kept for the particle effect anchor.
+            BuildingKind::CampfireStones
+                => Some(assets.campfire_stones.clone()),
+            // Lantern → no mesh; only the PointLight + particle emitter below.
+            BuildingKind::Lantern
+                => None,
+            // Generic fallback — houses 06-10 (upper half of set).
+            _   => Some(assets.synty_houses[5 + id_hash % 5].clone()),
+        };
+
+        if let Some(scene_handle) = scene {
+            let mut ecmds = commands.spawn((
+                SceneRoot(scene_handle),
+                Transform::from_translation(translation)
+                    .with_rotation(rotation)
+                    .with_scale(Vec3::splat(1.0)),
+                BuildingVisual,
+            ));
+            if b.kind == BuildingKind::CampfireStones {
+                ecmds.insert(ParticleEmitter {
+                    kind: EmitterKind::Campfire,
+                    timer: Timer::from_seconds(0.15, TimerMode::Repeating),
+                });
+            }
         }
-        if b.kind == BuildingKind::CampfireStones {
-            ecmds.insert(ParticleEmitter {
-                kind: EmitterKind::Campfire,
-                timer: Timer::from_seconds(0.15, TimerMode::Repeating),
-            });
+
+        if b.kind == BuildingKind::Windmill {
+            // Blades are a separate Synty GLB at the same origin; tag directly with WindmillSpin.
+            commands.spawn((
+                SceneRoot(assets.windmill_blades.clone()),
+                Transform::from_translation(translation)
+                    .with_rotation(rotation)
+                    .with_scale(Vec3::splat(1.0)),
+                WindmillSpin,
+                BuildingVisual,
+            ));
         }
 
         if b.kind == BuildingKind::Lantern {
-            // Unique phase per lantern so each flickers independently.
             let phase = (b.tx as f32 * 7.3 + b.ty as f32 * 3.7).rem_euclid(TAU);
             commands.spawn((
                 PointLight {
@@ -642,7 +662,6 @@ fn spawn_building_visuals(
                     shadows_enabled: false,
                     ..default()
                 },
-                // Place the light at the lantern flame height (model top ~ 2 units tall at scale 2).
                 Transform::from_translation(Vec3::new(wx, b.z + 2.5, wy)),
                 LanternFlicker { phase },
                 BuildingVisual,
