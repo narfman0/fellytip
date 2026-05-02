@@ -436,6 +436,8 @@ mod tests {
                     fps: 10,
                 })
                 .collect(),
+            animation_ids: vec![],
+            mesh_prompt: String::new(),
         };
         let cols = *anim_frames.iter().max().unwrap_or(&1) as u32;
         let rows = anim_frames.len() as u32 * directions as u32;

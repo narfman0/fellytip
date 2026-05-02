@@ -136,6 +136,8 @@ mod tests {
                 frames: 2,
                 fps: 1,
             }],
+            animation_ids: vec![],
+            mesh_prompt: String::new(),
         }
     }
 

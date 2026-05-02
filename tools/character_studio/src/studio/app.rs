@@ -1110,8 +1110,13 @@ impl StudioApp {
     }
 
     fn spawn_preview(&self, entity_id: &str) {
-        let _ = std::process::Command::new("cargo")
-            .args(["run", "--quiet", "-p", "preview", "--", entity_id])
+        // Locate the preview binary next to the running character_studio executable.
+        let preview_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join(format!("preview{}", std::env::consts::EXE_SUFFIX))))
+            .unwrap_or_else(|| std::path::PathBuf::from("preview"));
+        let _ = std::process::Command::new(&preview_bin)
+            .arg(entity_id)
             .current_dir(find_repo_root())
             .spawn();
     }
@@ -1124,19 +1129,8 @@ impl StudioApp {
         };
 
         let display_name = self.bestiary[entity_idx].display_name.clone();
-        let entity_id = self.bestiary[entity_idx].id.clone();
-        let stage = self.entity_stage.get(&entity_idx).copied().unwrap_or(PipelineStage::Draft);
 
-        ui.horizontal(|ui| {
-            ui.heading(format!("Entity: {}", display_name));
-            let preview_enabled = stage >= PipelineStage::MeshDone;
-            if ui
-                .add_enabled(preview_enabled, egui::Button::new("\u{1f50d} Preview"))
-                .clicked()
-            {
-                self.spawn_preview(entity_id.as_str());
-            }
-        });
+        ui.heading(format!("Entity: {}", display_name));
 
         ui.horizontal(|ui| {
             ui.label("Prompt:");
@@ -1393,11 +1387,15 @@ impl StudioApp {
             }
 
             if stage >= PipelineStage::MeshDone {
-                if let Some(entry) = self.bestiary.get(entity_idx) {
-                    ui.label(format!(
-                        "Mesh: assets/models/{}/{}_mesh.glb",
-                        entry.id, entry.id
-                    ));
+                let id = self.bestiary.get(entity_idx).map(|e| e.id.clone());
+                if let Some(id) = id {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Mesh: assets/models/{id}/{id}_mesh.glb"));
+                        if ui.button("\u{1f50d} Preview").clicked() {
+                            self.spawn_preview(id.as_str());
+                            self.status = "Launching preview…".into();
+                        }
+                    });
                 }
             }
         });
@@ -1442,8 +1440,15 @@ impl StudioApp {
             }
 
             if stage >= PipelineStage::Merged {
-                if let Some(entry) = self.bestiary.get(entity_idx) {
-                    ui.label(format!("Merged: assets/models/{}/{}.glb", entry.id, entry.id));
+                let id = self.bestiary.get(entity_idx).map(|e| e.id.clone());
+                if let Some(id) = id {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Merged: assets/models/{id}/{id}.glb"));
+                        if ui.button("\u{1f50d} Preview").clicked() {
+                            self.spawn_preview(id.as_str());
+                            self.status = "Launching preview…".into();
+                        }
+                    });
                 }
             }
         });

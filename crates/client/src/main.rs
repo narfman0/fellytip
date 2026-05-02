@@ -15,7 +15,7 @@ use fellytip_shared::{
     components::{EntityBounds, Experience, WorldPosition},
     inputs::ActionIntent,
     protocol::{ChooseClassMessage, FellytipProtocolPlugin},
-    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT},
+    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, find_surface_spawn, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT, Z_SCALE},
 };
 use plugins::camera::OrbitCamera;
 
@@ -224,14 +224,20 @@ fn main() {
 fn tag_local_player(
     query: Query<(Entity, &WorldPosition), (With<Experience>, Without<LocalPlayer>)>,
     mut commands: Commands,
+    map: Option<Res<WorldMap>>,
 ) {
     let Ok((entity, pos)) = query.single() else { return };
+    // Snap z to the actual terrain surface using a high ceiling so that stale
+    // DB values or the (0,0,0) spawn fallback never place the player below ground.
+    let initial_z = map.as_deref()
+        .and_then(|m| smooth_surface_at(m, pos.x, pos.y, Z_SCALE * 3.0))
+        .unwrap_or(pos.z);
     commands.entity(entity).insert((
         LocalPlayer,
-        PredictedPosition { x: pos.x, y: pos.y, z: pos.z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
+        PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
         EntityBounds::PLAYER,
     ));
-    tracing::debug!("Tagged local player entity {entity:?}");
+    tracing::debug!("Tagged local player entity {entity:?} at z={initial_z:.2}");
 }
 
 // ── Host-mode frame-time monitoring ──────────────────────────────────────────
@@ -421,6 +427,19 @@ fn send_player_input(
                 pred.y += delta.z * correction_dt;
                 // The y-component of v_proj gives the along-slope elevation delta.
                 pred.z += v_proj.y * correction_dt;
+            }
+
+            // Safety floor: if the player falls through terrain (e.g. spawned on a
+            // non-walkable tile or walked off the map), snap back to a valid spawn.
+            if pred.z < -100.0 {
+                let (sx, sy, sz) = m.spawn_points.first().copied()
+                    .unwrap_or_else(|| find_surface_spawn(m));
+                pred.x = sx;
+                pred.y = sy;
+                pred.z = sz;
+                pred.z_vel = 0.0;
+                pred.grounded = true;
+                tracing::warn!("Player fell below floor — respawned at ({sx:.1}, {sy:.1}, {sz:.1})");
             }
         } else {
             pred.x = new_x;

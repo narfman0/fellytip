@@ -72,6 +72,8 @@ mod tests {
                 AnimationDef { name: "idle".into(),  frames: 4, fps: 4 },
                 AnimationDef { name: "walk".into(),  frames: 8, fps: 12 },
             ],
+            animation_ids: vec![],
+            mesh_prompt: String::new(),
         }
     }
 

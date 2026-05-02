@@ -2313,6 +2313,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "bevy",
  "color_quant",
  "eframe 0.31.1",
  "egui 0.31.1",
@@ -6173,15 +6174,6 @@ checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "preview"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bevy",
- "fellytip-shared",
 ]
 
 [[package]]

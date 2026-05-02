@@ -102,6 +102,8 @@ mod tests {
                     fps: 10,
                 })
                 .collect(),
+            animation_ids: vec![],
+            mesh_prompt: String::new(),
         }
     }
 

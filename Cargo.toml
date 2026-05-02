@@ -9,7 +9,6 @@ members = [
     "tools/ralph",
     "tools/character_studio",
     "tools/worldwatch",
-    "tools/preview",
 ]
 
 [workspace.dependencies]
