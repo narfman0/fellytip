@@ -7,7 +7,7 @@ members = [
     "tools/combat_sim",
     "tools/world_gen",
     "tools/ralph",
-    "tools/sprite_gen",
+    "tools/sprite_studio",
     "tools/worldwatch",
     "tools/mesh_gen",
 ]

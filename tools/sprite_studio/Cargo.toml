@@ -1,5 +1,5 @@
 [package]
-name    = "sprite_gen"
+name    = "sprite_studio"
 version = "0.1.0"
 edition = "2021"
 
@@ -21,10 +21,6 @@ egui            = "0.31"
 
 [dev-dependencies]
 tempfile = "3"
-
-[[bin]]
-name = "sprite_gen"
-path = "src/main.rs"
 
 [[bin]]
 name = "sprite_studio"
