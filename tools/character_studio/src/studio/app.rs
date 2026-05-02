@@ -67,6 +67,7 @@ enum MeshBackend {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 enum MeshSubStage {
     Idle,
     TextTo3dPreview,
@@ -1358,15 +1359,13 @@ impl StudioApp {
             ui.horizontal(|ui| {
                 ui.label("Backend:");
                 ui.selectable_value(&mut self.mesh_backend, MeshBackend::Mock, "Mock");
-                ui.add_enabled(
-                    self.meshy_available,
-                    egui::SelectableLabel::new(
-                        self.mesh_backend == MeshBackend::Live,
-                        "Live Meshy",
-                    ),
-                );
-                if self.mesh_backend == MeshBackend::Live && ui.button("Live Meshy").clicked() {
-                    // selectable_value above handles it; this is just a fallback click target
+                if self.meshy_available {
+                    ui.selectable_value(&mut self.mesh_backend, MeshBackend::Live, "Live Meshy");
+                } else {
+                    ui.add_enabled(
+                        false,
+                        egui::SelectableLabel::new(false, "Live Meshy (set MESHY_API_KEY)"),
+                    );
                 }
             });
 
@@ -1520,9 +1519,12 @@ impl eframe::App for StudioApp {
                 });
 
                 cols[1].group(|ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.show_generation_panel(ui);
-                    });
+                    let height = ui.available_height();
+                    egui::ScrollArea::vertical()
+                        .max_height(height)
+                        .show(ui, |ui| {
+                            self.show_generation_panel(ui);
+                        });
                 });
             });
         });
