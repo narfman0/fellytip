@@ -32,6 +32,7 @@ pub struct StudioApp {
     // Generation state — 4 variant slots
     generating: bool,
     gen_results: Vec<Option<egui::TextureHandle>>,
+    gen_images: Vec<Option<image::RgbaImage>>,
     selected_variant: Option<usize>,
     gen_receiver: Option<Receiver<(usize, image::RgbaImage)>>,
 
@@ -77,6 +78,7 @@ impl StudioApp {
             stability_available,
             generating: false,
             gen_results: vec![None, None, None, None],
+            gen_images: vec![None, None, None, None],
             selected_variant: None,
             gen_receiver: None,
             selected_anim: 0,
@@ -128,6 +130,7 @@ impl StudioApp {
                     Ok((idx, img)) => {
                         let label = format!("variant_{}", idx);
                         self.gen_results[idx] = Some(rgba_to_egui(ctx, &img, &label));
+                        self.gen_images[idx] = Some(img);
                         done_count += 1;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -209,6 +212,7 @@ impl StudioApp {
         }
         let entry = self.bestiary[self.selected_entity].clone();
         self.gen_results = vec![None, None, None, None];
+        self.gen_images = vec![None, None, None, None];
         self.selected_variant = None;
         self.generating = true;
 
@@ -285,19 +289,14 @@ impl StudioApp {
             self.status = "No variant selected.".into();
             return;
         };
+        let Some(img) = self.gen_images[variant_idx].clone() else {
+            self.status = "Variant image not available.".into();
+            return;
+        };
         let Some(entry) = self.current_entity() else {
             return;
         };
         let entity_id = entry.id.clone();
-        let generator = self.make_generator();
-        let anim_name = entry
-            .animations
-            .first()
-            .map(|a| a.name.as_str())
-            .unwrap_or("idle")
-            .to_string();
-        let base_prompt = entry.ai_prompt_base.clone();
-        let style = entry.ai_style.clone();
         let out_dir = self.output_dir.join(entity_id.as_str());
 
         if let Err(e) = std::fs::create_dir_all(&out_dir) {
@@ -305,28 +304,14 @@ impl StudioApp {
             return;
         }
 
-        let req = FrameRequest {
-            entity_id: entity_id.as_str(),
-            animation: &anim_name,
-            direction: 0,
-            frame: variant_idx as u32,
-            tile_size: 64,
-            base_prompt: &base_prompt,
-            style: &style,
-        };
-        match generator.generate(req) {
-            Ok(img) => {
-                let path = out_dir.join("base.png");
-                match img.save(&path) {
-                    Ok(_) => {
-                        self.status = format!("Saved {}", path.display());
-                        self.approved_loaded = false;
-                        self.load_approved_base(ctx);
-                    }
-                    Err(e) => self.status = format!("Save failed: {e}"),
-                }
+        let path = out_dir.join("base.png");
+        match img.save(&path) {
+            Ok(_) => {
+                self.status = format!("Saved {}", path.display());
+                self.approved_loaded = false;
+                self.load_approved_base(ctx);
             }
-            Err(e) => self.status = format!("Generate failed: {e}"),
+            Err(e) => self.status = format!("Save failed: {e}"),
         }
     }
 
@@ -389,6 +374,7 @@ impl StudioApp {
                     self.selected_entity = i;
                     self.selected_anim = 0;
                     self.gen_results = vec![None, None, None, None];
+                    self.gen_images = vec![None, None, None, None];
                     self.selected_variant = None;
                     self.gen_receiver = None;
                     self.generating = false;
