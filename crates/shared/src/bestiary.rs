@@ -2,7 +2,7 @@
 //! generation and billboard rendering.
 //!
 //! This module is deliberately ECS-free; Bevy never sees these types.  The
-//! `sprite_studio` tool loads `assets/bestiary.toml` to drive image generation,
+//! `character_studio` tool loads `assets/bestiary.toml` to drive image generation,
 //! and the client billboard renderer keys atlas lookups on the same ids.
 
 use serde::{Deserialize, Serialize};

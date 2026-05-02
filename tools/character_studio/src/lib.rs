@@ -1,4 +1,4 @@
-//! Library surface for the sprite_studio.  Exposed as a library so unit
+//! Library surface for the character_studio.  Exposed as a library so unit
 //! tests can exercise layout / assembler / manifest in isolation.
 
 pub mod assembler;

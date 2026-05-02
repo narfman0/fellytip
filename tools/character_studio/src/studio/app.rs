@@ -1,4 +1,4 @@
-//! Main application state and UI for the Sprite Studio.
+//! Main application state and UI for the Character Studio.
 
 use crate::{
     generator::{FrameRequest, MockGenerator, SpriteGenerator},
@@ -1478,7 +1478,7 @@ impl eframe::App for StudioApp {
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Sprite Studio");
+                ui.heading("Character Studio");
                 ui.separator();
                 let save_btn = egui::Button::new("💾 Save to Bestiary")
                     .fill(egui::Color32::from_rgb(0, 100, 0));

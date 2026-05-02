@@ -21,8 +21,8 @@ See `docs/` for product documentation:
 | `tools/ralph` | BRP HTTP test driver — asserts live world state via JSON-RPC |
 | `tools/worldwatch` | Async egui dashboard — live world inspector + DM control panel over BRP |
 | `tools/world_gen` | ASCII world preview: `cargo run -p world_gen -- --seed N` |
-| `tools/sprite_studio` | Sprite atlas generator + desktop studio: `cargo run -p sprite_studio` — opens the egui GUI. Select an entity, choose Mock/OpenAI/Stability backend, generate 4 variants, approve one. |
-| `tools/mesh_gen` | Rigged+animated 3D model pipeline: `cargo run -p mesh_gen -- --all` (mock) or `--backend live` (requires `MESHY_API_KEY`). Uses Meshy text-to-3d to produce animated GLBs. Outputs to `assets/models/`. Sprite generation is handled by `sprite_studio`. |
+| `tools/character_studio` | Sprite atlas generator + desktop studio: `cargo run -p character_studio` — opens the egui GUI. Select an entity, choose Mock/OpenAI/Stability backend, generate 4 variants, approve one. |
+| `tools/mesh_gen` | Rigged+animated 3D model pipeline: `cargo run -p mesh_gen -- --all` (mock) or `--backend live` (requires `MESHY_API_KEY`). Uses Meshy text-to-3d to produce animated GLBs. Outputs to `assets/models/`. Sprite generation is handled by `character_studio`. |
 
 ### Bestiary
 
@@ -78,7 +78,7 @@ cargo clippy --workspace -- -D warnings
 cargo run -p ralph -- --scenario all                # live end-to-end via BRP
 cargo run -p ralph -- --scenario underground_e2e     # zone-graph raid pipeline end-to-end
 cargo run -p world_gen -- --seed 42    # ASCII world preview (sanity check)
-cargo run -p sprite_studio                         # open Sprite Studio desktop GUI
+cargo run -p character_studio                      # open Character Studio desktop GUI
 ```
 
 Run `cargo clippy` before considering any task done.

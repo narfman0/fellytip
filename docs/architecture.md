@@ -11,7 +11,7 @@
 | `tools/combat_sim` | proptest harness for combat and ecology rules, no ECS |
 | `tools/world_gen` | Standalone ASCII world preview: `cargo run -p world_gen -- --seed N` |
 | `tools/worldwatch` | eframe desktop monitor: reads BRP + SQLite and displays live world state |
-| `tools/sprite_studio` | AI sprite-sheet generator + desktop studio: reads `assets/bestiary.toml`, calls mock or DALL-E 3 backend, writes atlas PNGs + RON manifests to `crates/client/assets/sprites/` |
+| `tools/character_studio` | AI sprite-sheet generator + desktop studio: reads `assets/bestiary.toml`, calls mock or DALL-E 3 backend, writes atlas PNGs + RON manifests to `crates/client/assets/sprites/` |
 
 `crates/server` is a **lib-only** crate. There is no separate server process. All plugins (`WorldSimPlugin`, `AiPlugin`, `CombatPlugin`, etc.) run in-process inside the single `fellytip-client` binary. The crate boundary is preserved so a true server binary can be re-introduced behind a `multiplayer` feature flag later without major surgery.
 

@@ -1,4 +1,4 @@
-//! sprite_studio — egui desktop app for browsing, generating, and approving
+//! character_studio — egui desktop app for browsing, generating, and approving
 //! sprites for every entity in the bestiary.
 
 fn main() -> eframe::Result<()> {
@@ -7,8 +7,8 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Sprite Studio",
+        "Character Studio",
         native_options,
-        Box::new(|cc| Ok(Box::new(sprite_studio::studio::app::StudioApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(character_studio::studio::app::StudioApp::new(cc)))),
     )
 }

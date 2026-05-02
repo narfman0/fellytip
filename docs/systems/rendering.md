@@ -119,15 +119,15 @@ Each `AnimationDef`:
 
 **Adding a new creature:**
 1. Add one `[[entity]]` block to `assets/bestiary.toml`.
-2. Run `cargo run -p sprite_studio`, select the entity, generate variants, approve one.
+2. Run `cargo run -p character_studio`, select the entity, generate variants, approve one.
 3. Commit the generated `base.png`.
 
-### sprite_studio tool (`tools/sprite_studio/`)
+### character_studio tool (`tools/character_studio/`)
 
 Desktop GUI that reads the bestiary, lets you generate variants per entity using mock or AI backends, preview the results, and approve a base image. Run it with:
 
 ```bash
-cargo run -p sprite_studio
+cargo run -p character_studio
 ```
 
 Outputs (written to `assets/sprites/{id}/`):

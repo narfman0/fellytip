@@ -1,11 +1,11 @@
-# sprite_studio
+# character_studio
 
 Desktop GUI for browsing, generating, and approving sprites for every entity in `assets/bestiary.toml`.
 
 ## Usage
 
 ```bash
-cargo run -p sprite_studio
+cargo run -p character_studio
 ```
 
 The studio opens a two-panel window:

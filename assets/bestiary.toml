@@ -1,7 +1,7 @@
 # Bestiary — single source of truth for AI-generated 8-direction sprites.
 #
 # Every in-game entity kind that needs a sprite gets one `[[entity]]` block.
-# The `sprite_studio` tool reads this file and produces one atlas PNG + one
+# The `character_studio` tool reads this file and produces one atlas PNG + one
 # Bevy `TextureAtlasLayout` RON per entity.  The billboard renderer reads
 # the same ids to pick the right sprite.
 #
@@ -15,7 +15,7 @@
 
 # ── Art-style presets ────────────────────────────────────────────────────────
 # Each entity's `ai_style` field references one of these names.
-# Sprite Studio shows a combo box so you can override per-session.
+# Character Studio shows a combo box so you can override per-session.
 
 [[styles]]
 name  = "standard"

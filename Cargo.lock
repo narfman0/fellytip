@@ -2308,6 +2308,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "character_studio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "color_quant",
+ "eframe 0.31.1",
+ "egui 0.31.1",
+ "fellytip-shared",
+ "image",
+ "reqwest",
+ "ron 0.8.1",
+ "serde",
+ "serde_json",
+ "smol_str 0.3.6",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7205,28 +7227,6 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
-]
-
-[[package]]
-name = "sprite_studio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "color_quant",
- "eframe 0.31.1",
- "egui 0.31.1",
- "fellytip-shared",
- "image",
- "reqwest",
- "ron 0.8.1",
- "serde",
- "serde_json",
- "smol_str 0.3.6",
- "tempfile",
- "thiserror 2.0.18",
- "toml",
- "tracing",
 ]
 
 [[package]]
