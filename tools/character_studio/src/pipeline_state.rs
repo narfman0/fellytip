@@ -10,6 +10,7 @@ use std::path::Path;
 pub struct PipelineState {
     pub preview_task_id: Option<String>,
     pub refine_task_id: Option<String>,
+    pub texture_task_id: Option<String>,
     pub rig_task_id: Option<String>,
     /// clip_name -> task_id
     pub animation_task_ids: HashMap<String, String>,

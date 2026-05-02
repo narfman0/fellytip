@@ -54,6 +54,7 @@ enum PipelineStage {
     Draft,
     Approved,
     MeshDone,
+    Textured,
     Rigged,
     Animated,
     Merged,
@@ -72,6 +73,7 @@ enum MeshSubStage {
     Idle,
     TextTo3dPreview,
     TextTo3dRefine,
+    Texturing,
     Rigging,
     Animating { completed: Vec<String>, total: usize },
     Merging,
@@ -660,6 +662,126 @@ impl StudioApp {
         state.receiver = Some(rx);
     }
 
+    fn spawn_texture(&mut self, entity_idx: usize) {
+        let entry = self.bestiary[entity_idx].clone();
+        let models_dir = self.models_dir.clone();
+        let is_mock = self.mesh_backend == MeshBackend::Mock;
+        let api_key = match self.mesh_backend {
+            MeshBackend::Mock => "mock".to_string(),
+            MeshBackend::Live => std::env::var("MESHY_API_KEY").unwrap_or_default(),
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel::<MeshGenEvent>();
+
+        std::thread::spawn(move || {
+            let entity_id = entry.id.as_str();
+            let out_dir = models_dir.join(entity_id);
+            let _ = std::fs::create_dir_all(&out_dir);
+            let out_path = out_dir.join(format!("{entity_id}_textured.glb"));
+
+            if is_mock {
+                let _ = tx.send(MeshGenEvent::Progress(50, "Mock: texturing mesh...".into()));
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let _ = std::fs::write(&out_path, crate::meshy::mock_glb());
+                let _ = tx.send(MeshGenEvent::Done);
+                return;
+            }
+
+            let client = crate::meshy::MeshyClient::new(api_key);
+            let mut state = crate::pipeline_state::PipelineState::load(&models_dir, entity_id);
+
+            let refine_id = match &state.refine_task_id {
+                Some(id) => id.clone(),
+                None => {
+                    let _ = tx.send(MeshGenEvent::Failed(
+                        "No refine task ID — generate mesh first".into(),
+                    ));
+                    return;
+                }
+            };
+
+            let object_prompt = if entry.mesh_prompt.is_empty() {
+                entry.ai_prompt_base.clone()
+            } else {
+                entry.mesh_prompt.clone()
+            };
+            let style_prompt = "game character, hand-painted textures, high detail, vibrant colors";
+
+            let texture_id = if let Some(ref tid) = state.texture_task_id.clone() {
+                tid.clone()
+            } else {
+                match client.submit_texture(&refine_id, &object_prompt, style_prompt) {
+                    Ok(id) => {
+                        state.texture_task_id = Some(id.clone());
+                        state.save(&models_dir, entity_id);
+                        id
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                        return;
+                    }
+                }
+            };
+
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                match client.poll("v1/text-to-texture", &texture_id) {
+                    Ok(r) if r.status == "SUCCEEDED" => {
+                        let url = match r.model_url {
+                            Some(u) => u,
+                            None => {
+                                let _ = tx.send(MeshGenEvent::Failed(
+                                    "No GLB URL in texture response".into(),
+                                ));
+                                return;
+                            }
+                        };
+                        match client.download(&url) {
+                            Ok(bytes) => {
+                                if let Err(e) = std::fs::write(&out_path, &bytes) {
+                                    let _ = tx.send(MeshGenEvent::Failed(format!(
+                                        "Write textured mesh failed: {e}"
+                                    )));
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                                return;
+                            }
+                        }
+                        break;
+                    }
+                    Ok(r) if r.status == "FAILED" || r.status == "EXPIRED" => {
+                        let _ = tx.send(MeshGenEvent::Failed(format!(
+                            "Texture task {} {}",
+                            texture_id, r.status
+                        )));
+                        return;
+                    }
+                    Ok(r) => {
+                        let _ = tx.send(MeshGenEvent::Progress(
+                            r.progress,
+                            format!("Texturing: {}%", r.progress),
+                        ));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                        return;
+                    }
+                }
+            }
+
+            let _ = tx.send(MeshGenEvent::Done);
+        });
+
+        let state = self.entity_mesh.entry(entity_idx).or_insert_with(MeshGenState::new);
+        state.sub_stage = MeshSubStage::Texturing;
+        state.status = "Starting texture...".into();
+        state.progress = 0;
+        state.receiver = Some(rx);
+    }
+
     fn spawn_rig_animate(&mut self, entity_idx: usize) {
         let entry = self.bestiary[entity_idx].clone();
         let models_dir = self.models_dir.clone();
@@ -1032,6 +1154,7 @@ impl StudioApp {
                         PipelineStage::Draft => "",
                         PipelineStage::Approved => " 🖼",
                         PipelineStage::MeshDone => " 🔷",
+                        PipelineStage::Textured => " 🎨",
                         PipelineStage::Rigged => " 🦴",
                         PipelineStage::Animated | PipelineStage::Merged => " 🎬",
                         PipelineStage::LodsComplete => " ✅",
@@ -1318,12 +1441,17 @@ impl StudioApp {
 
         ui.separator();
 
-        // Section C: Rig & Animate
+        // Section C: Texture Mesh
+        self.show_texture_panel(ui);
+
+        ui.separator();
+
+        // Section D: Rig & Animate
         self.show_rig_animate_panel(ui);
 
         ui.separator();
 
-        // Section D: LODs
+        // Section E: LODs
         self.show_lods_panel(ui);
     }
 
@@ -1391,6 +1519,51 @@ impl StudioApp {
                 if let Some(id) = id {
                     ui.horizontal(|ui| {
                         ui.label(format!("Mesh: assets/models/{id}/{id}_mesh.glb"));
+                        if ui.button("\u{1f50d} Preview").clicked() {
+                            self.spawn_preview(id.as_str());
+                            self.status = "Launching preview…".into();
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    fn show_texture_panel(&mut self, ui: &mut egui::Ui) {
+        let entity_idx = self.selected_entity;
+        let stage = self.entity_stage.get(&entity_idx).copied().unwrap_or(PipelineStage::Draft);
+
+        ui.collapsing("Texture Mesh", |ui| {
+            let enabled = stage >= PipelineStage::MeshDone;
+            if !enabled {
+                ui.disable();
+            }
+
+            let generating = self
+                .entity_mesh
+                .get(&entity_idx)
+                .map(|s| s.receiver.is_some())
+                .unwrap_or(false);
+
+            if ui
+                .add_enabled(enabled && !generating, egui::Button::new("Apply Texture"))
+                .clicked()
+            {
+                self.spawn_texture(entity_idx);
+            }
+
+            if let Some(state) = self.entity_mesh.get(&entity_idx) {
+                if state.sub_stage == MeshSubStage::Texturing && !state.status.is_empty() {
+                    ui.label(&state.status);
+                    ui.add(egui::ProgressBar::new(state.progress as f32 / 100.0));
+                }
+            }
+
+            if stage >= PipelineStage::Textured {
+                let id = self.bestiary.get(entity_idx).map(|e| e.id.clone());
+                if let Some(id) = id {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Textured: assets/models/{id}/{id}_textured.glb"));
                         if ui.button("\u{1f50d} Preview").clicked() {
                             self.spawn_preview(id.as_str());
                             self.status = "Launching preview…".into();
@@ -1607,6 +1780,9 @@ fn scan_stage(models_dir: &std::path::Path, sprites_dir: &std::path::Path, id: &
     }
     if md.join(format!("{id}_rigged.glb")).exists() {
         return PipelineStage::Rigged;
+    }
+    if md.join(format!("{id}_textured.glb")).exists() {
+        return PipelineStage::Textured;
     }
     if md.join(format!("{id}_mesh.glb")).exists() {
         return PipelineStage::MeshDone;

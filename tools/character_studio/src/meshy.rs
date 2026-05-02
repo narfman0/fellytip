@@ -126,6 +126,34 @@ impl MeshyClient {
         Ok(task.result)
     }
 
+    /// POST /v1/text-to-texture. Returns task_id.
+    pub fn submit_texture(
+        &self,
+        refine_task_id: &str,
+        object_prompt: &str,
+        style_prompt: &str,
+    ) -> Result<String> {
+        let body = serde_json::json!({
+            "input_task_id": refine_task_id,
+            "object_prompt": object_prompt,
+            "style_prompt": style_prompt,
+            "enable_original_uv": true,
+            "resolution": "1024"
+        });
+        let resp = self
+            .client
+            .post(format!("{MESHY_BASE}/v1/text-to-texture"))
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()?;
+        if !resp.status().is_success() {
+            let text = resp.text()?;
+            bail!("Meshy texture submit failed: {text}");
+        }
+        let task: TaskResponse = resp.json()?;
+        Ok(task.result)
+    }
+
     /// GET /{path}/{task_id} — poll a task for status.
     pub fn poll(&self, path: &str, task_id: &str) -> Result<PollResult> {
         let url = format!("{MESHY_BASE}/{path}/{task_id}");
