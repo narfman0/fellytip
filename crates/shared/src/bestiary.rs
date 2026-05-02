@@ -34,6 +34,13 @@ pub struct BestiaryEntry {
     pub palette_seed: String,
     #[serde(rename = "animation", default)]
     pub animations: Vec<AnimationDef>,
+    /// Override the default animation action IDs for 3D animation generation.
+    /// Empty = use default set [0, 1, 4, 8, 14, 7].
+    #[serde(default)]
+    pub animation_ids: Vec<u8>,
+    /// Prompt override for 3D mesh generation. Empty = use ai_prompt_base.
+    #[serde(default)]
+    pub mesh_prompt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +186,8 @@ palette_seed = "forest_green"
                 frames: 6,
                 fps: 10,
             }],
+            animation_ids: vec![],
+            mesh_prompt: String::new(),
         };
         let wrapped = BestiaryFile {
             styles: vec![],

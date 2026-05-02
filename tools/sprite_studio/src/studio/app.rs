@@ -14,6 +14,10 @@ use std::{
     sync::mpsc::{self, Receiver},
 };
 
+// ---------------------------------------------------------------------------
+// Sprite generation types (unchanged)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendChoice {
     Mock,
@@ -41,6 +45,73 @@ impl EntityGenState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 3D pipeline types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PipelineStage {
+    Draft,
+    Approved,
+    MeshDone,
+    Rigged,
+    Animated,
+    Merged,
+    LodsComplete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeshBackend {
+    Mock,
+    Live,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum MeshSubStage {
+    Idle,
+    TextTo3dPreview,
+    TextTo3dRefine,
+    Rigging,
+    Animating { completed: Vec<String>, total: usize },
+    Merging,
+    GeneratingLods,
+}
+
+enum MeshGenEvent {
+    Progress(u8, String),
+    Done,
+    Failed(String),
+}
+
+struct MeshGenState {
+    sub_stage: MeshSubStage,
+    status: String,
+    progress: u8,
+    receiver: Option<std::sync::mpsc::Receiver<MeshGenEvent>>,
+    /// Which animation clips are selected for rig+animate (indexed by CLIP_NAMES).
+    selected_clips: Vec<bool>,
+}
+
+impl MeshGenState {
+    fn new() -> Self {
+        Self {
+            sub_stage: MeshSubStage::Idle,
+            status: String::new(),
+            progress: 0,
+            receiver: None,
+            selected_clips: vec![true; CLIP_NAMES.len()],
+        }
+    }
+}
+
+/// Default animation clip names and their Meshy action IDs.
+const CLIP_NAMES: &[&str] = &["idle", "walk", "attack", "death", "run", "behit"];
+const CLIP_ACTION_IDS: &[u32] = &[0, 1, 4, 8, 14, 7];
+
+// ---------------------------------------------------------------------------
+// StudioApp
+// ---------------------------------------------------------------------------
+
 pub struct StudioApp {
     bestiary: Vec<BestiaryEntry>,
     styles: Vec<StylePreset>,
@@ -50,8 +121,15 @@ pub struct StudioApp {
     openai_available: bool,
     stability_available: bool,
 
-    // Per-entity generation state — keyed by bestiary index
+    // Per-entity sprite generation state — keyed by bestiary index
     entity_gen: HashMap<usize, EntityGenState>,
+
+    // Per-entity 3D pipeline state
+    entity_stage: HashMap<usize, PipelineStage>,
+    entity_mesh: HashMap<usize, MeshGenState>,
+    meshy_available: bool,
+    models_dir: PathBuf,
+    mesh_backend: MeshBackend,
 
     // Approved base.png for the current entity (loaded from disk, persists across navigation)
     approved_texture: Option<egui::TextureHandle>,
@@ -60,7 +138,7 @@ pub struct StudioApp {
     // Post-processing toggles
     remove_bg: bool,
 
-    // Output dir
+    // Output dir (sprites)
     output_dir: PathBuf,
 
     // Path to bestiary.toml on disk
@@ -88,8 +166,13 @@ impl StudioApp {
             .map(|d| d.join("sprites"))
             .unwrap_or_else(|| PathBuf::from("assets/sprites"));
 
+        let models_dir = find_assets_dir()
+            .map(|d| d.join("models"))
+            .unwrap_or_else(|| PathBuf::from("assets/models"));
+
         let openai_available = std::env::var("SPRITE_GEN_API_KEY").is_ok();
         let stability_available = std::env::var("STABILITY_API_KEY").is_ok();
+        let meshy_available = std::env::var("MESHY_API_KEY").is_ok();
 
         let default_style = bestiary
             .first()
@@ -102,7 +185,13 @@ impl StudioApp {
             BackendChoice::Mock
         };
 
-        Self {
+        let mesh_backend = if meshy_available {
+            MeshBackend::Live
+        } else {
+            MeshBackend::Mock
+        };
+
+        let mut app = Self {
             bestiary,
             styles,
             selected_entity: 0,
@@ -111,6 +200,11 @@ impl StudioApp {
             openai_available,
             stability_available,
             entity_gen: HashMap::new(),
+            entity_stage: HashMap::new(),
+            entity_mesh: HashMap::new(),
+            meshy_available,
+            models_dir,
+            mesh_backend,
             remove_bg: true,
             approved_texture: None,
             approved_loaded: false,
@@ -119,6 +213,15 @@ impl StudioApp {
             status: String::new(),
             new_style_name: String::new(),
             new_style_value: String::new(),
+        };
+        app.scan_all_stages();
+        app
+    }
+
+    fn scan_all_stages(&mut self) {
+        for (i, entry) in self.bestiary.iter().enumerate() {
+            let stage = scan_stage(&self.models_dir, &self.output_dir, &entry.id);
+            self.entity_stage.insert(i, stage);
         }
     }
 
@@ -157,7 +260,10 @@ impl StudioApp {
         }
     }
 
-    // Poll every active per-entity receiver so background generation continues when navigated away.
+    // -----------------------------------------------------------------------
+    // Poll receivers
+    // -----------------------------------------------------------------------
+
     fn poll_all_gen_receivers(&mut self, ctx: &egui::Context) {
         let entity_indices: Vec<usize> = self.entity_gen.keys().cloned().collect();
         let mut any_update = false;
@@ -168,8 +274,6 @@ impl StudioApp {
                 continue;
             }
 
-            // Drain the channel into a local vec to avoid holding &state.gen_receiver
-            // while mutating other state fields.
             let mut received: Vec<(usize, image::RgbaImage)> = Vec::new();
             let mut disconnected = false;
             if let Some(rx) = &state.gen_receiver {
@@ -202,6 +306,84 @@ impl StudioApp {
             ctx.request_repaint();
         }
     }
+
+    fn poll_all_mesh_receivers(&mut self, ctx: &egui::Context) {
+        let entity_indices: Vec<usize> = self.entity_mesh.keys().cloned().collect();
+        let mut any_update = false;
+
+        for entity_idx in entity_indices {
+            let state = self.entity_mesh.get_mut(&entity_idx).unwrap();
+            if state.receiver.is_none() {
+                continue;
+            }
+
+            let mut events: Vec<MeshGenEvent> = Vec::new();
+            let mut disconnected = false;
+            if let Some(rx) = &state.receiver {
+                loop {
+                    match rx.try_recv() {
+                        Ok(ev) => events.push(ev),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            for ev in events {
+                match ev {
+                    MeshGenEvent::Progress(pct, msg) => {
+                        state.progress = pct;
+                        state.status = msg;
+                        any_update = true;
+                    }
+                    MeshGenEvent::Done => {
+                        state.progress = 100;
+                        state.status = "Done!".into();
+                        state.receiver = None;
+                        state.sub_stage = MeshSubStage::Idle;
+                        // Rescan disk stage
+                        if let Some(entry) = self.bestiary.get(entity_idx) {
+                            let new_stage =
+                                scan_stage(&self.models_dir, &self.output_dir, &entry.id);
+                            self.entity_stage.insert(entity_idx, new_stage);
+                        }
+                        any_update = true;
+                    }
+                    MeshGenEvent::Failed(msg) => {
+                        state.status = format!("Failed: {msg}");
+                        state.receiver = None;
+                        state.sub_stage = MeshSubStage::Idle;
+                        any_update = true;
+                    }
+                }
+            }
+
+            if disconnected {
+                let state = self.entity_mesh.get_mut(&entity_idx).unwrap();
+                if state.receiver.is_some() {
+                    state.receiver = None;
+                    state.sub_stage = MeshSubStage::Idle;
+                }
+                if let Some(entry) = self.bestiary.get(entity_idx) {
+                    let new_stage =
+                        scan_stage(&self.models_dir, &self.output_dir, &entry.id);
+                    self.entity_stage.insert(entity_idx, new_stage);
+                }
+                any_update = true;
+            }
+        }
+
+        if any_update {
+            ctx.request_repaint();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Sprite generation
+    // -----------------------------------------------------------------------
 
     fn spawn_generate_variants(&mut self) {
         if self.bestiary.is_empty() {
@@ -285,6 +467,9 @@ impl StudioApp {
                 self.status = format!("Saved {}", path.display());
                 self.approved_loaded = false;
                 self.load_approved_base(ctx);
+                // Update stage
+                let new_stage = scan_stage(&self.models_dir, &self.output_dir, &entity_id);
+                self.entity_stage.insert(entity_idx, new_stage);
             }
             Err(e) => self.status = format!("Save failed: {e}"),
         }
@@ -297,8 +482,6 @@ impl StudioApp {
         };
         let path = path.clone();
 
-        // Build a TOML value manually to match the expected [[styles]] / [[entity]] structure.
-        // We use toml::to_string on a serde-serializable wrapper that matches BestiaryFile.
         #[derive(serde::Serialize)]
         struct BestiaryFile<'a> {
             styles: &'a Vec<StylePreset>,
@@ -319,6 +502,517 @@ impl StudioApp {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // 3D Mesh generation
+    // -----------------------------------------------------------------------
+
+    fn spawn_mesh_gen(&mut self, entity_idx: usize) {
+        let entry = self.bestiary[entity_idx].clone();
+        let models_dir = self.models_dir.clone();
+        let is_mock = self.mesh_backend == MeshBackend::Mock;
+        let api_key = match self.mesh_backend {
+            MeshBackend::Mock => "mock".to_string(),
+            MeshBackend::Live => std::env::var("MESHY_API_KEY").unwrap_or_default(),
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel::<MeshGenEvent>();
+
+        std::thread::spawn(move || {
+            let prompt = if entry.mesh_prompt.is_empty() {
+                entry.ai_prompt_base.clone()
+            } else {
+                entry.mesh_prompt.clone()
+            };
+            let entity_id = entry.id.as_str();
+            let out_dir = models_dir.join(entity_id);
+            let _ = std::fs::create_dir_all(&out_dir);
+            let out_path = out_dir.join(format!("{entity_id}_mesh.glb"));
+
+            if is_mock {
+                let _ = tx.send(MeshGenEvent::Progress(50, "Mock: generating mesh...".into()));
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let _ = std::fs::write(&out_path, crate::meshy::mock_glb());
+                let _ = tx.send(MeshGenEvent::Done);
+                return;
+            }
+
+            let client = crate::meshy::MeshyClient::new(api_key);
+            let mut state = crate::pipeline_state::PipelineState::load(&models_dir, entity_id);
+
+            // Preview
+            let preview_id = if let Some(ref pid) = state.preview_task_id.clone() {
+                pid.clone()
+            } else {
+                match client.submit_preview(&prompt) {
+                    Ok(task_id) => {
+                        state.preview_task_id = Some(task_id.clone());
+                        state.save(&models_dir, entity_id);
+                        task_id
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                        return;
+                    }
+                }
+            };
+
+            // Poll preview
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                match client.poll("v2/text-to-3d", &preview_id) {
+                    Ok(r) if r.status == "SUCCEEDED" => break,
+                    Ok(r) if r.status == "FAILED" || r.status == "EXPIRED" => {
+                        let _ = tx.send(MeshGenEvent::Failed(format!(
+                            "Preview task {} {}",
+                            preview_id, r.status
+                        )));
+                        return;
+                    }
+                    Ok(r) => {
+                        let _ = tx.send(MeshGenEvent::Progress(
+                            r.progress / 2,
+                            format!("Preview: {}%", r.progress),
+                        ));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                        return;
+                    }
+                }
+            }
+
+            // Refine
+            let refine_id = if let Some(ref rid) = state.refine_task_id.clone() {
+                rid.clone()
+            } else {
+                match client.submit_refine(&preview_id) {
+                    Ok(task_id) => {
+                        state.refine_task_id = Some(task_id.clone());
+                        state.save(&models_dir, entity_id);
+                        task_id
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                        return;
+                    }
+                }
+            };
+
+            // Poll refine
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                match client.poll("v2/text-to-3d", &refine_id) {
+                    Ok(r) if r.status == "SUCCEEDED" => {
+                        // Download the GLB
+                        let url = match r.model_url {
+                            Some(u) => u,
+                            None => {
+                                let _ = tx.send(MeshGenEvent::Failed(
+                                    "No GLB URL in refine response".into(),
+                                ));
+                                return;
+                            }
+                        };
+                        match client.download(&url) {
+                            Ok(bytes) => {
+                                if let Err(e) = std::fs::write(&out_path, &bytes) {
+                                    let _ = tx.send(MeshGenEvent::Failed(format!(
+                                        "Write mesh failed: {e}"
+                                    )));
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                                return;
+                            }
+                        }
+                        break;
+                    }
+                    Ok(r) if r.status == "FAILED" || r.status == "EXPIRED" => {
+                        let _ = tx.send(MeshGenEvent::Failed(format!(
+                            "Refine task {} {}",
+                            refine_id, r.status
+                        )));
+                        return;
+                    }
+                    Ok(r) => {
+                        let _ = tx.send(MeshGenEvent::Progress(
+                            50 + r.progress / 2,
+                            format!("Refine: {}%", r.progress),
+                        ));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                        return;
+                    }
+                }
+            }
+
+            let _ = tx.send(MeshGenEvent::Done);
+        });
+
+        let state = self.entity_mesh.entry(entity_idx).or_insert_with(MeshGenState::new);
+        state.sub_stage = MeshSubStage::TextTo3dPreview;
+        state.status = "Starting...".into();
+        state.progress = 0;
+        state.receiver = Some(rx);
+    }
+
+    fn spawn_rig_animate(&mut self, entity_idx: usize) {
+        let entry = self.bestiary[entity_idx].clone();
+        let models_dir = self.models_dir.clone();
+        let is_mock = self.mesh_backend == MeshBackend::Mock;
+        let api_key = match self.mesh_backend {
+            MeshBackend::Mock => "mock".to_string(),
+            MeshBackend::Live => std::env::var("MESHY_API_KEY").unwrap_or_default(),
+        };
+
+        // Determine which clips are selected
+        let selected_clips: Vec<bool> = self
+            .entity_mesh
+            .get(&entity_idx)
+            .map(|s| s.selected_clips.clone())
+            .unwrap_or_else(|| vec![true; CLIP_NAMES.len()]);
+
+        let clip_pairs: Vec<(String, u32)> = CLIP_NAMES
+            .iter()
+            .zip(CLIP_ACTION_IDS.iter())
+            .enumerate()
+            .filter_map(|(i, (name, &action_id))| {
+                if selected_clips.get(i).copied().unwrap_or(true) {
+                    Some((name.to_string(), action_id))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let (tx, rx) = std::sync::mpsc::channel::<MeshGenEvent>();
+
+        std::thread::spawn(move || {
+            let entity_id = entry.id.as_str();
+            let out_dir = models_dir.join(entity_id);
+            let _ = std::fs::create_dir_all(&out_dir);
+
+            if is_mock {
+                let _ = tx.send(MeshGenEvent::Progress(10, "Mock: rigging...".into()));
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                let rigged_path = out_dir.join(format!("{entity_id}_rigged.glb"));
+                let _ = std::fs::write(&rigged_path, crate::meshy::mock_glb());
+
+                for (i, (clip_name, _)) in clip_pairs.iter().enumerate() {
+                    let pct = 10 + ((i + 1) * 70 / clip_pairs.len().max(1)) as u8;
+                    let _ = tx.send(MeshGenEvent::Progress(
+                        pct,
+                        format!("Mock: animating {clip_name}..."),
+                    ));
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    let clip_path = out_dir.join(format!("{clip_name}.glb"));
+                    let _ = std::fs::write(&clip_path, crate::meshy::mock_glb());
+                }
+
+                // Merge (mock — just copy rigged as merged)
+                let _ = tx.send(MeshGenEvent::Progress(90, "Mock: merging...".into()));
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                let merged_path = out_dir.join(format!("{entity_id}.glb"));
+                let _ = std::fs::write(&merged_path, crate::meshy::mock_glb());
+                let _ = tx.send(MeshGenEvent::Done);
+                return;
+            }
+
+            let client = crate::meshy::MeshyClient::new(api_key);
+            let mut state = crate::pipeline_state::PipelineState::load(&models_dir, entity_id);
+
+            // Rig
+            let rigged_path = out_dir.join(format!("{entity_id}_rigged.glb"));
+            let rig_id = if rigged_path.exists() {
+                // Already rigged — use existing rig_task_id or skip
+                state.rig_task_id.clone().unwrap_or_default()
+            } else {
+                let refine_id = match &state.refine_task_id {
+                    Some(id) => id.clone(),
+                    None => {
+                        let _ = tx.send(MeshGenEvent::Failed(
+                            "No refine task ID — generate mesh first".into(),
+                        ));
+                        return;
+                    }
+                };
+
+                let new_rig_id = if let Some(ref rid) = state.rig_task_id.clone() {
+                    rid.clone()
+                } else {
+                    match client.submit_rig(&refine_id) {
+                        Ok(id) => {
+                            state.rig_task_id = Some(id.clone());
+                            state.save(&models_dir, entity_id);
+                            id
+                        }
+                        Err(e) => {
+                            let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                            return;
+                        }
+                    }
+                };
+
+                // Poll rig
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    match client.poll("v1/rigging", &new_rig_id) {
+                        Ok(r) if r.status == "SUCCEEDED" => {
+                            let url = match r.model_url {
+                                Some(u) => u,
+                                None => {
+                                    let _ = tx.send(MeshGenEvent::Failed(
+                                        "No GLB URL in rig response".into(),
+                                    ));
+                                    return;
+                                }
+                            };
+                            match client.download(&url) {
+                                Ok(bytes) => {
+                                    if let Err(e) = std::fs::write(&rigged_path, &bytes) {
+                                        let _ = tx.send(MeshGenEvent::Failed(format!(
+                                            "Write rigged failed: {e}"
+                                        )));
+                                        return;
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                                    return;
+                                }
+                            }
+                            break;
+                        }
+                        Ok(r) if r.status == "FAILED" || r.status == "EXPIRED" => {
+                            let _ = tx.send(MeshGenEvent::Failed(format!(
+                                "Rig task {} {}",
+                                new_rig_id, r.status
+                            )));
+                            return;
+                        }
+                        Ok(r) => {
+                            let _ = tx.send(MeshGenEvent::Progress(
+                                r.progress / 3,
+                                format!("Rigging: {}%", r.progress),
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                            return;
+                        }
+                    }
+                }
+
+                new_rig_id
+            };
+
+            // Submit animation jobs
+            let total = clip_pairs.len();
+            let mut anim_task_ids: Vec<(String, String)> = Vec::new();
+
+            for (clip_name, action_id) in &clip_pairs {
+                let task_id = if let Some(existing) =
+                    state.animation_task_ids.get(clip_name.as_str()).cloned()
+                {
+                    existing
+                } else {
+                    match client.submit_animation(&rig_id, *action_id) {
+                        Ok(id) => {
+                            state
+                                .animation_task_ids
+                                .insert(clip_name.clone(), id.clone());
+                            state.save(&models_dir, entity_id);
+                            id
+                        }
+                        Err(e) => {
+                            let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                            return;
+                        }
+                    }
+                };
+                anim_task_ids.push((clip_name.clone(), task_id));
+            }
+
+            // Poll each animation
+            let mut completed: Vec<String> = Vec::new();
+            for (clip_name, task_id) in &anim_task_ids {
+                let clip_path = out_dir.join(format!("{clip_name}.glb"));
+                if clip_path.exists() {
+                    completed.push(clip_name.clone());
+                    continue;
+                }
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    match client.poll("v1/animations", task_id) {
+                        Ok(r) if r.status == "SUCCEEDED" => {
+                            let url = match r.model_url {
+                                Some(u) => u,
+                                None => {
+                                    let _ = tx.send(MeshGenEvent::Failed(format!(
+                                        "No GLB URL for clip {clip_name}"
+                                    )));
+                                    return;
+                                }
+                            };
+                            match client.download(&url) {
+                                Ok(bytes) => {
+                                    if let Err(e) = std::fs::write(&clip_path, &bytes) {
+                                        let _ = tx.send(MeshGenEvent::Failed(format!(
+                                            "Write clip {clip_name} failed: {e}"
+                                        )));
+                                        return;
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                                    return;
+                                }
+                            }
+                            completed.push(clip_name.clone());
+                            let pct =
+                                (33 + completed.len() * 50 / total.max(1)).min(83) as u8;
+                            let _ = tx.send(MeshGenEvent::Progress(
+                                pct,
+                                format!("Animated {}/{total}", completed.len()),
+                            ));
+                            break;
+                        }
+                        Ok(r) if r.status == "FAILED" || r.status == "EXPIRED" => {
+                            let _ = tx.send(MeshGenEvent::Failed(format!(
+                                "Anim task {} {}",
+                                task_id, r.status
+                            )));
+                            return;
+                        }
+                        Ok(r) => {
+                            let _ = tx.send(MeshGenEvent::Progress(
+                                r.progress / 3,
+                                format!("Animating {clip_name}: {}%", r.progress),
+                            ));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(MeshGenEvent::Failed(e.to_string()));
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Merge with gltf-transform
+            let _ = tx.send(MeshGenEvent::Progress(90, "Merging clips...".into()));
+            let merged_path = out_dir.join(format!("{entity_id}.glb"));
+            let mut cmd = std::process::Command::new("npx");
+            cmd.arg("@gltf-transform/cli").arg("merge");
+            cmd.arg(&rigged_path);
+            for (clip_name, _) in &clip_pairs {
+                cmd.arg(out_dir.join(format!("{clip_name}.glb")));
+            }
+            cmd.arg(&merged_path);
+            match cmd.status() {
+                Ok(s) if s.success() => {}
+                Ok(s) => {
+                    let _ = tx.send(MeshGenEvent::Failed(format!("gltf-transform merge exited {s}")));
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(MeshGenEvent::Failed(format!("gltf-transform merge error: {e}")));
+                    return;
+                }
+            }
+
+            let _ = tx.send(MeshGenEvent::Done);
+        });
+
+        let state = self.entity_mesh.entry(entity_idx).or_insert_with(MeshGenState::new);
+        state.sub_stage = MeshSubStage::Rigging;
+        state.status = "Starting rig...".into();
+        state.progress = 0;
+        state.receiver = Some(rx);
+    }
+
+    fn spawn_lod_gen(&mut self, entity_idx: usize) {
+        let entry = self.bestiary[entity_idx].clone();
+        let models_dir = self.models_dir.clone();
+        let is_mock = self.mesh_backend == MeshBackend::Mock;
+
+        let (tx, rx) = std::sync::mpsc::channel::<MeshGenEvent>();
+
+        std::thread::spawn(move || {
+            let entity_id = entry.id.as_str();
+            let out_dir = models_dir.join(entity_id);
+            let input = out_dir.join(format!("{entity_id}.glb"));
+
+            if is_mock {
+                for (i, (_, suffix)) in [(0.5f32, "lod1"), (0.25, "lod2"), (0.1, "lod3")]
+                    .iter()
+                    .enumerate()
+                {
+                    let pct = ((i + 1) * 33).min(99) as u8;
+                    let _ = tx.send(MeshGenEvent::Progress(
+                        pct,
+                        format!("Mock: generating {suffix}..."),
+                    ));
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    let output = out_dir.join(format!("{entity_id}_{suffix}.glb"));
+                    let _ = std::fs::write(&output, crate::meshy::mock_glb());
+                }
+                let _ = tx.send(MeshGenEvent::Done);
+                return;
+            }
+
+            for (ratio, suffix) in [(0.5f32, "lod1"), (0.25, "lod2"), (0.1, "lod3")] {
+                let output = out_dir.join(format!("{entity_id}_{suffix}.glb"));
+                let _ = tx.send(MeshGenEvent::Progress(
+                    match suffix {
+                        "lod1" => 10,
+                        "lod2" => 40,
+                        _ => 70,
+                    },
+                    format!("Generating {suffix}..."),
+                ));
+                let status = std::process::Command::new("npx")
+                    .args([
+                        "@gltf-transform/cli",
+                        "simplify",
+                        "--ratio",
+                        &ratio.to_string(),
+                        input.to_str().unwrap_or(""),
+                        output.to_str().unwrap_or(""),
+                    ])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => {
+                        let _ = tx.send(MeshGenEvent::Failed(format!(
+                            "gltf-transform simplify {suffix} exited {s}"
+                        )));
+                        return;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MeshGenEvent::Failed(format!(
+                            "gltf-transform simplify {suffix} error: {e}"
+                        )));
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(MeshGenEvent::Done);
+        });
+
+        let state = self.entity_mesh.entry(entity_idx).or_insert_with(MeshGenState::new);
+        state.sub_stage = MeshSubStage::GeneratingLods;
+        state.status = "Starting LOD generation...".into();
+        state.progress = 0;
+        state.receiver = Some(rx);
+    }
+
+    // -----------------------------------------------------------------------
+    // UI
+    // -----------------------------------------------------------------------
+
     fn show_entity_list(&mut self, ui: &mut egui::Ui) {
         ui.heading("Entities");
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -331,21 +1025,31 @@ impl StudioApp {
                     _ => "",
                 };
 
+                let mesh_badge = match self.entity_mesh.get(&i) {
+                    Some(s) if s.receiver.is_some() => " ⏳",
+                    _ => match self.entity_stage.get(&i).copied().unwrap_or(PipelineStage::Draft) {
+                        PipelineStage::Draft => "",
+                        PipelineStage::Approved => " 🖼",
+                        PipelineStage::MeshDone => " 🔷",
+                        PipelineStage::Rigged => " 🦴",
+                        PipelineStage::Animated | PipelineStage::Merged => " 🎬",
+                        PipelineStage::LodsComplete => " ✅",
+                    },
+                };
+
                 let label = if selected {
-                    format!("> {}{}", entry.display_name, gen_indicator)
+                    format!("> {}{}{}", entry.display_name, gen_indicator, mesh_badge)
                 } else {
-                    format!("  {}{}", entry.display_name, gen_indicator)
+                    format!("  {}{}{}", entry.display_name, gen_indicator, mesh_badge)
                 };
 
                 if ui.selectable_label(selected, label).clicked() && self.selected_entity != i {
                     self.selected_entity = i;
-                    // Sync style selector to the new entity's default
                     if let Some(e) = self.bestiary.get(i) {
                         if let Some(idx) = self.styles.iter().position(|s| s.name == e.ai_style) {
                             self.selected_style = idx;
                         }
                     }
-                    // Generation state is kept in entity_gen — background work continues.
                     self.approved_texture = None;
                     self.approved_loaded = false;
                     self.status.clear();
@@ -356,7 +1060,6 @@ impl StudioApp {
 
     fn show_styles_panel(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Styles", |ui| {
-            // Existing styles — editable inline
             let mut delete_idx: Option<usize> = None;
             for (i, style) in self.styles.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
@@ -421,7 +1124,7 @@ impl StudioApp {
                 egui::TextEdit::singleline(&mut self.bestiary[entity_idx].ai_prompt_base)
                     .desired_width(ui.available_width()),
             );
-            let _ = resp; // changed() is true when user edits; mutation is already applied above
+            let _ = resp;
         });
 
         if !self.styles.is_empty() {
@@ -443,8 +1146,9 @@ impl StudioApp {
                             );
                         }
                     });
-                // Also update the entity's stored ai_style to match the combo selection
-                if let Some(style_name) = self.styles.get(self.selected_style).map(|s| s.name.clone()) {
+                if let Some(style_name) =
+                    self.styles.get(self.selected_style).map(|s| s.name.clone())
+                {
                     self.bestiary[entity_idx].ai_style = style_name;
                 }
             });
@@ -502,7 +1206,7 @@ impl StudioApp {
 
         ui.separator();
 
-        // Approved base.png (persists across navigation)
+        // Approved base.png
         ui.horizontal(|ui| {
             ui.label("Approved base:");
             if let Some(tex) = &self.approved_texture {
@@ -514,7 +1218,6 @@ impl StudioApp {
 
         ui.separator();
 
-        // Pre-extract per-slot data to avoid holding an entity_gen borrow inside closures.
         let selected_variant = self
             .entity_gen
             .get(&entity_idx)
@@ -529,7 +1232,6 @@ impl StudioApp {
 
         let mut new_selected = selected_variant;
 
-        // 4 variant thumbnails
         ui.horizontal(|ui| {
             for (i, tex_slot) in variant_textures.iter().enumerate() {
                 let is_selected = selected_variant == Some(i);
@@ -562,7 +1264,6 @@ impl StudioApp {
                                 egui::Sense::click(),
                             );
                             ui.label(&label);
-                            // Empty slot is not clickable
                             let _ = resp;
                             false
                         }
@@ -595,6 +1296,175 @@ impl StudioApp {
         if !self.status.is_empty() {
             ui.label(&self.status);
         }
+
+        ui.separator();
+
+        // Section B: 3D Mesh
+        self.show_mesh_panel(ui);
+
+        ui.separator();
+
+        // Section C: Rig & Animate
+        self.show_rig_animate_panel(ui);
+
+        ui.separator();
+
+        // Section D: LODs
+        self.show_lods_panel(ui);
+    }
+
+    fn show_mesh_panel(&mut self, ui: &mut egui::Ui) {
+        let entity_idx = self.selected_entity;
+        let stage = self.entity_stage.get(&entity_idx).copied().unwrap_or(PipelineStage::Draft);
+
+        ui.collapsing("3D Mesh", |ui| {
+            let enabled = stage >= PipelineStage::Approved;
+            if !enabled {
+                ui.disable();
+            }
+
+            // Mesh prompt field
+            ui.horizontal(|ui| {
+                ui.label("Mesh prompt:");
+                if let Some(entry) = self.bestiary.get_mut(entity_idx) {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut entry.mesh_prompt)
+                            .hint_text("(defaults to ai_prompt_base)")
+                            .desired_width(ui.available_width()),
+                    );
+                }
+            });
+
+            // Backend selector
+            ui.horizontal(|ui| {
+                ui.label("Backend:");
+                ui.selectable_value(&mut self.mesh_backend, MeshBackend::Mock, "Mock");
+                ui.add_enabled(
+                    self.meshy_available,
+                    egui::SelectableLabel::new(
+                        self.mesh_backend == MeshBackend::Live,
+                        "Live Meshy",
+                    ),
+                );
+                if self.mesh_backend == MeshBackend::Live && ui.button("Live Meshy").clicked() {
+                    // selectable_value above handles it; this is just a fallback click target
+                }
+            });
+
+            let generating = self
+                .entity_mesh
+                .get(&entity_idx)
+                .map(|s| s.receiver.is_some())
+                .unwrap_or(false);
+
+            if ui
+                .add_enabled(
+                    enabled && !generating,
+                    egui::Button::new("Generate 3D Mesh"),
+                )
+                .clicked()
+            {
+                self.spawn_mesh_gen(entity_idx);
+            }
+
+            if let Some(state) = self.entity_mesh.get(&entity_idx) {
+                if !state.status.is_empty() {
+                    ui.label(&state.status);
+                    ui.add(egui::ProgressBar::new(state.progress as f32 / 100.0));
+                }
+            }
+
+            if stage >= PipelineStage::MeshDone {
+                if let Some(entry) = self.bestiary.get(entity_idx) {
+                    ui.label(format!(
+                        "Mesh: assets/models/{}/{}_mesh.glb",
+                        entry.id, entry.id
+                    ));
+                }
+            }
+        });
+    }
+
+    fn show_rig_animate_panel(&mut self, ui: &mut egui::Ui) {
+        let entity_idx = self.selected_entity;
+        let stage = self.entity_stage.get(&entity_idx).copied().unwrap_or(PipelineStage::Draft);
+
+        ui.collapsing("Rig & Animate", |ui| {
+            let enabled = stage >= PipelineStage::MeshDone;
+            if !enabled {
+                ui.disable();
+            }
+
+            ui.label("Animation clips:");
+            // Ensure mesh state exists so we can get selected_clips
+            let state = self.entity_mesh.entry(entity_idx).or_insert_with(MeshGenState::new);
+            // Make sure selected_clips has the right length
+            state.selected_clips.resize(CLIP_NAMES.len(), true);
+
+            // Borrow selected_clips out temporarily to render checkboxes
+            for (i, clip_name) in CLIP_NAMES.iter().enumerate() {
+                let selected = state.selected_clips.get_mut(i).unwrap();
+                ui.checkbox(selected, *clip_name);
+            }
+
+            let generating = state.receiver.is_some();
+            let status = state.status.clone();
+            let progress = state.progress;
+
+            if ui
+                .add_enabled(enabled && !generating, egui::Button::new("Rig & Animate"))
+                .clicked()
+            {
+                self.spawn_rig_animate(entity_idx);
+            }
+
+            if !status.is_empty() {
+                ui.label(&status);
+                ui.add(egui::ProgressBar::new(progress as f32 / 100.0));
+            }
+
+            if stage >= PipelineStage::Merged {
+                if let Some(entry) = self.bestiary.get(entity_idx) {
+                    ui.label(format!("Merged: assets/models/{}/{}.glb", entry.id, entry.id));
+                }
+            }
+        });
+    }
+
+    fn show_lods_panel(&mut self, ui: &mut egui::Ui) {
+        let entity_idx = self.selected_entity;
+        let stage = self.entity_stage.get(&entity_idx).copied().unwrap_or(PipelineStage::Draft);
+
+        ui.collapsing("LODs", |ui| {
+            let enabled = stage >= PipelineStage::Merged;
+            if !enabled {
+                ui.disable();
+            }
+
+            let generating = self
+                .entity_mesh
+                .get(&entity_idx)
+                .map(|s| s.receiver.is_some())
+                .unwrap_or(false);
+
+            if ui
+                .add_enabled(enabled && !generating, egui::Button::new("Generate LODs"))
+                .clicked()
+            {
+                self.spawn_lod_gen(entity_idx);
+            }
+
+            if let Some(state) = self.entity_mesh.get(&entity_idx) {
+                if state.sub_stage == MeshSubStage::GeneratingLods && !state.status.is_empty() {
+                    ui.label(&state.status);
+                    ui.add(egui::ProgressBar::new(state.progress as f32 / 100.0));
+                }
+            }
+
+            if stage >= PipelineStage::LodsComplete {
+                ui.label("LODs: lod1 / lod2 / lod3 complete");
+            }
+        });
     }
 }
 
@@ -604,8 +1474,8 @@ impl eframe::App for StudioApp {
             self.load_approved_base(ctx);
         }
         self.poll_all_gen_receivers(ctx);
+        self.poll_all_mesh_receivers(ctx);
 
-        // Top bar with Save button
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("Sprite Studio");
@@ -624,21 +1494,25 @@ impl eframe::App for StudioApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.columns(2, |cols| {
-                // Left panel — entity list + styles editor
                 cols[0].group(|ui| {
                     self.show_entity_list(ui);
                     ui.separator();
                     self.show_styles_panel(ui);
                 });
 
-                // Right panel — generation
                 cols[1].group(|ui| {
-                    self.show_generation_panel(ui);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.show_generation_panel(ui);
+                    });
                 });
             });
         });
     }
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 fn rgba_to_egui(ctx: &egui::Context, img: &image::RgbaImage, label: &str) -> egui::TextureHandle {
     let size = [img.width() as usize, img.height() as usize];
@@ -647,7 +1521,6 @@ fn rgba_to_egui(ctx: &egui::Context, img: &image::RgbaImage, label: &str) -> egu
     ctx.load_texture(label, color_image, egui::TextureOptions::LINEAR)
 }
 
-/// Walk up from cwd looking for `assets/bestiary.toml`.
 fn find_bestiary_path() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
@@ -662,7 +1535,6 @@ fn find_bestiary_path() -> Option<PathBuf> {
     None
 }
 
-/// Walk up from cwd looking for the `assets/` directory.
 fn find_assets_dir() -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
@@ -675,4 +1547,28 @@ fn find_assets_dir() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn scan_stage(models_dir: &std::path::Path, sprites_dir: &std::path::Path, id: &str) -> PipelineStage {
+    let md = models_dir.join(id);
+    let clip_names = ["idle", "walk", "attack", "death", "run", "behit"];
+    if md.join(format!("{id}_lod1.glb")).exists() {
+        return PipelineStage::LodsComplete;
+    }
+    if md.join(format!("{id}.glb")).exists() {
+        return PipelineStage::Merged;
+    }
+    if clip_names.iter().all(|c| md.join(format!("{c}.glb")).exists()) {
+        return PipelineStage::Animated;
+    }
+    if md.join(format!("{id}_rigged.glb")).exists() {
+        return PipelineStage::Rigged;
+    }
+    if md.join(format!("{id}_mesh.glb")).exists() {
+        return PipelineStage::MeshDone;
+    }
+    if sprites_dir.join(id).join("base.png").exists() {
+        return PipelineStage::Approved;
+    }
+    PipelineStage::Draft
 }
