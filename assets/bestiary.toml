@@ -22,10 +22,6 @@
 
 [[styles]]
 name  = "standard"
-value = "pixel art, 64x64, isometric sprite, clean outline, soft shading, transparent background"
-
-[[styles]]
-name  = "large"
 value = "pixel art, 128x128, isometric sprite, clean outline, soft shading, transparent background"
 
 # ── Player ────────────────────────────────────────────────────────────────────
@@ -630,7 +626,7 @@ id             = "hill_giant"
 display_name   = "Hill Giant"
 directions     = 4
 ai_prompt_base = "hill giant, massive ogre-like humanoid, crude animal-skin garb, enormous wooden club, dull brutish expression, fantasy mountain"
-ai_style       = "large"
+ai_style       = "standard"
 palette_seed   = "giant_earth"
 
 [[entity.animation]]
@@ -660,7 +656,7 @@ id             = "red_dragon_young"
 display_name   = "Young Red Dragon"
 directions     = 8
 ai_prompt_base = "young red dragon, crimson scales, smoke curling from nostrils, partially furled wings, fierce predatory stance, fantasy medieval"
-ai_style       = "large"
+ai_style       = "standard"
 palette_seed   = "dragon_crimson"
 
 [[entity.animation]]

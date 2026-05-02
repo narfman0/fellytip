@@ -63,8 +63,15 @@ pub struct StudioApp {
     // Output dir
     output_dir: PathBuf,
 
+    // Path to bestiary.toml on disk
+    bestiary_path: Option<PathBuf>,
+
     // Status message for the user
     status: String,
+
+    // Styles editor state
+    new_style_name: String,
+    new_style_value: String,
 }
 
 impl StudioApp {
@@ -108,7 +115,10 @@ impl StudioApp {
             approved_texture: None,
             approved_loaded: false,
             output_dir,
+            bestiary_path,
             status: String::new(),
+            new_style_name: String::new(),
+            new_style_value: String::new(),
         }
     }
 
@@ -280,6 +290,35 @@ impl StudioApp {
         }
     }
 
+    fn save_bestiary(&mut self) {
+        let Some(path) = &self.bestiary_path else {
+            self.status = "No bestiary path known; cannot save.".into();
+            return;
+        };
+        let path = path.clone();
+
+        // Build a TOML value manually to match the expected [[styles]] / [[entity]] structure.
+        // We use toml::to_string on a serde-serializable wrapper that matches BestiaryFile.
+        #[derive(serde::Serialize)]
+        struct BestiaryFile<'a> {
+            styles: &'a Vec<StylePreset>,
+            entity: &'a Vec<BestiaryEntry>,
+        }
+
+        let file = BestiaryFile {
+            styles: &self.styles,
+            entity: &self.bestiary,
+        };
+
+        match toml::to_string_pretty(&file) {
+            Ok(text) => match std::fs::write(&path, text) {
+                Ok(_) => self.status = "Saved!".into(),
+                Err(e) => self.status = format!("Write error: {e}"),
+            },
+            Err(e) => self.status = format!("Serialize error: {e}"),
+        }
+    }
+
     fn show_entity_list(&mut self, ui: &mut egui::Ui) {
         ui.heading("Entities");
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -315,21 +354,74 @@ impl StudioApp {
         });
     }
 
+    fn show_styles_panel(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Styles", |ui| {
+            // Existing styles — editable inline
+            let mut delete_idx: Option<usize> = None;
+            for (i, style) in self.styles.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(style.name.as_str());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut style.value)
+                            .desired_width(ui.available_width() - 60.0),
+                    );
+                    let btn = egui::Button::new("X").fill(egui::Color32::DARK_RED);
+                    if ui.add(btn).clicked() {
+                        delete_idx = Some(i);
+                    }
+                });
+            }
+            if let Some(idx) = delete_idx {
+                self.styles.remove(idx);
+                if self.selected_style >= self.styles.len() {
+                    self.selected_style = self.styles.len().saturating_sub(1);
+                }
+            }
+
+            ui.separator();
+            ui.label("Add style:");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_style_name)
+                        .hint_text("name")
+                        .desired_width(80.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_style_value)
+                        .hint_text("value")
+                        .desired_width(ui.available_width() - 60.0),
+                );
+                if ui.button("Add").clicked()
+                    && !self.new_style_name.is_empty()
+                    && !self.new_style_value.is_empty()
+                {
+                    self.styles.push(StylePreset {
+                        name: self.new_style_name.as_str().into(),
+                        value: std::mem::take(&mut self.new_style_value),
+                    });
+                    self.new_style_name.clear();
+                }
+            });
+        });
+    }
+
     fn show_generation_panel(&mut self, ui: &mut egui::Ui) {
         let entity_idx = self.selected_entity;
-        let Some(entry) = self.bestiary.get(entity_idx).cloned() else {
+        let Some(_entry) = self.bestiary.get(entity_idx) else {
             ui.label("No entity selected.");
             return;
         };
 
-        ui.heading(format!("Entity: {}", entry.display_name));
+        let display_name = self.bestiary[entity_idx].display_name.clone();
+        ui.heading(format!("Entity: {}", display_name));
 
         ui.horizontal(|ui| {
             ui.label("Prompt:");
-            ui.add(
-                egui::TextEdit::singleline(&mut entry.ai_prompt_base.clone())
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.bestiary[entity_idx].ai_prompt_base)
                     .desired_width(ui.available_width()),
             );
+            let _ = resp; // changed() is true when user edits; mutation is already applied above
         });
 
         if !self.styles.is_empty() {
@@ -351,6 +443,10 @@ impl StudioApp {
                             );
                         }
                     });
+                // Also update the entity's stored ai_style to match the combo selection
+                if let Some(style_name) = self.styles.get(self.selected_style).map(|s| s.name.clone()) {
+                    self.bestiary[entity_idx].ai_style = style_name;
+                }
             });
         }
 
@@ -509,11 +605,30 @@ impl eframe::App for StudioApp {
         }
         self.poll_all_gen_receivers(ctx);
 
+        // Top bar with Save button
+        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Sprite Studio");
+                ui.separator();
+                let save_btn = egui::Button::new("💾 Save to Bestiary")
+                    .fill(egui::Color32::from_rgb(0, 100, 0));
+                if ui.add(save_btn).clicked() {
+                    self.save_bestiary();
+                }
+                if !self.status.is_empty() {
+                    ui.separator();
+                    ui.label(&self.status);
+                }
+            });
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.columns(2, |cols| {
-                // Left panel — entity list
+                // Left panel — entity list + styles editor
                 cols[0].group(|ui| {
                     self.show_entity_list(ui);
+                    ui.separator();
+                    self.show_styles_panel(ui);
                 });
 
                 // Right panel — generation
