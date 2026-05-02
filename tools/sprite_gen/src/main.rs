@@ -11,7 +11,7 @@
 //! `SPRITE_GEN_MODEL`) to hit DALL-E 3.
 
 use anyhow::{anyhow, Context, Result};
-use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry};
+use fellytip_shared::bestiary::{load_bestiary, Bestiary, BestiaryEntry};
 use sprite_gen::{
     assembler::assemble_atlas,
     generator::{FrameRequest, MockGenerator, SpriteGenerator},
@@ -44,17 +44,18 @@ struct Args {
 fn main() -> Result<()> {
     let args = parse_args()?;
 
-    let entries = load_bestiary(&args.bestiary)
+    let bestiary = load_bestiary(&args.bestiary)
         .with_context(|| format!("loading bestiary {}", args.bestiary.display()))?;
 
     let selected: Vec<&BestiaryEntry> = if let Some(id) = &args.entity {
-        let e = entries
+        let e = bestiary
+            .entries
             .iter()
             .find(|e| e.id.as_str() == id)
             .ok_or_else(|| anyhow!("no such entity `{id}` in bestiary"))?;
         vec![e]
     } else if args.all {
-        entries.iter().collect()
+        bestiary.entries.iter().collect()
     } else {
         return Err(anyhow!("must pass --all or --entity ID"));
     };
@@ -85,13 +86,14 @@ fn main() -> Result<()> {
     };
 
     for entry in selected {
-        run_entity(entry, generator.as_ref(), &args)?;
+        run_entity(entry, &bestiary, generator.as_ref(), &args)?;
     }
     Ok(())
 }
 
 fn run_entity(
     entry: &BestiaryEntry,
+    bestiary: &Bestiary,
     generator: &(dyn SpriteGenerator + Sync),
     args: &Args,
 ) -> Result<()> {
@@ -100,7 +102,7 @@ fn run_entity(
     let ron_path = args.output_dir.join(format!("{}.ron", entry.id));
 
     if args.dry_run {
-        print_prompts(entry, &layout, generator);
+        print_prompts(entry, bestiary, &layout, generator);
         return Ok(());
     }
 
@@ -131,7 +133,8 @@ fn run_entity(
     Ok(())
 }
 
-fn print_prompts(entry: &BestiaryEntry, layout: &AtlasLayout, generator: &(dyn SpriteGenerator + Sync)) {
+fn print_prompts(entry: &BestiaryEntry, bestiary: &Bestiary, layout: &AtlasLayout, generator: &(dyn SpriteGenerator + Sync)) {
+    let style = bestiary.resolve_style(entry.ai_style.as_str());
     println!("{}:", entry.id);
     for slot in &layout.animations {
         for dir in 0..layout.directions {
@@ -144,10 +147,10 @@ fn print_prompts(entry: &BestiaryEntry, layout: &AtlasLayout, generator: &(dyn S
                         frame,
                         tile_size: layout.tile_size,
                         base_prompt: &entry.ai_prompt_base,
-                        style: &entry.ai_style,
+                        style,
                     },
                     &entry.ai_prompt_base,
-                    &entry.ai_style,
+                    style,
                 );
                 println!("  [{}/dir{}/f{}] {}", slot.name, dir, frame, p);
             }

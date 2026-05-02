@@ -31,6 +31,7 @@ impl Plugin for TargetSelectPlugin {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn update_hovered_target(
     camera_q: Query<(&Camera, &GlobalTransform), With<OrbitCamera>>,
     windows: Query<&Window>,
@@ -60,10 +61,10 @@ fn update_hovered_target(
         let bevy_pos = Vec3::new(world_pos.x, world_pos.z + 0.9, world_pos.y);
         if let Ok(screen_pos) = camera.world_to_viewport(camera_transform, bevy_pos) {
             let dist = cursor_pos.distance(screen_pos);
-            if dist < PICK_RADIUS_PX {
-                if closest.is_none() || dist < closest.as_ref().unwrap().1 {
-                    closest = Some((entity, dist, participant.id.0));
-                }
+            if dist < PICK_RADIUS_PX
+                && (closest.is_none() || dist < closest.as_ref().unwrap().1)
+            {
+                closest = Some((entity, dist, participant.id.0));
             }
         }
     }

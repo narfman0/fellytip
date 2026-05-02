@@ -8,7 +8,7 @@ use crate::{
     openai::OpenAiDalleGenerator,
     stability::StabilityGenerator,
 };
-use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry};
+use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry, StylePreset};
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
@@ -24,7 +24,9 @@ pub enum BackendChoice {
 
 pub struct StudioApp {
     bestiary: Vec<BestiaryEntry>,
+    styles: Vec<StylePreset>,
     selected_entity: usize,
+    selected_style: usize,
     backend: BackendChoice,
     openai_available: bool,
     stability_available: bool,
@@ -58,9 +60,11 @@ pub struct StudioApp {
 impl StudioApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let bestiary_path = find_bestiary_path();
-        let bestiary = bestiary_path
+        let loaded = bestiary_path
             .as_ref()
-            .and_then(|p| load_bestiary(p).ok())
+            .and_then(|p| load_bestiary(p).ok());
+        let (bestiary, styles) = loaded
+            .map(|b| (b.entries, b.styles))
             .unwrap_or_default();
 
         let output_dir = find_assets_dir()
@@ -70,10 +74,23 @@ impl StudioApp {
         let openai_available = std::env::var("SPRITE_GEN_API_KEY").is_ok();
         let stability_available = std::env::var("STABILITY_API_KEY").is_ok();
 
+        let default_style = bestiary
+            .first()
+            .and_then(|e| styles.iter().position(|s| s.name == e.ai_style))
+            .unwrap_or(0);
+
+        let backend = if stability_available {
+            BackendChoice::StabilityAi
+        } else {
+            BackendChoice::Mock
+        };
+
         Self {
             bestiary,
+            styles,
             selected_entity: 0,
-            backend: BackendChoice::Mock,
+            selected_style: default_style,
+            backend,
             openai_available,
             stability_available,
             generating: false,
@@ -96,6 +113,13 @@ impl StudioApp {
 
     fn current_entity(&self) -> Option<&BestiaryEntry> {
         self.bestiary.get(self.selected_entity)
+    }
+
+    fn selected_style_value(&self) -> &str {
+        self.styles
+            .get(self.selected_style)
+            .map(|s| s.value.as_str())
+            .unwrap_or("")
     }
 
     fn load_approved_base(&mut self, ctx: &egui::Context) {
@@ -211,6 +235,7 @@ impl StudioApp {
             return;
         }
         let entry = self.bestiary[self.selected_entity].clone();
+        let style = self.selected_style_value().to_string();
         self.gen_results = vec![None, None, None, None];
         self.gen_images = vec![None, None, None, None];
         self.selected_variant = None;
@@ -222,6 +247,7 @@ impl StudioApp {
         for variant in 0..4usize {
             let tx = tx.clone();
             let entry = entry.clone();
+            let style = style.clone();
             let generator = self.make_generator();
             std::thread::spawn(move || {
                 let req = FrameRequest {
@@ -235,7 +261,7 @@ impl StudioApp {
                     frame: variant as u32,
                     tile_size: 64,
                     base_prompt: &entry.ai_prompt_base,
-                    style: &entry.ai_style,
+                    style: &style,
                 };
                 if let Ok(img) = generator.generate(req) {
                     let _ = tx.send((variant, img));
@@ -253,6 +279,7 @@ impl StudioApp {
             Some(a) => a.clone(),
             None => return,
         };
+        let style = self.selected_style_value().to_string();
 
         self.preview_textures.clear();
         self.preview_frame = 0;
@@ -266,6 +293,7 @@ impl StudioApp {
             let tx = tx.clone();
             let entry = entry.clone();
             let anim_name = anim.name.clone();
+            let style = style.clone();
             let generator = self.make_generator();
             std::thread::spawn(move || {
                 let req = FrameRequest {
@@ -275,7 +303,7 @@ impl StudioApp {
                     frame: frame as u32,
                     tile_size: 64,
                     base_prompt: &entry.ai_prompt_base,
-                    style: &entry.ai_style,
+                    style: &style,
                 };
                 if let Ok(img) = generator.generate(req) {
                     let _ = tx.send((frame, img));
@@ -376,6 +404,12 @@ impl StudioApp {
                     self.gen_results = vec![None, None, None, None];
                     self.gen_images = vec![None, None, None, None];
                     self.selected_variant = None;
+                    // Sync style selector to the new entity's default
+                    if let Some(e) = self.bestiary.get(i) {
+                        if let Some(idx) = self.styles.iter().position(|s| s.name == e.ai_style) {
+                            self.selected_style = idx;
+                        }
+                    }
                     self.gen_receiver = None;
                     self.generating = false;
                     self.preview_textures.clear();
@@ -407,13 +441,27 @@ impl StudioApp {
                 .desired_width(ui.available_width()),
             );
         });
-        ui.horizontal(|ui| {
-            ui.label("Style:");
-            ui.add(
-                egui::TextEdit::singleline(&mut entry.ai_style.clone())
-                    .desired_width(ui.available_width()),
-            );
-        });
+        if !self.styles.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label("Style:");
+                let current_name = self
+                    .styles
+                    .get(self.selected_style)
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("—");
+                egui::ComboBox::from_id_salt("style_select")
+                    .selected_text(current_name)
+                    .show_ui(ui, |ui| {
+                        for (i, preset) in self.styles.iter().enumerate() {
+                            ui.selectable_value(
+                                &mut self.selected_style,
+                                i,
+                                preset.name.as_str(),
+                            );
+                        }
+                    });
+            });
+        }
 
         ui.horizontal(|ui| {
             ui.label("Backend:");

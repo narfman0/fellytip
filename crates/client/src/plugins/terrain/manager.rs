@@ -203,10 +203,9 @@ pub fn rebuild_dirty_chunks(
         mgr.mesh_cache.insert((coord, lod), handle);
 
         // Build water overlay mesh (LOD-independent: always full resolution).
-        if !mgr.water_mesh_cache.contains_key(&coord) {
+        if let std::collections::hash_map::Entry::Vacant(e) = mgr.water_mesh_cache.entry(coord) {
             if let Some(water_mesh) = build_water_mesh(&map, coord.cx, coord.cy) {
-                let water_handle = meshes.add(water_mesh);
-                mgr.water_mesh_cache.insert(coord, water_handle);
+                e.insert(meshes.add(water_mesh));
             }
         }
     }

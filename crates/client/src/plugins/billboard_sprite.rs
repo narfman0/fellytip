@@ -151,7 +151,7 @@ fn load_atlases(
 
     let bestiary_path = bestiary_path();
     let entries = match load_bestiary(&bestiary_path) {
-        Ok(e) => e,
+        Ok(b) => b.entries,
         Err(e) => {
             warn!("billboard: no bestiary loaded ({e:#}); plugin will be a no-op");
             commands.insert_resource(registry);

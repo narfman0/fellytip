@@ -122,7 +122,7 @@ pub fn animate_water(
 
     let t = time.elapsed_secs();
     // Primary ripple: period ~2 s, amplitude ±0.08 on blue channel.
-    let wave = (t * 3.14).sin() * 0.5 + 0.5; // 0..1
+    let wave = (t * std::f32::consts::PI).sin() * 0.5 + 0.5; // 0..1
     // Secondary shimmer: slightly offset frequency, drives green.
     let shimmer = (t * 2.51 + 1.0).sin() * 0.5 + 0.5;
 

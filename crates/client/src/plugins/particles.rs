@@ -56,7 +56,7 @@ pub enum EmitterKind {
 
 /// Shared tiny sphere mesh used for all particles.
 #[derive(Resource)]
-struct ParticleAssets {
+pub(crate) struct ParticleAssets {
     mesh: Handle<Mesh>,
 }
 
@@ -265,6 +265,7 @@ fn spawn_combat_particles(
 
 // ── Heal effect helper ────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub(crate) fn spawn_heal_effect(
     commands: &mut Commands,
     assets: &ParticleAssets,

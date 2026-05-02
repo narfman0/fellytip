@@ -406,7 +406,7 @@ fn build_tiled_box_mesh(w: f32, h: f32, d: f32, tile_size: f32) -> Mesh {
 /// * `full_group_entity`  — invisible transform parent containing all wall/roof meshes.
 /// * `simple_box_entity`  — flat-coloured cuboid shown at distance.
 /// * `lod_anchor_entity`  — zero-size entity at the tower base used to measure
-///                          camera distance; holds the `BuildingLod` component.
+///   camera distance; holds the `BuildingLod` component.
 #[allow(clippy::too_many_arguments)]
 fn spawn_hollow_tower(
     commands: &mut Commands,
@@ -561,6 +561,7 @@ fn spawn_hollow_tower(
 /// Spawns (or respawns) local building entities whenever the `Buildings` resource changes.
 ///
 /// Building entities are purely client-side; they are not replicated.
+#[allow(clippy::too_many_arguments)]
 fn spawn_building_visuals(
     mut commands:   Commands,
     mut meshes:     ResMut<Assets<Mesh>>,
