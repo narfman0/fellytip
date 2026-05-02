@@ -26,7 +26,6 @@ value = "pixel art, 128x128, isometric sprite, clean outline, soft shading, tran
 [[entity]]
 id             = "hero"
 display_name   = "Hero"
-directions     = 8
 ai_prompt_base = "adventurer hero, sword and shield, leather armor, determined expression, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "hero_warm_steel"
@@ -36,7 +35,6 @@ palette_seed   = "hero_warm_steel"
 [[entity]]
 id             = "iron_wolves_npc"
 display_name   = "Iron Wolves Warrior"
-directions     = 8
 ai_prompt_base = "iron wolves clan warrior, steel-blue cloak, wolf sigil, longsword, grizzled veteran, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "iron_blue"
@@ -44,7 +42,6 @@ palette_seed   = "iron_blue"
 [[entity]]
 id             = "merchant_guild_npc"
 display_name   = "Merchant Guild Caravaneer"
-directions     = 8
 ai_prompt_base = "merchant guild caravaneer, amber and gold robes, laden backpack, quarterstaff, shrewd look, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "guild_amber"
@@ -52,7 +49,6 @@ palette_seed   = "guild_amber"
 [[entity]]
 id             = "ash_covenant_npc"
 display_name   = "Ash Covenant Zealot"
-directions     = 8
 ai_prompt_base = "ash covenant zealot, crimson robes, soot-smeared face, ritual dagger, fanatical eyes, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "ash_crimson"
@@ -60,7 +56,6 @@ palette_seed   = "ash_crimson"
 [[entity]]
 id             = "deep_tide_npc"
 display_name   = "Deep Tide Mariner"
-directions     = 8
 ai_prompt_base = "deep tide mariner, deep teal oilskin, coral spear, salt-weathered skin, fantasy medieval coastal"
 ai_style       = "standard"
 palette_seed   = "tide_teal"
@@ -70,7 +65,6 @@ palette_seed   = "tide_teal"
 [[entity]]
 id             = "bison"
 display_name   = "Bison"
-directions     = 8
 ai_prompt_base = "american bison, shaggy brown coat, large shoulder hump, horns, wild, fantasy plains"
 ai_style       = "standard"
 palette_seed   = "bison_earth"
@@ -78,7 +72,6 @@ palette_seed   = "bison_earth"
 [[entity]]
 id             = "dog"
 display_name   = "Wild Dog"
-directions     = 8
 ai_prompt_base = "wild dog, lean and alert, mottled tan coat, fangs bared, fantasy forest"
 ai_style       = "standard"
 palette_seed   = "wild_tan"
@@ -86,7 +79,6 @@ palette_seed   = "wild_tan"
 [[entity]]
 id             = "horse"
 display_name   = "Horse"
-directions     = 8
 ai_prompt_base = "riding horse, glossy chestnut coat, flowing mane and tail, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "horse_chestnut"
@@ -96,7 +88,6 @@ palette_seed   = "horse_chestnut"
 [[entity]]
 id             = "goblin"
 display_name   = "Goblin"
-directions     = 8
 ai_prompt_base = "goblin, small wiry green creature, rusty dagger and crude leather armor, beady yellow eyes, fantasy medieval dungeon"
 ai_style       = "standard"
 palette_seed   = "goblin_green"
@@ -104,7 +95,6 @@ palette_seed   = "goblin_green"
 [[entity]]
 id             = "kobold"
 display_name   = "Kobold"
-directions     = 8
 ai_prompt_base = "kobold, small rust-scaled draconic humanoid, crude spear and tattered hide armor, cunning eyes, fantasy medieval dungeon"
 ai_style       = "standard"
 palette_seed   = "kobold_rust"
@@ -112,7 +102,6 @@ palette_seed   = "kobold_rust"
 [[entity]]
 id             = "orc"
 display_name   = "Orc"
-directions     = 8
 ai_prompt_base = "orc, hulking green-grey humanoid, crude iron armor, greataxe, scarred face, warlike, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "orc_iron"
@@ -120,7 +109,6 @@ palette_seed   = "orc_iron"
 [[entity]]
 id             = "hobgoblin"
 display_name   = "Hobgoblin"
-directions     = 8
 ai_prompt_base = "hobgoblin, disciplined martial humanoid, dark red skin, polished iron armor, longsword and shield, stern expression, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "hobgoblin_red"
@@ -128,7 +116,6 @@ palette_seed   = "hobgoblin_red"
 [[entity]]
 id             = "bugbear"
 display_name   = "Bugbear"
-directions     = 8
 ai_prompt_base = "bugbear, large hairy goblinoid, matted brown fur, morningstar, stealthy predatory stance, fantasy medieval dungeon"
 ai_style       = "standard"
 palette_seed   = "bugbear_brown"
@@ -138,7 +125,6 @@ palette_seed   = "bugbear_brown"
 [[entity]]
 id             = "skeleton"
 display_name   = "Skeleton"
-directions     = 8
 ai_prompt_base = "animated humanoid skeleton, rusted sword and shield, glowing amber eye sockets, tattered cloth, undead, fantasy medieval dungeon"
 ai_style       = "standard"
 palette_seed   = "skeleton_bone"
@@ -146,7 +132,6 @@ palette_seed   = "skeleton_bone"
 [[entity]]
 id             = "zombie"
 display_name   = "Zombie"
-directions     = 8
 ai_prompt_base = "shambling undead humanoid, decaying flesh, tattered grey clothing, outstretched arms, sunken eyes, undead, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "zombie_grey"
@@ -154,7 +139,6 @@ palette_seed   = "zombie_grey"
 [[entity]]
 id             = "ghoul"
 display_name   = "Ghoul"
-directions     = 8
 ai_prompt_base = "ghoul, gaunt undead with elongated claws, grey-green mottled skin, hunched predatory posture, jagged teeth, fantasy medieval dungeon"
 ai_style       = "standard"
 palette_seed   = "ghoul_mold"
@@ -164,7 +148,6 @@ palette_seed   = "ghoul_mold"
 [[entity]]
 id             = "owlbear"
 display_name   = "Owlbear"
-directions     = 8
 ai_prompt_base = "owlbear, bear body with large owl head and hooked beak, feathered brown torso, massive claws, fantasy forest"
 ai_style       = "standard"
 palette_seed   = "owlbear_tawny"
@@ -172,7 +155,6 @@ palette_seed   = "owlbear_tawny"
 [[entity]]
 id             = "troll"
 display_name   = "Troll"
-directions     = 8
 ai_prompt_base = "troll, tall lanky humanoid, warty green skin, long claws, hunched posture, regenerating dungeon monster, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "troll_green"
@@ -182,7 +164,6 @@ palette_seed   = "troll_green"
 [[entity]]
 id             = "giant_spider"
 display_name   = "Giant Spider"
-directions     = 8
 ai_prompt_base = "giant spider, oversized spider with black body and orange markings, venomous dripping fangs, eight legs, dungeon cave"
 ai_style       = "standard"
 palette_seed   = "spider_black"
@@ -190,7 +171,6 @@ palette_seed   = "spider_black"
 [[entity]]
 id             = "giant_rat"
 display_name   = "Giant Rat"
-directions     = 8
 ai_prompt_base = "giant rat, oversized rat with matted grey fur, red beady eyes, bared yellow teeth, sewer dungeon creature, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "rat_grey"
@@ -201,7 +181,6 @@ palette_seed   = "rat_grey"
 [[entity]]
 id             = "gelatinous_cube"
 display_name   = "Gelatinous Cube"
-directions     = 4
 ai_prompt_base = "gelatinous cube, translucent cube-shaped ooze monster, barely visible outline, partially digested bones and equipment visible inside, dungeon"
 ai_style       = "standard"
 palette_seed   = "ooze_clear"
@@ -211,7 +190,6 @@ palette_seed   = "ooze_clear"
 [[entity]]
 id             = "hill_giant"
 display_name   = "Hill Giant"
-directions     = 4
 ai_prompt_base = "hill giant, massive ogre-like humanoid, crude animal-skin garb, enormous wooden club, dull brutish expression, fantasy mountain"
 ai_style       = "standard"
 palette_seed   = "giant_earth"
@@ -221,7 +199,6 @@ palette_seed   = "giant_earth"
 [[entity]]
 id             = "red_dragon_young"
 display_name   = "Young Red Dragon"
-directions     = 8
 ai_prompt_base = "young red dragon, crimson scales, smoke curling from nostrils, partially furled wings, fierce predatory stance, fantasy medieval"
 ai_style       = "standard"
 palette_seed   = "dragon_crimson"

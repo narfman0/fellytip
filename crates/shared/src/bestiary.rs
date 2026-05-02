@@ -11,6 +11,8 @@ use std::collections::HashSet;
 use std::path::Path;
 use thiserror::Error;
 
+fn default_directions() -> u8 { 8 }
+
 /// A named art-style preset.  Defined once in `[[styles]]` at the top of
 /// `bestiary.toml` and referenced by name in each entity's `ai_style` field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +25,7 @@ pub struct StylePreset {
 pub struct BestiaryEntry {
     pub id: SmolStr,
     pub display_name: String,
+    #[serde(default = "default_directions")]
     pub directions: u8,
     pub ai_prompt_base: String,
     /// Name of a `StylePreset` defined in `[[styles]]`, or a literal style
@@ -78,9 +81,6 @@ pub enum BestiaryError {
     #[error("duplicate entity id `{0}`")]
     DuplicateId(SmolStr),
 
-    #[error("entity `{id}` has invalid directions value {value} (expected 4 or 8)")]
-    BadDirections { id: SmolStr, value: u8 },
-
     #[error("entity `{entity}` animation `{animation}` has zero frames")]
     ZeroFrames { entity: SmolStr, animation: SmolStr },
 }
@@ -130,12 +130,6 @@ fn validate(entries: &[BestiaryEntry]) -> Result<(), BestiaryError> {
         if !seen.insert(&e.id) {
             return Err(BestiaryError::DuplicateId(e.id.clone()));
         }
-        if e.directions != 4 && e.directions != 8 {
-            return Err(BestiaryError::BadDirections {
-                id: e.id.clone(),
-                value: e.directions,
-            });
-        }
         for a in &e.animations {
             if a.frames == 0 {
                 return Err(BestiaryError::ZeroFrames {
@@ -156,7 +150,6 @@ mod tests {
 [[entity]]
 id = "goblin_scout"
 display_name = "Goblin Scout"
-directions = 8
 ai_prompt_base = "goblin scout"
 ai_style = "pixel art"
 palette_seed = "forest_green"
@@ -169,7 +162,6 @@ palette_seed = "forest_green"
         let e = &b.entries[0];
         assert_eq!(e.id.as_str(), "goblin_scout");
         assert_eq!(e.display_name, "Goblin Scout");
-        assert_eq!(e.directions, 8);
         assert!(e.animations.is_empty());
     }
 
@@ -213,7 +205,6 @@ value = "pixel art, 32x32"
 [[entity]]
 id             = "goblin_scout"
 display_name   = "Goblin Scout"
-directions     = 8
 ai_prompt_base = "goblin scout"
 ai_style       = "tiny"
 palette_seed   = "forest_green"
@@ -231,32 +222,11 @@ palette_seed   = "forest_green"
     }
 
     #[test]
-    fn rejects_bad_directions() {
-        let src = r#"
-[[entity]]
-id = "weird"
-display_name = "Weird"
-directions = 6
-ai_prompt_base = "x"
-ai_style = "y"
-palette_seed = "z"
-
-[[entity.animation]]
-name = "idle"
-frames = 1
-fps = 1
-"#;
-        let err = parse_bestiary(src).unwrap_err();
-        assert!(matches!(err, BestiaryError::BadDirections { value: 6, .. }));
-    }
-
-    #[test]
     fn rejects_zero_frame_animation() {
         let src = r#"
 [[entity]]
 id = "zero"
 display_name = "Zero"
-directions = 8
 ai_prompt_base = "x"
 ai_style = "y"
 palette_seed = "z"
