@@ -13,7 +13,7 @@
 use fellytip_shared::bestiary::BestiaryEntry;
 
 /// Size in pixels of one atlas cell (per frame image).
-pub const TILE_SIZE: u32 = 64;
+pub const TILE_SIZE: u32 = 128;
 
 /// Layout of one entity's atlas.  Pure data derived from a [`BestiaryEntry`].
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -119,33 +119,20 @@ Each `AnimationDef`:
 
 **Adding a new creature:**
 1. Add one `[[entity]]` block to `assets/bestiary.toml`.
-2. Run: `cargo run -p sprite_gen -- --entity <id>`
-3. Commit the generated `atlas.png` + `manifest.json`.
+2. Run `cargo run -p sprite_studio`, select the entity, generate variants, approve one.
+3. Commit the generated `base.png`.
 
-### sprite_gen tool (`tools/sprite_gen/`)
+### sprite_studio tool (`tools/sprite_studio/`)
 
-Reads bestiary, calls an AI backend per frame, stitches frames into an atlas, writes a JSON manifest.
+Desktop GUI that reads the bestiary, lets you generate variants per entity using mock or AI backends, preview the results, and approve a base image. Run it with:
 
 ```bash
-# Mock backend — instant coloured placeholders, no API key needed
-cargo run -p sprite_gen -- --all
-
-# DALL-E 3 — real art
-cargo run -p sprite_gen -- --all --backend dalle --api-key sk-... --workers 4
-
-# Incremental — skip entities whose atlas is newer than bestiary.toml
-cargo run -p sprite_gen -- --all --incremental
-
-# Single entity
-cargo run -p sprite_gen -- --entity player
-
-# Dry-run — print prompts only, generate nothing
-cargo run -p sprite_gen -- --all --dry-run
+cargo run -p sprite_studio
 ```
 
-Outputs per entity (written to `crates/client/assets/sprites/{id}/`):
-- `atlas.png` — `directions`-row × N-col sprite sheet
-- `manifest.json` — frame layout consumed by `BillboardSpritePlugin`
+Outputs (written to `assets/sprites/{id}/`):
+- `base.png` — approved single-frame image for this entity
+- `atlas.png` + `atlas.ron` — full animation atlas + frame layout consumed by `BillboardSpritePlugin`
 
 ## Billboard sprites (`crates/client/src/plugins/billboard_sprite.rs`)
 

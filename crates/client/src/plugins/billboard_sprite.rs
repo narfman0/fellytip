@@ -4,7 +4,7 @@
 //!
 //! Scope (this PR — see issue #19):
 //! - Loads bestiary + atlas textures at startup; gracefully skips entities
-//!   whose PNG is not yet on disk.  `sprite_gen` is the generator (#17/#18).
+//!   whose PNG is not yet on disk.  `sprite_studio` is the generator (#17/#18).
 //! - Spawns a billboard quad alongside (not replacing) the existing PBR
 //!   mesh for faction NPCs, wildlife and the local player.  The additive
 //!   behaviour is intentional — so this plugin can land without regressing

@@ -9,6 +9,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Sprite Studio",
         native_options,
-        Box::new(|cc| Ok(Box::new(sprite_gen::studio::app::StudioApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(sprite_studio::studio::app::StudioApp::new(cc)))),
     )
 }

@@ -2,7 +2,9 @@
 
 use crate::{
     generator::{FrameRequest, MockGenerator, SpriteGenerator},
+    layout::TILE_SIZE,
     openai::OpenAiDalleGenerator,
+    postprocess::remove_background,
     stability::StabilityGenerator,
 };
 use fellytip_shared::bestiary::{load_bestiary, BestiaryEntry, StylePreset};
@@ -55,6 +57,9 @@ pub struct StudioApp {
     approved_texture: Option<egui::TextureHandle>,
     approved_loaded: bool,
 
+    // Post-processing toggles
+    remove_bg: bool,
+
     // Output dir
     output_dir: PathBuf,
 
@@ -99,6 +104,7 @@ impl StudioApp {
             openai_available,
             stability_available,
             entity_gen: HashMap::new(),
+            remove_bg: true,
             approved_texture: None,
             approved_loaded: false,
             output_dir,
@@ -196,6 +202,7 @@ impl StudioApp {
         let style = self.selected_style_value().to_string();
 
         let (tx, rx) = mpsc::channel::<(usize, image::RgbaImage)>();
+        let remove_bg = self.remove_bg;
 
         for variant in 0..4usize {
             let tx = tx.clone();
@@ -212,11 +219,14 @@ impl StudioApp {
                         .unwrap_or("idle"),
                     direction: 0,
                     frame: variant as u32,
-                    tile_size: 64,
+                    tile_size: TILE_SIZE,
                     base_prompt: &entry.ai_prompt_base,
                     style: &style,
                 };
-                if let Ok(img) = generator.generate(req) {
+                if let Ok(mut img) = generator.generate(req) {
+                    if remove_bg {
+                        remove_background(&mut img, 40);
+                    }
                     let _ = tx.send((variant, img));
                 }
             });
@@ -391,6 +401,7 @@ impl StudioApp {
             if generating {
                 ui.spinner();
             }
+            ui.checkbox(&mut self.remove_bg, "Remove background");
         });
 
         ui.separator();
@@ -523,18 +534,6 @@ fn rgba_to_egui(ctx: &egui::Context, img: &image::RgbaImage, label: &str) -> egu
 
 /// Walk up from cwd looking for `assets/bestiary.toml`.
 fn find_bestiary_path() -> Option<PathBuf> {
-    // Check argv for --bestiary first
-    let args: Vec<String> = std::env::args().collect();
-    let mut it = args.iter();
-    while let Some(arg) = it.next() {
-        if arg == "--bestiary" {
-            if let Some(path) = it.next() {
-                return Some(PathBuf::from(path));
-            }
-        }
-    }
-
-    // Walk upward from cwd
     let mut dir = std::env::current_dir().ok()?;
     loop {
         let candidate = dir.join("assets/bestiary.toml");

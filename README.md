@@ -91,7 +91,7 @@ cargo clippy --workspace -- -D warnings
 | `tools/combat_sim` | proptest harness for combat + ecology rules |
 | `tools/world_gen` | ASCII world preview — `cargo run -p world_gen -- --seed N` |
 | `tools/worldwatch` | Windows tray app: live BRP + SQLite dashboard |
-| `tools/sprite_gen` | AI sprite pipeline (DALL-E 3) + `sprite_studio` egui desktop tool |
+| `tools/sprite_studio` | AI sprite pipeline (DALL-E 3) + egui desktop studio — `cargo run -p sprite_studio` |
 
 ## ASCII map legend
 

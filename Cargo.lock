@@ -7331,7 +7331,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sprite_gen"
+name = "sprite_studio"
 version = "0.1.0"
 dependencies = [
  "anyhow",

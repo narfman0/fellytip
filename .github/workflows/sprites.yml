@@ -1,22 +1,18 @@
 name: sprites
 
-# Regenerate sprite atlases whenever the bestiary or the sprite_gen tool
-# changes.  PRs run a mock-backend dry-run (no secrets needed) so reviewers
-# can see the intended prompts.  Pushes to master run the real backend
-# (guarded on SPRITE_GEN_API_KEY presence) and upload the resulting atlases
-# as an artifact for human review before they land as committed assets.
+# Validate the sprite_studio tool whenever the bestiary or the tool changes.
 
 on:
   push:
     branches: [master]
     paths:
       - "assets/bestiary.toml"
-      - "tools/sprite_gen/**"
+      - "tools/sprite_studio/**"
       - ".github/workflows/sprites.yml"
   pull_request:
     paths:
       - "assets/bestiary.toml"
-      - "tools/sprite_gen/**"
+      - "tools/sprite_studio/**"
       - ".github/workflows/sprites.yml"
 
 concurrency:
@@ -27,81 +23,14 @@ permissions:
   contents: read
 
 jobs:
-  # PR path: no secret required.  Proves the pipeline builds and that
-  # every bestiary entry produces a valid atlas with the mock backend.
-  dry-run:
-    if: github.event_name == 'pull_request'
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Validate sprite_gen builds + tests
+      - name: Build and test sprite_studio
         run: |
-          cargo test -p sprite_gen --locked
-
-      - name: Print all prompts (mock backend, no network)
-        run: |
-          cargo run -q -p sprite_gen --locked -- --all --dry-run
-
-      - name: Generate atlases with mock backend
-        run: |
-          cargo run -q -p sprite_gen --locked -- \
-            --all \
-            --output-dir crates/client/assets/sprites/
-
-      - name: Upload mock sprites for inspection
-        uses: actions/upload-artifact@v4
-        with:
-          name: sprites-mock-${{ github.sha }}
-          path: crates/client/assets/sprites/
-          if-no-files-found: error
-          retention-days: 7
-
-  # Post-merge: real backend when the API key is configured.  Job is
-  # skipped cleanly if the secret isn't set, so forks and early-stage
-  # repos don't see a red checkmark.
-  generate:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment: sprite-gen
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Check for API key
-        id: apikey
-        env:
-          SPRITE_GEN_API_KEY: ${{ secrets.SPRITE_GEN_API_KEY }}
-        run: |
-          if [ -z "${SPRITE_GEN_API_KEY}" ]; then
-            echo "No SPRITE_GEN_API_KEY secret set — skipping real generation."
-            echo "have_key=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "have_key=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate atlases (OpenAI backend, incremental)
-        if: steps.apikey.outputs.have_key == 'true'
-        env:
-          SPRITE_GEN_API_KEY: ${{ secrets.SPRITE_GEN_API_KEY }}
-          SPRITE_GEN_ENDPOINT: ${{ vars.SPRITE_GEN_ENDPOINT }}
-          SPRITE_GEN_MODEL: ${{ vars.SPRITE_GEN_MODEL }}
-        run: |
-          cargo run -q -p sprite_gen --locked --release -- \
-            --backend openai \
-            --all \
-            --incremental \
-            --workers 4 \
-            --output-dir crates/client/assets/sprites/
-
-      - name: Upload generated sprites
-        if: steps.apikey.outputs.have_key == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: sprites-${{ github.sha }}
-          path: crates/client/assets/sprites/
-          if-no-files-found: error
-          retention-days: 30
+          cargo test -p sprite_studio --locked
+          cargo build -p sprite_studio --locked
