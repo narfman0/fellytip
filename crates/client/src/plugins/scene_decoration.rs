@@ -155,52 +155,41 @@ fn setup_decoration_assets(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ) {
-    let s = |path: &str| DecorationVariant::new(asset_server.load(format!("synty/nature/{path}")));
-    // Kenney rocks — Synty Fantasy Kingdom has no standalone scatter rocks.
-    let k = |path: &str| DecorationVariant::new(asset_server.load(format!("nature/{path}")));
+    let v = |path: &str| DecorationVariant::new(asset_server.load(format!("nature/{path}")));
 
     commands.insert_resource(DecorationAssets {
         broadleaf: vec![
-            s("tree_round_01.glb"),
-            s("tree_round_02.glb"),
-            s("tree_round_03.glb"),
-            s("tree_round_04.glb"),
-            s("tree_large_01.glb"),
-            s("tree_large_02.glb"),
+            v("tree_default.glb"),
+            v("tree_oak.glb"),
+            v("tree_tall.glb"),
+            v("tree_detailed.glb"),
         ],
         conifer: vec![
-            s("tree_thin_01.glb"),
-            s("tree_thin_02.glb"),
-            s("tree_thin_03.glb"),
-            s("tree_pine_cluster_01.glb"),
-            s("tree_pine_cluster_02.glb"),
+            v("tree_pineDefaultA.glb"),
+            v("tree_pineDefaultB.glb"),
+            v("tree_pineTallA.glb"),
         ],
         desert: vec![
-            s("tree_dead_01.glb"),
-            s("tree_dead_02.glb"),
-            s("tree_dead_03.glb"),
-            s("tree_dead_04.glb"),
+            v("cactus_tall.glb"),
+            v("cactus_short.glb"),
         ],
         tropical: vec![
-            s("tree_large_01.glb"),
-            s("tree_round_04.glb"),
-            s("tree_thin_04.glb"),
+            v("tree_palm.glb"),
+            v("tree_palmTall.glb"),
         ],
         rocks: vec![
-            k("rock_largeA.glb"),
-            k("rock_largeB.glb"),
-            k("rock_largeC.glb"),
-            k("rock_tallA.glb"),
-            k("rock_tallB.glb"),
-            k("rock_tallC.glb"),
+            v("rock_largeA.glb"),
+            v("rock_largeB.glb"),
+            v("rock_largeC.glb"),
+            v("rock_tallA.glb"),
+            v("rock_tallB.glb"),
+            v("rock_tallC.glb"),
         ],
         bushes: vec![
-            s("bush_01.glb"),
-            s("bush_02.glb"),
-            s("bush_03.glb"),
-            s("bush_04.glb"),
-            s("bush_05.glb"),
-            s("bush_06.glb"),
+            v("plant_bush.glb"),
+            v("plant_bushLarge.glb"),
+            v("grass.glb"),
+            v("grass_large.glb"),
         ],
         all_ready: false,
     });
