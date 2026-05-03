@@ -80,10 +80,14 @@ pub fn build_chunk_mesh(
     let half_w = (map.width  / 2) as i32;
     let half_h = (map.height / 2) as i32;
 
-    // ── Vertex positions, colours, and cached heights for normal computation ──
+    // ── Vertex positions, UVs, colours, and cached heights for normals ────────
+
+    // World-space planar UV: 1 texture repeat per 4 world-units.
+    const UV_SCALE: f32 = 0.25;
 
     let n_verts = vps * vps;
     let mut positions = Vec::<[f32; 3]>::with_capacity(n_verts);
+    let mut uvs       = Vec::<[f32; 2]>::with_capacity(n_verts);
     let mut colors    = Vec::<[f32; 4]>::with_capacity(n_verts);
     let mut h_grid    = vec![0.0f32; n_verts];
 
@@ -100,6 +104,7 @@ pub fn build_chunk_mesh(
             let bx = gx as i32 as f32 - half_w as f32;
             let bz = gy as i32 as f32 - half_h as f32;
             positions.push([bx, h, bz]);
+            uvs.push([bx * UV_SCALE, bz * UV_SCALE]);
 
             // Biome base color, then apply per-vertex noise + height shading.
             let base = corner_biome_color(map, gx, gy);
@@ -144,7 +149,17 @@ pub fn build_chunk_mesh(
         }
     }
 
-    // ── Index buffer — standard CCW quad triangulation ────────────────────────
+    // ── Index buffer — best-diagonal CCW quad triangulation ──────────────────
+    //
+    // Each quad has two possible diagonals.  Splitting along the shorter one
+    // (i.e. the pair of corners with more similar heights) reduces the
+    // "grain" artifact on slopes where uniform splitting creates a visible
+    // directional pattern across the whole chunk.
+    //
+    // Diagonal A (i00→i11): tris [i00,i01,i11] and [i00,i11,i10]
+    // Diagonal B (i10→i01): tris [i00,i01,i10] and [i10,i01,i11]  ← original
+    //
+    // All four triangles are CCW when viewed from +Y.
 
     let mut indices = Vec::<u32>::with_capacity((vps - 1) * (vps - 1) * 6);
 
@@ -154,10 +169,19 @@ pub fn build_chunk_mesh(
             let i10 = (vy       * vps + vx + 1) as u32;
             let i01 = ((vy + 1) * vps + vx    ) as u32;
             let i11 = ((vy + 1) * vps + vx + 1) as u32;
-            // CCW winding viewed from +Y (above). Proof: for a flat quad at z=0,
-            // edge1 = i01-i00 = (0,0,+step) and edge2 = i10-i00 = (+step,0,0),
-            // so cross = (+Z)×(+X) = (0,+1,0) → normal points up. ✓
-            indices.extend_from_slice(&[i00, i01, i10, i10, i01, i11]);
+
+            let h00 = h_grid[vy       * vps + vx    ];
+            let h10 = h_grid[vy       * vps + vx + 1];
+            let h01 = h_grid[(vy + 1) * vps + vx    ];
+            let h11 = h_grid[(vy + 1) * vps + vx + 1];
+
+            if (h00 - h11).abs() <= (h10 - h01).abs() {
+                // Diagonal A: split i00→i11.
+                indices.extend_from_slice(&[i00, i01, i11, i00, i11, i10]);
+            } else {
+                // Diagonal B: split i10→i01.
+                indices.extend_from_slice(&[i00, i01, i10, i10, i01, i11]);
+            }
         }
     }
 
@@ -178,6 +202,7 @@ pub fn build_chunk_mesh(
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0,     uvs);
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR,    colors);
     mesh.insert_indices(Indices::U32(indices));
     mesh

@@ -24,7 +24,7 @@ pub const MAP_HALF_HEIGHT: i64 = (MAP_HEIGHT / 2) as i64;
 pub const CHUNK_TILES: usize = 32;
 
 /// How far above `current_z` an entity can step up in one tick.
-/// Set high enough to handle steep slopes at the new Z_SCALE=20 terrain.
+/// Set high enough to handle steep slopes at the new Z_SCALE=26 terrain.
 pub const STEP_HEIGHT: f32 = 2.0;
 
 /// Gravitational acceleration in world units/sec² (downward = negative).
@@ -56,8 +56,8 @@ pub const SWIM_BUOYANCY: f32 = 35.0;
 pub const SWIM_RISE_SPEED: f32 = 6.0;
 
 /// Multiplier from normalised height `[0, 1]` to world-unit Z for surface terrain.
-/// At 20.0, mountain peaks reach ~20 world units above sea level.
-pub const Z_SCALE: f32 = 20.0;
+/// At 26.0, mountain peaks reach ~26 world units above sea level.
+pub const Z_SCALE: f32 = 26.0;
 
 /// World scale: 1 world unit = 1 metre.
 pub const METRES_PER_UNIT: f32 = 1.0;

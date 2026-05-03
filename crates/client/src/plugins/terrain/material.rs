@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use bevy::math::{Affine2, Vec2, Vec3};
+use bevy::math::Vec3;
 use bevy::prelude::*;
 use fellytip_shared::world::map::{TileKind, WorldMap};
 
@@ -128,14 +128,17 @@ pub fn corner_biome_color(map: &WorldMap, gx: usize, gy: usize) -> [f32; 4] {
 
 fn make_terrain_material(
     texture_path: &str,
+    normal_path: Option<&str>,
     materials: &mut Assets<StandardMaterial>,
     asset_server: &AssetServer,
 ) -> Handle<StandardMaterial> {
     materials.add(StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture: Some(asset_server.load(texture_path.to_string())),
-        // 1 repeat per 4 world-units gives visible detail without excessive tiling.
-        uv_transform: Affine2::from_scale(Vec2::splat(0.25)),
+        normal_map_texture: normal_path
+            .map(|p| asset_server.load(p.to_string())),
+        // Synty normal maps are authored for Unity (DirectX convention: Y flipped).
+        flip_normal_map_y: true,
         perceptual_roughness: 0.88,
         metallic: 0.0,
         reflectance: 0.3,
@@ -144,26 +147,55 @@ fn make_terrain_material(
 }
 
 /// Create one `StandardMaterial` per `BiomeRegion`, each using the appropriate
-/// Synty ground texture.  Vertex colours from `corner_biome_color` still tint
-/// the texture at each corner to blend smoothly across biome boundaries.
+/// Synty ground texture and matching normal map.  UVs are world-space planar
+/// (computed per-vertex in the mesh), so no `uv_transform` is needed here.
 pub fn create_terrain_materials(
     materials: &mut Assets<StandardMaterial>,
     asset_server: &AssetServer,
 ) -> HashMap<BiomeRegion, Handle<StandardMaterial>> {
     let mut map = HashMap::new();
 
-    let entries: &[(&str, BiomeRegion)] = &[
-        ("synty/textures/PFK_Texture_Ground_Grass_01.png", BiomeRegion::Temperate),
-        ("synty/textures/PFK_Texture_Ground_Grass_01_Dark.png", BiomeRegion::Tropical),
-        ("synty/textures/PFK_Texture_Ground_Sand_01.png", BiomeRegion::Desert),
-        ("synty/textures/PFK_Texture_Ground_Sand_02.png", BiomeRegion::Savanna),
-        ("synty/textures/PFK_Texture_Ground_Mud_01.png", BiomeRegion::Stone),
-        ("synty/textures/PFK_Texture_Ground_Grass_03.png", BiomeRegion::Snow),
-        ("synty/textures/PFK_Texture_Ground_Mud_02.png", BiomeRegion::Cave),
+    // (base texture, normal map, region)
+    let entries: &[(&str, Option<&str>, BiomeRegion)] = &[
+        (
+            "synty/textures/PFK_Texture_Ground_Grass_01.png",
+            Some("synty/textures/PFK_Texture_Ground_Base_Normals.png"),
+            BiomeRegion::Temperate,
+        ),
+        (
+            "synty/textures/PFK_Texture_Ground_Grass_01_Dark.png",
+            Some("synty/textures/PFK_Texture_Ground_Grass_02_Normal.png"),
+            BiomeRegion::Tropical,
+        ),
+        (
+            "synty/textures/PFK_Texture_Ground_Sand_01.png",
+            Some("synty/textures/PFK_Texture_Ground_Sand_02_Normal.png"),
+            BiomeRegion::Desert,
+        ),
+        (
+            "synty/textures/PFK_Texture_Ground_Sand_02.png",
+            Some("synty/textures/PFK_Texture_Ground_Sand_02_Normal.png"),
+            BiomeRegion::Savanna,
+        ),
+        (
+            "synty/textures/PFK_Texture_Ground_Mud_01.png",
+            Some("synty/textures/PFK_Texture_Ground_Base_Normals.png"),
+            BiomeRegion::Stone,
+        ),
+        (
+            "synty/textures/PFK_Texture_Ground_Grass_03.png",
+            Some("synty/textures/PFK_Texture_Ground_Grass_03_Normals.png"),
+            BiomeRegion::Snow,
+        ),
+        (
+            "synty/textures/PFK_Texture_Ground_Mud_02.png",
+            Some("synty/textures/PFK_Texture_Ground_Base_Normals.png"),
+            BiomeRegion::Cave,
+        ),
     ];
 
-    for (path, region) in entries {
-        map.insert(*region, make_terrain_material(path, materials, asset_server));
+    for (base, normal, region) in entries {
+        map.insert(*region, make_terrain_material(base, *normal, materials, asset_server));
     }
 
     map
