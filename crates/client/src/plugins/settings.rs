@@ -23,13 +23,6 @@ pub struct TreeSwayEnabled(pub bool);
 #[derive(Resource)]
 pub struct WindmillSpinEnabled(pub bool);
 
-/// Building LOD settings: enabled flag + camera-distance threshold.
-#[derive(Resource)]
-pub struct BuildingLodSettings {
-    pub enabled: bool,
-    pub distance: f32,
-}
-
 // ── Settings open/closed state ────────────────────────────────────────────────
 
 /// Newtype resource that controls whether the settings window is visible.
@@ -51,9 +44,6 @@ pub struct GraphicsSettings {
     pub animated_water: bool,
     pub tree_sway: bool,
     pub windmill_spin: bool,
-    pub building_lod: bool,
-    /// Distance threshold for building LOD in [40, 200].
-    pub building_lod_distance: f32,
     pub particles: bool,
     pub skybox: bool,
     /// Post-process colour saturation in [0.5, 1.5].
@@ -71,8 +61,6 @@ impl Default for GraphicsSettings {
             animated_water: true,
             tree_sway: true,
             windmill_spin: true,
-            building_lod: true,
-            building_lod_distance: 80.0,
             particles: true,
             skybox: true,
             post_saturation: 1.1,
@@ -91,7 +79,6 @@ impl Plugin for SettingsPlugin {
             .insert_resource(ParticlesEnabled(true))
             .insert_resource(TreeSwayEnabled(true))
             .insert_resource(WindmillSpinEnabled(true))
-            .insert_resource(BuildingLodSettings { enabled: true, distance: 80.0 })
             .register_type::<GraphicsSettings>()
             .add_systems(Startup, load_settings)
             .add_systems(
@@ -149,7 +136,6 @@ fn apply_graphics(
     mut particles_enabled: ResMut<ParticlesEnabled>,
     mut tree_sway_enabled: ResMut<TreeSwayEnabled>,
     mut windmill_spin_enabled: ResMut<WindmillSpinEnabled>,
-    mut building_lod_settings: ResMut<BuildingLodSettings>,
 ) {
     if !settings.is_changed() {
         return;
@@ -159,8 +145,6 @@ fn apply_graphics(
     particles_enabled.0 = settings.particles;
     tree_sway_enabled.0 = settings.tree_sway;
     windmill_spin_enabled.0 = settings.windmill_spin;
-    building_lod_settings.enabled = settings.building_lod;
-    building_lod_settings.distance = settings.building_lod_distance;
 
     for entity in &camera_q {
         let mut ecmds = commands.entity(entity);
@@ -264,15 +248,6 @@ fn draw_settings_window(
 
                     // Windmill animation
                     ui.checkbox(&mut settings.windmill_spin, "Windmill animation");
-
-                    // Building LOD
-                    ui.checkbox(&mut settings.building_lod, "Building LOD");
-                    if settings.building_lod {
-                        ui.add(
-                            egui::Slider::new(&mut settings.building_lod_distance, 40.0..=200.0)
-                                .text("LOD distance"),
-                        );
-                    }
 
                     // Particles
                     ui.checkbox(&mut settings.particles, "Particle effects");

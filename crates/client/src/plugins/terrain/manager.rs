@@ -53,6 +53,9 @@ pub struct ChunkManager {
     pub mesh_cache: HashMap<(ChunkCoord, LodLevel), Handle<Mesh>>,
     /// Cached water overlay mesh handles (built once per coord, LOD-independent).
     pub water_mesh_cache: HashMap<ChunkCoord, Handle<Mesh>>,
+    /// Last mesh handle applied to each spawned chunk entity — used to skip
+    /// redundant ECS updates (and suppress avian double-collider warnings).
+    pub applied_mesh: HashMap<ChunkCoord, Handle<Mesh>>,
     /// Chunks whose mesh must be (re)built this frame.
     pub dirty: HashSet<ChunkCoord>,
     /// Camera chunk from the previous frame — skip work when camera hasn't moved.
@@ -70,6 +73,7 @@ impl Default for ChunkManager {
             lod_cache:        HashMap::new(),
             mesh_cache:       HashMap::new(),
             water_mesh_cache: HashMap::new(),
+            applied_mesh:     HashMap::new(),
             dirty:            HashSet::new(),
             last_cam_chunk:   None,
             render_radius:    20,
@@ -265,6 +269,7 @@ pub fn apply_chunk_meshes(
             lifecycle.newly_hidden.push((coord, entity));
             commands.entity(entity).despawn();
         }
+        mgr.applied_mesh.remove(&coord);
         // Also despawn water overlay if it exists.
         if let Some(water_entity) = mgr.water_spawned.remove(&coord) {
             commands.entity(water_entity).despawn();
@@ -281,6 +286,12 @@ pub fn apply_chunk_meshes(
     for (coord, lod) in to_update {
         let Some(handle) = mgr.mesh_cache.get(&(coord, lod)).cloned() else { continue };
 
+        // Skip if the same mesh is already applied — avian would warn about
+        // a duplicate ColliderConstructor on an entity that already has a Collider.
+        if mgr.applied_mesh.get(&coord) == Some(&handle) {
+            continue;
+        }
+
         // Pick material from the dominant biome at the chunk centre.
         let region = tilekind_to_biome_region(chunk_dominant_kind(&map, coord));
         let mat = assets
@@ -291,10 +302,10 @@ pub fn apply_chunk_meshes(
             .clone();
 
         if let Some(&entity) = mgr.spawned.get(&coord) {
-            // Entity already exists — update mesh and material (both may change on LOD switch).
-            // Re-insert ColliderConstructor so avian rebuilds the trimesh from the new mesh.
-            commands.entity(entity).insert((
-                Mesh3d(handle),
+            // LOD changed — swap mesh and trigger avian to rebuild the trimesh collider.
+            // Remove the old Collider first so ColliderConstructor is not blocked.
+            commands.entity(entity).remove::<avian3d::prelude::Collider>().insert((
+                Mesh3d(handle.clone()),
                 MeshMaterial3d(mat),
                 ColliderConstructor::TrimeshFromMesh,
             ));
@@ -302,7 +313,7 @@ pub fn apply_chunk_meshes(
             // Spawn a new chunk entity. Vertex positions are in world space,
             // so Transform::IDENTITY places it correctly with no offset.
             let entity = commands.spawn((
-                Mesh3d(handle),
+                Mesh3d(handle.clone()),
                 MeshMaterial3d(mat),
                 Transform::IDENTITY,
                 SurfaceTerrain,
@@ -325,6 +336,7 @@ pub fn apply_chunk_meshes(
                 }
             }
         }
+        mgr.applied_mesh.insert(coord, handle);
     }
 }
 
