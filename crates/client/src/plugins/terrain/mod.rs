@@ -28,7 +28,7 @@ use manager::{
     apply_chunk_meshes, rebuild_dirty_chunks, update_chunk_visibility,
     update_layer_visibility, ChunkManager, TerrainAssets,
 };
-use material::create_terrain_material;
+use material::create_terrain_materials;
 use water_material::{animate_water, create_water_material, WaterMaterialHandle};
 
 pub struct TerrainPlugin;
@@ -68,9 +68,9 @@ fn setup_terrain_assets(
     let buildings = generate_buildings(&settlements, &map, WORLD_SEED);
     apply_building_tiles(&buildings, &mut map);
 
-    let material = create_terrain_material(&mut materials, &asset_server);
+    let biome_materials = create_terrain_materials(&mut materials, &asset_server);
     let water_mat = create_water_material(&mut materials);
-    commands.insert_resource(TerrainAssets { material });
+    commands.insert_resource(TerrainAssets { biome_materials });
     commands.insert_resource(WaterMaterialHandle(water_mat));
     commands.insert_resource(ChunkManager::default());
     commands.insert_resource(Settlements(settlements));

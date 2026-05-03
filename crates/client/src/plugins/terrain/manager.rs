@@ -10,11 +10,14 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use super::material::{tilekind_to_biome_region, BiomeRegion};
+
 use bevy::prelude::*;
 use fellytip_shared::world::map::WorldMap;
 
 use super::chunk::{build_chunk_mesh, ChunkCoord};
 use super::lod::{EdgeTransitions, LodLevel, CHUNK_TILES};
+use fellytip_shared::world::map::TileKind;
 use super::water_material::{build_water_mesh, WaterMaterialHandle, WaterOverlay};
 use crate::plugins::camera::OrbitCamera;
 use crate::{LocalPlayer, PredictedPosition};
@@ -78,7 +81,8 @@ impl Default for ChunkManager {
 /// Shared GPU handles inserted at startup.
 #[derive(Resource)]
 pub struct TerrainAssets {
-    pub material: Handle<StandardMaterial>,
+    /// One material per `BiomeRegion`, selected per-chunk based on dominant tile kind.
+    pub biome_materials: HashMap<BiomeRegion, Handle<StandardMaterial>>,
 }
 
 /// Marker on surface terrain chunk entities.
@@ -222,12 +226,28 @@ fn is_coarser_neighbor(
     lod_cache.get(&nb).is_some_and(|&nb_lod| nb_lod > my_lod)
 }
 
+/// Sample the dominant `TileKind` at a chunk's centre tile for material selection.
+fn chunk_dominant_kind(map: &WorldMap, coord: ChunkCoord) -> TileKind {
+    let ix = (coord.cx as usize) * CHUNK_TILES + CHUNK_TILES / 2;
+    let iy = (coord.cy as usize) * CHUNK_TILES + CHUNK_TILES / 2;
+    let ix = ix.min(map.width.saturating_sub(1));
+    let iy = iy.min(map.height.saturating_sub(1));
+    map.column(ix, iy)
+        .layers
+        .iter()
+        .rev()
+        .find(|l| l.kind != TileKind::Void)
+        .map(|l| l.kind)
+        .unwrap_or(TileKind::Grassland)
+}
+
 // ── System 3: ECS sync ────────────────────────────────────────────────────────
 
 pub fn apply_chunk_meshes(
     mut commands:  Commands,
     mut mgr:       ResMut<ChunkManager>,
     assets:        Res<TerrainAssets>,
+    map:           Res<WorldMap>,
     water_mat:     Option<Res<WaterMaterialHandle>>,
     mut lifecycle: ResMut<ChunkLifecycle>,
 ) {
@@ -260,15 +280,24 @@ pub fn apply_chunk_meshes(
     for (coord, lod) in to_update {
         let Some(handle) = mgr.mesh_cache.get(&(coord, lod)).cloned() else { continue };
 
+        // Pick material from the dominant biome at the chunk centre.
+        let region = tilekind_to_biome_region(chunk_dominant_kind(&map, coord));
+        let mat = assets
+            .biome_materials
+            .get(&region)
+            .or_else(|| assets.biome_materials.values().next())
+            .expect("TerrainAssets must have at least one biome material")
+            .clone();
+
         if let Some(&entity) = mgr.spawned.get(&coord) {
-            // Entity already exists — just update its mesh handle.
-            commands.entity(entity).insert(Mesh3d(handle));
+            // Entity already exists — update mesh and material (both may change on LOD switch).
+            commands.entity(entity).insert((Mesh3d(handle), MeshMaterial3d(mat)));
         } else {
             // Spawn a new chunk entity. Vertex positions are in world space,
             // so Transform::IDENTITY places it correctly with no offset.
             let entity = commands.spawn((
                 Mesh3d(handle),
-                MeshMaterial3d(assets.material.clone()),
+                MeshMaterial3d(mat),
                 Transform::IDENTITY,
                 SurfaceTerrain,
             )).id();

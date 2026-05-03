@@ -1,12 +1,62 @@
-//! Terrain material helpers: biome colour lookup and vertex-colour averaging.
+//! Terrain material helpers: biome colour lookup, vertex-colour averaging,
+//! and per-biome ground texture selection.
 //!
-//! All colours are sourced from the original `material_for()` in `tile_renderer.rs`.
-//! The terrain system shares a single `StandardMaterial { vertex_colors: true }` so
-//! every chunk uses one draw-call regardless of how many biomes it spans.
+//! Each terrain chunk samples the dominant `TileKind` at its centre and is
+//! assigned a `StandardMaterial` whose `base_color_texture` matches the biome
+//! (grass, sand, mud, etc.).  Vertex colours from `corner_biome_color` still
+//! tint the texture at each corner, providing smooth cross-biome blending.
+
+use std::collections::HashMap;
 
 use bevy::math::{Affine2, Vec2, Vec3};
 use bevy::prelude::*;
 use fellytip_shared::world::map::{TileKind, WorldMap};
+
+// ── Biome regions ─────────────────────────────────────────────────────────────
+
+/// Coarse grouping of `TileKind` variants that share the same ground texture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BiomeRegion {
+    /// Grassland, plains, forests, taiga — green grass texture.
+    Temperate,
+    /// Tropical and rainforest biomes — darker green grass texture.
+    Tropical,
+    /// Desert — sand texture.
+    Desert,
+    /// Savanna — lighter sand texture.
+    Savanna,
+    /// Mountain, stone, rivers — mud/dirt texture for rocky ground.
+    Stone,
+    /// Tundra, polar desert, arctic — lightest grass texture tinted near-white
+    /// by vertex colours.
+    Snow,
+    /// Cave tiles — dark mud texture (vertex colours carry most of the signal).
+    Cave,
+}
+
+/// Map a `TileKind` to its coarse `BiomeRegion` for texture selection.
+pub fn tilekind_to_biome_region(kind: TileKind) -> BiomeRegion {
+    match kind {
+        TileKind::Plains
+        | TileKind::Grassland
+        | TileKind::Forest
+        | TileKind::TemperateForest
+        | TileKind::Taiga => BiomeRegion::Temperate,
+        TileKind::TropicalForest | TileKind::TropicalRainforest => BiomeRegion::Tropical,
+        TileKind::Desert => BiomeRegion::Desert,
+        TileKind::Savanna => BiomeRegion::Savanna,
+        TileKind::Mountain | TileKind::Stone | TileKind::River => BiomeRegion::Stone,
+        TileKind::Tundra | TileKind::PolarDesert | TileKind::Arctic => BiomeRegion::Snow,
+        TileKind::Water => BiomeRegion::Temperate,
+        TileKind::CaveFloor
+        | TileKind::CaveWall
+        | TileKind::CrystalCave
+        | TileKind::LavaFloor
+        | TileKind::CaveRiver
+        | TileKind::CavePortal
+        | TileKind::Void => BiomeRegion::Cave,
+    }
+}
 
 /// Linear-sRGB base colour for each `TileKind`, matching `tile_renderer::material_for`.
 pub fn biome_color(kind: TileKind) -> Vec3 {
@@ -76,26 +126,45 @@ pub fn corner_biome_color(map: &WorldMap, gx: usize, gy: usize) -> [f32; 4] {
     [sum.x, sum.y, sum.z, 1.0]
 }
 
-/// Create the one shared terrain material.
-///
-/// Vertex colors (from `biome_color`) act as a multiplicative tint over the
-/// Synty ground grass texture, giving textural detail across all biomes.
-/// Desert tiles tint the grass yellow-brown, tundra near-white, etc.
-///
-/// One texture repeat per 4 world-units gives visible poly detail without
-/// excessive tiling at typical zoom levels.
-pub fn create_terrain_material(
+fn make_terrain_material(
+    texture_path: &str,
     materials: &mut Assets<StandardMaterial>,
     asset_server: &AssetServer,
 ) -> Handle<StandardMaterial> {
     materials.add(StandardMaterial {
         base_color: Color::WHITE,
-        base_color_texture: Some(asset_server.load("synty/textures/PFK_Texture_Ground_Grass_01.png")),
-        // 1 repeat per 4 world-units (tile is 1 unit, so 4 tiles per repeat).
+        base_color_texture: Some(asset_server.load(texture_path.to_string())),
+        // 1 repeat per 4 world-units gives visible detail without excessive tiling.
         uv_transform: Affine2::from_scale(Vec2::splat(0.25)),
         perceptual_roughness: 0.88,
         metallic: 0.0,
         reflectance: 0.3,
         ..default()
     })
+}
+
+/// Create one `StandardMaterial` per `BiomeRegion`, each using the appropriate
+/// Synty ground texture.  Vertex colours from `corner_biome_color` still tint
+/// the texture at each corner to blend smoothly across biome boundaries.
+pub fn create_terrain_materials(
+    materials: &mut Assets<StandardMaterial>,
+    asset_server: &AssetServer,
+) -> HashMap<BiomeRegion, Handle<StandardMaterial>> {
+    let mut map = HashMap::new();
+
+    let entries: &[(&str, BiomeRegion)] = &[
+        ("synty/textures/PFK_Texture_Ground_Grass_01.png", BiomeRegion::Temperate),
+        ("synty/textures/PFK_Texture_Ground_Grass_01_Dark.png", BiomeRegion::Tropical),
+        ("synty/textures/PFK_Texture_Ground_Sand_01.png", BiomeRegion::Desert),
+        ("synty/textures/PFK_Texture_Ground_Sand_02.png", BiomeRegion::Savanna),
+        ("synty/textures/PFK_Texture_Ground_Mud_01.png", BiomeRegion::Stone),
+        ("synty/textures/PFK_Texture_Ground_Grass_03.png", BiomeRegion::Snow),
+        ("synty/textures/PFK_Texture_Ground_Mud_02.png", BiomeRegion::Cave),
+    ];
+
+    for (path, region) in entries {
+        map.insert(*region, make_terrain_material(path, materials, asset_server));
+    }
+
+    map
 }
