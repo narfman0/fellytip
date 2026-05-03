@@ -55,7 +55,7 @@ impl Default for GraphicsSettings {
         Self {
             bloom: true,
             bloom_intensity: 0.15,
-            ssao: true,
+            ssao: false,
             fog: true,
             fog_density: 0.008,
             animated_water: true,

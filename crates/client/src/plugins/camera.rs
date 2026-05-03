@@ -9,7 +9,7 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::input::mouse::AccumulatedMouseScroll;
-use bevy::pbr::{DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion};
+use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal};
@@ -116,7 +116,6 @@ fn spawn_camera(mut commands: Commands) {
             directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
             directional_light_exponent: 30.0,
         },
-        ScreenSpaceAmbientOcclusion::default(),
         ColorGrading {
             global: ColorGradingGlobal {
                 exposure: 0.0,
