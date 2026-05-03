@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use avian3d::prelude::{ColliderConstructor, RigidBody};
 use super::material::{tilekind_to_biome_region, BiomeRegion};
 
 use bevy::prelude::*;
@@ -291,7 +292,12 @@ pub fn apply_chunk_meshes(
 
         if let Some(&entity) = mgr.spawned.get(&coord) {
             // Entity already exists — update mesh and material (both may change on LOD switch).
-            commands.entity(entity).insert((Mesh3d(handle), MeshMaterial3d(mat)));
+            // Re-insert ColliderConstructor so avian rebuilds the trimesh from the new mesh.
+            commands.entity(entity).insert((
+                Mesh3d(handle),
+                MeshMaterial3d(mat),
+                ColliderConstructor::TrimeshFromMesh,
+            ));
         } else {
             // Spawn a new chunk entity. Vertex positions are in world space,
             // so Transform::IDENTITY places it correctly with no offset.
@@ -300,6 +306,8 @@ pub fn apply_chunk_meshes(
                 MeshMaterial3d(mat),
                 Transform::IDENTITY,
                 SurfaceTerrain,
+                RigidBody::Static,
+                ColliderConstructor::TrimeshFromMesh,
             )).id();
             mgr.spawned.insert(coord, entity);
             lifecycle.newly_visible.push((coord, entity));

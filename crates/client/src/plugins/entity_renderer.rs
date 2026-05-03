@@ -31,6 +31,7 @@ use super::settings::{BuildingLodSettings, WindmillSpinEnabled};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::asset::RenderAssetUsages;
+use avian3d::prelude::LinearVelocity;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
 use fellytip_shared::components::{EntityKind, FactionBadge, GrowthStage, WildlifeKind, WorldPosition};
 use fellytip_shared::world::art_direction::WorldArtDirection;
@@ -866,7 +867,10 @@ fn ground_translation(pos: &WorldPosition) -> Vec3 {
 // their added_tick precedes the first Update run of this system.
 type NewReplicatedPos  = (With<WorldPosition>, Without<SceneRoot>);
 type ChangedRemotePos  = (Changed<WorldPosition>, Without<LocalPlayer>);
-type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
+// Exclude physics-controlled players: avian3d owns their Transform, so we must
+// not override it from PredictedPosition. Their Transform is synced back to
+// PredictedPosition via sync_physics_to_pred in PostUpdate instead.
+type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>, Without<LinearVelocity>);
 type RemotePosItems<'a> = (
     &'a WorldPosition,
     &'a mut Transform,

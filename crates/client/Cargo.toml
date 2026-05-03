@@ -27,6 +27,7 @@ image              = { workspace = true }
 ron                = { workspace = true }
 serde              = { workspace = true }
 dirs               = "5"
+avian3d            = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 bevy               = { workspace = true, features = ["bevy_remote"] }
