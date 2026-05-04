@@ -223,7 +223,7 @@ pub struct Portal {
 // ── Resources (Bevy) ──────────────────────────────────────────────────────────
 
 /// Central registry of all zones and templates.
-#[derive(Resource, Default, Clone, Debug)]
+#[derive(Resource, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ZoneRegistry {
     pub zones: HashMap<ZoneId, Zone>,
     pub templates: HashMap<ZoneTemplateId, ZoneTemplate>,
@@ -254,7 +254,7 @@ impl ZoneRegistry {
 }
 
 /// Portal graph over zones.
-#[derive(Resource, Default, Clone, Debug)]
+#[derive(Resource, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct ZoneTopology {
     pub portals: Vec<Portal>,
     /// For each zone, the list of portal ids that exit from it.

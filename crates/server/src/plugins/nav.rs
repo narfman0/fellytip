@@ -1,9 +1,10 @@
 //! Static navigation grid for pathfinding.
 //!
-//! The 1024×1024 world tile map is downsampled 4:1 to a 256×256 `NavGrid`.
+//! The 512×512 world tile map is downsampled 2:1 to a 256×256 `NavGrid`.
 //! Each cell stores a `NavCell` passability class used by A* and flow-field systems.
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use fellytip_shared::world::{
     grid::Grid,
     map::{TileKind, WorldMap, MAP_HALF_HEIGHT, MAP_HALF_WIDTH},
@@ -11,10 +12,10 @@ use fellytip_shared::world::{
 
 pub const NAV_WIDTH: usize = 256;
 pub const NAV_HEIGHT: usize = 256;
-/// Downsample factor: 1024 / 256 = 4
-const DOWNSAMPLE: usize = 4;
+/// Downsample factor: MAP_WIDTH / NAV_WIDTH = 512 / 256 = 2
+const DOWNSAMPLE: usize = 2;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NavCell {
     #[default]
     Passable,
@@ -41,7 +42,7 @@ fn tile_kind_to_nav_cell(kind: TileKind) -> NavCell {
 }
 
 /// 256×256 navigation grid built from the world tile map.
-#[derive(Resource)]
+#[derive(Resource, Serialize, Deserialize)]
 pub struct NavGrid {
     pub grid: Grid<NavCell>,
 }
@@ -51,15 +52,12 @@ impl NavGrid {
         let mut cells = Vec::with_capacity(NAV_WIDTH * NAV_HEIGHT);
         for ny in 0..NAV_HEIGHT {
             for nx in 0..NAV_WIDTH {
-                // Sample the first tile of each 4×4 block (majority would be more accurate
-                // but single-sample is cheap and sufficient for AI pathfinding).
                 let tx = nx * DOWNSAMPLE;
                 let ty = ny * DOWNSAMPLE;
                 let col = map.column(tx.min(map.width - 1), ty.min(map.height - 1));
                 let cell = col.layers.first()
                     .map(|l| {
                         if !l.walkable {
-                            // Non-walkable includes Water, Mountain, River, impassable buildings.
                             NavCell::Blocked
                         } else {
                             tile_kind_to_nav_cell(l.kind)
@@ -319,17 +317,28 @@ impl FlowField {
     }
 }
 
-/// Build the NavGrid from the WorldMap and insert it as a resource.
-/// Must run after generate_world inserts the WorldMap.
-pub fn build_nav_grid(map: Res<WorldMap>, mut commands: Commands) {
-    let nav = NavGrid::build(&map);
+/// Pure function: build a `NavGrid` from a `WorldMap`.  Called by both
+/// `build_nav_grid` (when no cached resource exists) and `generate_world`
+/// (when building the unified world gen cache).
+pub fn build_nav_grid_from_map(map: &WorldMap) -> NavGrid {
+    let nav = NavGrid::build(map);
     tracing::info!(
         cells = nav.grid.cells.len(),
         blocked = nav.grid.cells.iter().filter(|&&c| c == NavCell::Blocked).count(),
         slow = nav.grid.cells.iter().filter(|&&c| c == NavCell::Slow).count(),
         "NavGrid built"
     );
-    commands.insert_resource(nav);
+    nav
+}
+
+/// Startup system: build `NavGrid` from `WorldMap` and insert it as a resource.
+/// Skips if `generate_world` already inserted a cached `NavGrid`.
+pub fn build_nav_grid(map: Res<WorldMap>, existing: Option<Res<NavGrid>>, mut commands: Commands) {
+    if existing.is_some() {
+        tracing::info!("NavGrid: using cached value");
+        return;
+    }
+    commands.insert_resource(build_nav_grid_from_map(&map));
 }
 
 // ── ZoneNavGrids ──────────────────────────────────────────────────────────────
@@ -340,7 +349,7 @@ use std::collections::HashMap;
 /// Per-zone navigation grids, one `Grid<NavCell>` per known zone.
 ///
 /// Built at startup from `ZoneRegistry`; consumed by zone-aware path planners.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Serialize, Deserialize)]
 pub struct ZoneNavGrids(pub HashMap<ZoneId, Grid<NavCell>>);
 
 impl ZoneNavGrids {
@@ -440,12 +449,11 @@ pub fn interior_tile_to_nav_cell(tile: InteriorTile) -> NavCell {
     }
 }
 
-/// Startup system: populate `ZoneNavGrids` from all zones in `ZoneRegistry`.
-pub fn build_zone_nav_grids(
-    registry: Option<Res<ZoneRegistry>>,
-    mut zone_grids: ResMut<ZoneNavGrids>,
-) {
-    let Some(registry) = registry else { return };
+/// Pure function: build `ZoneNavGrids` from a `ZoneRegistry`.  Called by both
+/// `build_zone_nav_grids` (when no cached resource exists) and `generate_world`
+/// (when building the unified world gen cache).
+pub fn build_zone_nav_grids_from_registry(registry: &ZoneRegistry) -> ZoneNavGrids {
+    let mut zone_grids = ZoneNavGrids::default();
     for zone in registry.zones.values() {
         let Some(tiles) = registry.tiles(zone) else { continue };
         if tiles.is_empty() {
@@ -456,4 +464,19 @@ pub fn build_zone_nav_grids(
         zone_grids.insert(zone.id, grid);
     }
     tracing::info!(count = zone_grids.0.len(), "ZoneNavGrids built");
+    zone_grids
+}
+
+/// Startup system: populate `ZoneNavGrids` from all zones in `ZoneRegistry`.
+/// Skips if `generate_world` already inserted a cached `ZoneNavGrids`.
+pub fn build_zone_nav_grids(
+    registry: Option<Res<ZoneRegistry>>,
+    mut zone_grids: ResMut<ZoneNavGrids>,
+) {
+    if !zone_grids.0.is_empty() {
+        tracing::info!("ZoneNavGrids: using cached value");
+        return;
+    }
+    let Some(registry) = registry else { return };
+    *zone_grids = build_zone_nav_grids_from_registry(&registry);
 }

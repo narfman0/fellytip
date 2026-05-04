@@ -15,5 +15,5 @@ thiserror  = { workspace = true }
 tracing    = { workspace = true }
 rand        = { workspace = true }
 rand_chacha = { workspace = true }
-smallvec    = "1"
+smallvec    = { version = "1", features = ["serde"] }
 glam        = "0.30"

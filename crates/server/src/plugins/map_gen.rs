@@ -1,36 +1,56 @@
 //! World generation and history pre-simulation.
 //!
 //! On startup:
-//! 1. Generate the tile map from a fixed seed using fBm + biome + river passes.
-//! 2. Place settlements.
-//! 3. Assign territories and stamp the road network onto the map.
-//! 4. Seed ecology from the world map biomes.
-//! 5. Spawn faction guard NPCs at their home settlements.
-//! 6. Run `WorldSimSchedule` for [`HISTORY_WARP_TICKS`] ticks at warp speed so
+//! 1. Generate (or load from the unified binary cache) all static world data.
+//! 2. Seed ecology from world map biomes.
+//! 3. Spawn faction guard NPCs at their home settlements.
+//! 4. Run `WorldSimSchedule` for [`HISTORY_WARP_TICKS`] ticks at warp speed so
 //!    factions and ecology have meaningful state before the first player connects.
 //!
-//! ## World map caching
+//! ## Unified world gen cache
 //!
-//! The full [`WorldMap`] (tiles + road flags) is written to a binary file
-//! (`world_{seed}.bin`) on first generation.  Its path is recorded in the
-//! `world_meta` table under the key `"world_map_file"`.  On subsequent startups
-//! the file is read and deserialised, skipping the expensive fBm generation.
+//! All static derived data — tile map, settlements, buildings, zone graph, and
+//! nav grids — is written to a single bincode file (`world_{seed}_{w}x{h}.bin`)
+//! on first generation.  Subsequent startups load the whole bundle in one read,
+//! skipping all generation work.
+//!
+//! The file is invalidated (and fully regenerated) when:
+//! - `WORLD_CACHE_VERSION` is bumped (any algorithm change)
+//! - The seed or map dimensions change
+//!
+//! **Bump `WORLD_CACHE_VERSION` whenever you change `generate_map`,
+//! `generate_settlements_full`, `generate_buildings`, `generate_zones`, or any
+//! nav grid builder.**
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use fellytip_shared::{
     WORLD_SEED,
     components::{EntityKind, WorldPosition},
     world::{
         civilization::{
-            apply_building_tiles, assign_territories, generate_buildings, generate_roads,
+            apply_building_tiles, generate_buildings, generate_roads,
             generate_settlements_full, Buildings, Settlements,
         },
         map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
-        zone::{generate_zones, Zone, ZoneKind, ZoneParent, OVERWORLD_ZONE},
+        zone::{generate_zones, Zone, ZoneKind, ZoneParent, ZoneRegistry, ZoneTopology, OVERWORLD_ZONE},
     },
 };
+
+use crate::plugins::{
+    ai::{flush_factions_to_db, init_population_state, seed_factions, spawn_faction_npcs},
+    ecology::seed_ecology,
+    nav::{build_nav_grid, build_nav_grid_from_map, build_zone_nav_grids_from_registry, NavGrid, ZoneNavGrids},
+    world_sim::WorldSimTick,
+};
+
+// ── Cache versioning ──────────────────────────────────────────────────────────
+
+/// Bump this whenever any generation algorithm changes so stale cache files are
+/// automatically discarded and regenerated.
+const WORLD_CACHE_VERSION: u32 = 1;
 
 /// Runtime map generation configuration — insert before [`MapGenPlugin`] is added.
 #[derive(Resource, Reflect, Clone)]
@@ -46,24 +66,60 @@ pub struct MapGenConfig {
     pub npcs_per_faction:   usize,
 }
 
-use crate::plugins::{
-    ai::{flush_factions_to_db, init_population_state, seed_factions, spawn_faction_npcs},
-    ecology::seed_ecology,
-    nav::build_nav_grid,
-    persistence::Db,
-    world_sim::WorldSimTick,
-};
+// ── Cache bundle ──────────────────────────────────────────────────────────────
 
-/// Key used in the `world_meta` table to store the world map file path.
-const META_KEY_MAP_FILE: &str = "world_map_file";
+#[derive(Serialize, Deserialize)]
+struct WorldGenCache {
+    version:         u32,
+    seed:            u64,
+    width:           usize,
+    height:          usize,
+    map:             WorldMap,
+    settlements:     Settlements,
+    buildings:       Buildings,
+    zone_registry:   ZoneRegistry,
+    zone_topology:   ZoneTopology,
+    nav_grid:        NavGrid,
+    zone_nav_grids:  ZoneNavGrids,
+}
+
+// ── File helpers ──────────────────────────────────────────────────────────────
+
+fn cache_path(seed: u64, width: usize, height: usize) -> PathBuf {
+    PathBuf::from(format!("world_{seed}_{width}x{height}.bin"))
+}
+
+fn try_load_cache(path: &PathBuf) -> Option<WorldGenCache> {
+    let bytes = std::fs::read(path).ok()?;
+    match bincode::deserialize::<WorldGenCache>(&bytes) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), "World cache corrupt or incompatible: {e}");
+            None
+        }
+    }
+}
+
+fn save_cache(cache: &WorldGenCache) {
+    let path = cache_path(cache.seed, cache.width, cache.height);
+    match bincode::serialize(cache) {
+        Ok(bytes) => {
+            if let Err(e) = std::fs::write(&path, &bytes) {
+                tracing::warn!(path = %path.display(), "Failed to write world cache: {e}");
+            } else {
+                tracing::info!(path = %path.display(), bytes = bytes.len(), "World cache saved");
+            }
+        }
+        Err(e) => tracing::warn!("Failed to serialise world cache: {e}"),
+    }
+}
+
+// ── Plugin ────────────────────────────────────────────────────────────────────
 
 pub struct MapGenPlugin;
 
 impl Plugin for MapGenPlugin {
     fn build(&self, app: &mut App) {
-        // apply_deferred is inserted between systems that use Commands and systems
-        // that read the resources those commands insert, because Commands are
-        // deferred in Bevy and are not flushed until the next apply_deferred.
         app.add_systems(
             Startup,
             (generate_world, ApplyDeferred, build_nav_grid, populate_zones, ApplyDeferred, seed_ecology, spawn_faction_npcs, init_population_state, spawn_settlement_markers, history_warp, flush_factions_to_db)
@@ -73,231 +129,111 @@ impl Plugin for MapGenPlugin {
     }
 }
 
-// ── DB helpers ────────────────────────────────────────────────────────────────
+// ── Full generation pipeline ──────────────────────────────────────────────────
 
-/// Read the cached map file path from `world_meta`, if present.
-async fn get_map_file_path(pool: &sqlx::SqlitePool) -> Option<PathBuf> {
-    let row: Option<(String,)> =
-        sqlx::query_as::<_, (String,)>("SELECT value FROM world_meta WHERE key = ?")
-            .bind(META_KEY_MAP_FILE)
-            .fetch_optional(pool)
-            .await
-            .ok()?;
-    row.map(|(path,)| PathBuf::from(path))
-}
+fn run_generation(config: &MapGenConfig) -> WorldGenCache {
+    tracing::info!(seed = config.seed, width = config.width, height = config.height, "Generating world…");
 
-/// Persist the map file path into `world_meta` (upsert).
-async fn set_map_file_path(pool: &sqlx::SqlitePool, path: &Path) {
-    let res = sqlx::query(
-        "INSERT OR REPLACE INTO world_meta (key, value) VALUES (?, ?)",
-    )
-    .bind(META_KEY_MAP_FILE)
-    .bind(path.to_string_lossy().as_ref())
-    .execute(pool)
-    .await;
-
-    if let Err(e) = res {
-        tracing::warn!("Failed to write world_map_file to world_meta: {e}");
-    }
-}
-
-// ── File helpers ──────────────────────────────────────────────────────────────
-
-/// Try to load a [`WorldMap`] from a bincode file.  Returns `None` on any I/O
-/// or deserialisation error so the caller can fall through to regeneration.
-fn try_load_map_file(path: &PathBuf) -> Option<WorldMap> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(path = %path.display(), "Could not read world map file: {e}");
-            return None;
-        }
-    };
-    match bincode::deserialize::<WorldMap>(&bytes) {
-        Ok(map) => Some(map),
-        Err(e) => {
-            tracing::warn!(path = %path.display(), "World map file corrupt: {e}");
-            None
-        }
-    }
-}
-
-/// Serialise `map` to a bincode file named `world_{seed}_{width}x{height}.bin`.
-/// Returns the path on success.
-fn save_map_file(map: &WorldMap) -> Option<PathBuf> {
-    let path = PathBuf::from(format!("world_{}_{}x{}.bin", map.seed, map.width, map.height));
-    let bytes = match bincode::serialize(map) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!("Failed to serialise world map: {e}");
-            return None;
-        }
-    };
-    match std::fs::write(&path, &bytes) {
-        Ok(()) => {
-            tracing::info!(path = %path.display(), bytes = bytes.len(), "World map saved to file");
-            Some(path)
-        }
-        Err(e) => {
-            tracing::warn!(path = %path.display(), "Failed to write world map file: {e}");
-            None
-        }
-    }
-}
-
-// ── Generation helper ─────────────────────────────────────────────────────────
-
-/// Run the full generation pipeline, save to file, and record the path in
-/// `world_meta`.  Settlements are generated here only to stamp roads onto the
-/// map; `generate_world` regenerates them afterwards for the ECS resource.
-fn generate_and_save(
-    pool: &sqlx::SqlitePool,
-    rt: &tokio::runtime::Runtime,
-    config: &MapGenConfig,
-) -> WorldMap {
-    tracing::info!(seed = config.seed, width = config.width, height = config.height, "Generating world map…");
     let mut map = generate_map(config.seed, config.width, config.height);
     let settlements = generate_settlements_full(&mut map, config.seed);
     generate_roads(&mut map, &settlements);
-    let road_count = map.road_tiles.iter().filter(|&&r| r).count();
-    tracing::info!(road_count, "Road network stamped");
     let buildings = generate_buildings(&settlements, &map, config.seed);
     apply_building_tiles(&buildings, &mut map);
-    tracing::info!(count = buildings.len(), "Buildings stamped onto map");
     map.spawn_points = generate_spawn_points(&map);
-    tracing::info!(count = map.spawn_points.len(), "Spawn points computed");
 
-    if let Some(path) = save_map_file(&map) {
-        rt.block_on(set_map_file_path(pool, &path));
+    let road_count = map.road_tiles.iter().filter(|&&r| r).count();
+    tracing::info!(road_count, count = buildings.len(), spawns = map.spawn_points.len(), "Map pipeline complete");
+
+    let (zone_registry, zone_topology) = build_zone_graph(&buildings, config.seed);
+    let nav_grid = build_nav_grid_from_map(&map);
+    let zone_nav_grids = build_zone_nav_grids_from_registry(&zone_registry);
+
+    WorldGenCache {
+        version: WORLD_CACHE_VERSION,
+        seed: config.seed,
+        width: config.width,
+        height: config.height,
+        map,
+        settlements: Settlements(settlements),
+        buildings: Buildings(buildings),
+        zone_registry,
+        zone_topology,
+        nav_grid,
+        zone_nav_grids,
     }
+}
 
-    map
+fn insert_cache(commands: &mut Commands, cache: WorldGenCache) {
+    let settlement_count = cache.settlements.0.len();
+    let building_count   = cache.buildings.0.len();
+    let zone_count       = cache.zone_registry.zones.len();
+    let portal_count     = cache.zone_topology.portals.len();
+    commands.insert_resource(cache.map);
+    commands.insert_resource(cache.settlements);
+    commands.insert_resource(cache.buildings);
+    commands.insert_resource(cache.zone_registry);
+    commands.insert_resource(cache.zone_topology);
+    commands.insert_resource(cache.nav_grid);
+    commands.insert_resource(cache.zone_nav_grids);
+    tracing::info!(settlement_count, building_count, zone_count, portal_count, "World resources inserted");
 }
 
 // ── Bevy systems ──────────────────────────────────────────────────────────────
 
-/// Generate (or load from cache) the world map + settlements and insert them
-/// as Bevy resources.
-fn generate_world(mut commands: Commands, db: Res<Db>, config: Res<MapGenConfig>) {
-    let pool = db.pool().clone();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime for world map load");
+fn generate_world(mut commands: Commands, config: Res<MapGenConfig>) {
+    let path = cache_path(config.seed, config.width, config.height);
 
-    // Attempt to load the cached map file whose path is stored in world_meta.
-    let mut map = match rt.block_on(get_map_file_path(&pool)) {
-        Some(path) => {
-            tracing::info!(path = %path.display(), "Found cached world map — attempting load");
-            match try_load_map_file(&path) {
-                Some(loaded)
-                    if loaded.seed == config.seed
-                        && loaded.width == config.width
-                        && loaded.height == config.height
-                        && !loaded.road_tiles.is_empty()
-                        && !loaded.spawn_points.is_empty()
-                        && loaded.columns.len() == config.width * config.height
-                        && loaded.buildings_stamped =>
-                {
-                    tracing::info!(seed = config.seed, "World map loaded from cache — skipping generation");
-                    loaded
-                }
-                Some(_) => {
-                    tracing::warn!(seed = config.seed, "Cached map failed validation — regenerating");
-                    generate_and_save(&pool, &rt, &config)
-                }
-                None => generate_and_save(&pool, &rt, &config),
-            }
+    if let Some(cache) = try_load_cache(&path) {
+        if cache.version == WORLD_CACHE_VERSION
+            && cache.seed   == config.seed
+            && cache.width  == config.width
+            && cache.height == config.height
+        {
+            tracing::info!(path = %path.display(), "World loaded from cache");
+            insert_cache(&mut commands, cache);
+            return;
         }
-        None => {
-            tracing::info!(seed = config.seed, "No cached world map — generating");
-            generate_and_save(&pool, &rt, &config)
-        }
-    };
-
-    let settlements = generate_settlements_full(&mut map, config.seed);
-    tracing::info!(count = settlements.len(), "Settlements placed");
-
-    let territory = assign_territories(&map, &settlements);
-    let assigned = territory.iter().filter(|t| t.is_some()).count();
-    tracing::info!(assigned, "Territory tiles assigned");
-
-    // Generate buildings from the (already-stamped) map. Pure call — no map mutation
-    // here because apply_building_tiles already ran during generate_and_save and is
-    // baked into the cached .bin. If the map was just regenerated, it was also stamped
-    // there before this point.
-    let buildings = generate_buildings(&settlements, &map, config.seed);
-    tracing::info!(count = buildings.len(), "Buildings resource created");
-
-    commands.insert_resource(map);
-    commands.insert_resource(Settlements(settlements));
-    commands.insert_resource(Buildings(buildings));
-    tracing::info!("World generation complete");
-}
-
-/// Spawn a static marker entity at each settlement so clients can render them.
-///
-/// Settlement markers carry `WorldPosition`, `EntityKind::Settlement`, and
-/// `Replicate` — no `Health` or combat components.  They are never moved or
-/// despawned during normal gameplay.
-fn spawn_settlement_markers(settlements: Res<Settlements>, mut commands: Commands) {
-    for settlement in &settlements.0 {
-        commands.spawn((
-            WorldPosition {
-                x: settlement.x - MAP_HALF_WIDTH as f32,
-                y: settlement.y - MAP_HALF_HEIGHT as f32,
-                z: settlement.z,
-            },
-            EntityKind::Settlement,
-            settlement.kind,
-        ));
-        tracing::debug!(name = %settlement.name, "Settlement marker spawned");
+        tracing::warn!(
+            cached_version = cache.version,
+            current_version = WORLD_CACHE_VERSION,
+            "World cache invalid — regenerating"
+        );
+    } else {
+        tracing::info!("No valid world cache — generating");
     }
-    tracing::info!(count = settlements.0.len(), "Settlement markers spawned");
+
+    let cache = run_generation(&config);
+    save_cache(&cache);
+    insert_cache(&mut commands, cache);
 }
 
-/// Generate the zone graph from the current `Buildings` resource and insert
-/// `ZoneRegistry` + `ZoneTopology` as resources. Also propagates each building's
-/// world-space position into its `BuildingFloor` "entrance" anchor so portal
-/// triggers can be spawned at the correct location.
+/// Generate the zone graph from buildings and apply world-space anchor fixup.
 ///
-/// Must run after `generate_world` inserts the `Buildings` resource.
-pub fn populate_zones(
-    mut commands: Commands,
-    buildings: Option<Res<Buildings>>,
-) {
-    use fellytip_shared::world::civilization::{Building, BuildingKind};
-    use fellytip_shared::world::zone::{ZoneId, WORLD_SURFACE};
+/// Kept as a standalone function so `populate_zones` (Bevy system) and
+/// `generate_world` (cache builder) share the same logic.
+fn build_zone_graph(
+    buildings: &[fellytip_shared::world::civilization::Building],
+    _seed: u64,
+) -> (ZoneRegistry, ZoneTopology) {
+    use fellytip_shared::world::civilization::BuildingKind;
+    use fellytip_shared::world::zone::ZoneId;
 
-    // `combat_test` mode skips map generation and has no Buildings resource.
-    // Initialise an empty registry with just the overworld so downstream
-    // systems still have the resources they expect.
-    let empty_buildings: Vec<Building> = Vec::new();
-    let buildings_slice: &[Building] = match &buildings {
-        Some(b) => &b.0,
-        None => &empty_buildings,
-    };
+    let (mut registry, topology) = generate_zones(buildings, WORLD_SEED);
 
-    let (mut registry, topology) = generate_zones(buildings_slice, WORLD_SEED);
-
-    // Recreate the zone-allocation ordering used by generate_zones so we can
-    // deterministically map each multi-story building to its floor-0 ZoneId.
-    // Overworld is id 0; then for each multi-floor building, floor_count ids.
     let mut next_id: u32 = 1;
-    for building in buildings_slice {
+    for building in buildings {
         let floor_count = match building.kind {
             BuildingKind::Tavern | BuildingKind::Barracks => 2,
             BuildingKind::Tower => 4,
             BuildingKind::Keep => 3,
             _ => 0u8,
         };
-        if floor_count < 2 {
-            continue;
-        }
+        if floor_count < 2 { continue; }
+
         let floor_0_id = ZoneId(next_id);
         next_id += floor_count as u32;
 
-        let world_x = building.tx as f32 - MAP_HALF_WIDTH as f32 + 0.5;
+        let world_x = building.tx as f32 - MAP_HALF_WIDTH  as f32 + 0.5;
         let world_y = building.ty as f32 - MAP_HALF_HEIGHT as f32 + 0.5;
 
         if let Some(zone) = registry.zones.get_mut(&floor_0_id) {
@@ -309,35 +245,62 @@ pub fn populate_zones(
         }
     }
 
-    // Sanity: ensure the overworld is registered (generate_zones does this, but
-    // we add a fallback for clarity — downstream code relies on zone id 0).
-    debug_assert!(registry.zones.contains_key(&OVERWORLD_ZONE));
     registry.zones.entry(OVERWORLD_ZONE).or_insert_with(|| Zone {
-        id: OVERWORLD_ZONE,
-        kind: ZoneKind::Overworld,
-        parent: ZoneParent::Overworld,
-        world_id: WORLD_SURFACE,
-        width: 1024,
-        height: 1024,
+        id:          OVERWORLD_ZONE,
+        kind:        ZoneKind::Overworld,
+        parent:      ZoneParent::Overworld,
+        world_id:    fellytip_shared::world::zone::WORLD_SURFACE,
+        width:       1024,
+        height:      1024,
         template_id: 0,
-        anchors: Vec::new(),
+        anchors:     Vec::new(),
     });
 
     tracing::info!(
-        zones = registry.zones.len(),
+        zones   = registry.zones.len(),
         portals = topology.portals.len(),
-        "Zone graph generated"
+        "Zone graph built"
     );
 
+    (registry, topology)
+}
+
+/// Bevy startup system: build the zone graph and insert `ZoneRegistry` +
+/// `ZoneTopology`.  Skips if `generate_world` already inserted cached resources.
+pub fn populate_zones(
+    mut commands: Commands,
+    buildings: Option<Res<Buildings>>,
+    existing: Option<Res<ZoneRegistry>>,
+) {
+    if existing.is_some() {
+        tracing::info!("ZoneRegistry: using cached value");
+        return;
+    }
+
+    let empty: Vec<fellytip_shared::world::civilization::Building> = Vec::new();
+    let slice = buildings.as_deref().map(|b| b.0.as_slice()).unwrap_or(&empty);
+
+    let (registry, topology) = build_zone_graph(slice, WORLD_SEED);
     commands.insert_resource(registry);
     commands.insert_resource(topology);
 }
 
-/// Run `WorldSimSchedule` `config.history_warp_ticks` times synchronously before
-/// players can connect.  This "ages" the world: factions expand, ecology
-/// reaches equilibrium, and story events accumulate.
-///
-/// Set `history_warp_ticks = 0` in `server.local.toml` for fastest dev startup.
+fn spawn_settlement_markers(settlements: Res<Settlements>, mut commands: Commands) {
+    for settlement in &settlements.0 {
+        commands.spawn((
+            WorldPosition {
+                x: settlement.x - MAP_HALF_WIDTH  as f32,
+                y: settlement.y - MAP_HALF_HEIGHT as f32,
+                z: settlement.z,
+            },
+            EntityKind::Settlement,
+            settlement.kind,
+        ));
+        tracing::debug!(name = %settlement.name, "Settlement marker spawned");
+    }
+    tracing::info!(count = settlements.0.len(), "Settlement markers spawned");
+}
+
 fn history_warp(world: &mut World) {
     let ticks = world.resource::<MapGenConfig>().history_warp_ticks;
     if ticks == 0 {

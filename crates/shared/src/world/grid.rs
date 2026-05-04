@@ -3,7 +3,7 @@
 //! accessors.
 
 /// Row-major 2D grid: `cells[y * w + x]`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Grid<T> {
     pub w: usize,
     pub h: usize,
