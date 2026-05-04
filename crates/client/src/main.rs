@@ -263,11 +263,13 @@ fn tag_local_player(
             ).with_max_distance(0.15),
         ))
         .with_children(|parent| {
-            // Capsule offset so its bottom sits at Y=0 (feet).
-            // half_height=0.9, radius=0.35 → center must be 0.9+0.35=1.25 above feet.
+            // Bottom of capsule sits 0.05 above the parent origin (feet).
+            // The small buffer prevents avian from tunnelling through thin trimesh seams
+            // when the contact point is exactly at the edge of a terrain chunk.
+            // half_height=0.9, radius=0.35 → center = 0.9+0.35+0.05 = 1.30 above feet.
             parent.spawn((
                 Collider::capsule(0.9, 0.35),
-                Transform::from_translation(Vec3::Y * (0.9 + 0.35)),
+                Transform::from_translation(Vec3::Y * (0.9 + 0.35 + 0.05)),
             ));
         });
     tracing::debug!("Tagged local player entity {entity:?} at z={initial_z:.2}");
@@ -447,7 +449,10 @@ fn send_player_input(
 
             // Safety floor: teleport via Transform (avian's position) when the
             // player falls through all geometry.
-            if pred.z < -100.0 {
+            // -15.0 is below any surface terrain (max Z_SCALE=26) but above cave depth 2
+            // (-30), so it catches surface fall-through quickly without false-triggering
+            // on depth-1 cave players (~-10).
+            if pred.z < -15.0 {
                 let (sx, sy, sz) = m.spawn_points.first().copied()
                     .unwrap_or_else(|| find_surface_spawn(m));
                 pred.x = sx; pred.y = sy; pred.z = sz;
@@ -525,8 +530,8 @@ fn send_player_input(
                 pred.z += v_proj.y * dt;
             }
 
-            // Safety floor
-            if pred.z < -100.0 {
+            // Safety floor (same -15.0 threshold as the physics path above).
+            if pred.z < -15.0 {
                 let (sx, sy, sz) = m.spawn_points.first().copied()
                     .unwrap_or_else(|| find_surface_spawn(m));
                 pred.x = sx; pred.y = sy; pred.z = sz;
