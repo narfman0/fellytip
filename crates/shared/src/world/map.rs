@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-pub const MAP_WIDTH: usize  = 1024;
-pub const MAP_HEIGHT: usize = 1024;
+pub const MAP_WIDTH: usize  = 512;
+pub const MAP_HEIGHT: usize = 512;
 
 /// Half the map width/height, used to convert between world coords (centered on
 /// (0,0)) and tile indices (0..MAP_WIDTH / 0..MAP_HEIGHT).
