@@ -97,6 +97,7 @@ fn spawn_camera(mut commands: Commands) {
     let transform = camera_transform(&orbit);
     commands.spawn((
         Camera3d::default(),
+        Msaa::Sample4,
         Tonemapping::TonyMcMapface,
         Bloom {
             intensity: 0.15,

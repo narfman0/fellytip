@@ -159,11 +159,13 @@ fn apply_graphics(
             ecmds.remove::<Bloom>();
         }
 
-        // SSAO
+        // SSAO requires MSAA off; restore Sample4 when SSAO is disabled.
         if settings.ssao {
             ecmds.insert(ScreenSpaceAmbientOcclusion::default());
+            ecmds.insert(Msaa::Off);
         } else {
             ecmds.remove::<ScreenSpaceAmbientOcclusion>();
+            ecmds.insert(Msaa::Sample4);
         }
 
         // Distance fog
