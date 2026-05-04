@@ -227,8 +227,9 @@ fn main() {
 
 /// Insert `LocalPlayer`, `PredictedPosition`, and avian3d physics components on
 /// the player entity once it exists. The capsule collider (half-height 0.9, radius
-/// 0.35 ≈ 1.8 m tall) plus kinematic rigid body enable collision against terrain
-/// trimesh colliders. A downward `ShapeCaster` detects the ground each physics step.
+/// 0.35 ≈ 2.5 m tall) lives on a child entity offset upward so its bottom aligns
+/// with the parent origin (feet). The parent Transform stays at feet level so that
+/// the visual model and PredictedPosition.z always represent the ground contact point.
 #[allow(clippy::type_complexity)]
 fn tag_local_player(
     query: Query<(Entity, &WorldPosition), (With<Experience>, Without<LocalPlayer>)>,
@@ -244,22 +245,31 @@ fn tag_local_player(
     // Bevy world space: x=east, y=up (vertical), z=south.
     // PredictedPosition:  x=east, y=south,        z=up (vertical).
     let initial_transform = Transform::from_xyz(pos.x, initial_z, pos.y);
-    commands.entity(entity).insert((
-        LocalPlayer,
-        PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
-        EntityBounds::PLAYER,
-        initial_transform,
-        RigidBody::Kinematic,
-        Collider::capsule(0.9, 0.35),
-        LockedAxes::ROTATION_LOCKED,
-        LinearVelocity::ZERO,
-        ShapeCaster::new(
-            Collider::sphere(0.28),
-            Vec3::new(0.0, -1.1, 0.0),
-            Quat::IDENTITY,
-            Dir3::NEG_Y,
-        ).with_max_distance(0.25),
-    ));
+    commands.entity(entity)
+        .insert((
+            LocalPlayer,
+            PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
+            EntityBounds::PLAYER,
+            initial_transform,
+            RigidBody::Kinematic,
+            LockedAxes::ROTATION_LOCKED,
+            LinearVelocity::ZERO,
+            // ShapeCaster probes just below the feet (parent origin = feet level).
+            ShapeCaster::new(
+                Collider::sphere(0.28),
+                Vec3::new(0.0, -0.05, 0.0),
+                Quat::IDENTITY,
+                Dir3::NEG_Y,
+            ).with_max_distance(0.15),
+        ))
+        .with_children(|parent| {
+            // Capsule offset so its bottom sits at Y=0 (feet).
+            // half_height=0.9, radius=0.35 → center must be 0.9+0.35=1.25 above feet.
+            parent.spawn((
+                Collider::capsule(0.9, 0.35),
+                Transform::from_translation(Vec3::Y * (0.9 + 0.35)),
+            ));
+        });
     tracing::debug!("Tagged local player entity {entity:?} at z={initial_z:.2}");
 }
 
