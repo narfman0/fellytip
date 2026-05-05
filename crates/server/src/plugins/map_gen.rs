@@ -26,6 +26,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 use fellytip_shared::{
     WORLD_SEED,
     components::{EntityKind, WorldPosition},
@@ -35,7 +36,7 @@ use fellytip_shared::{
             generate_settlements_full, Buildings, Settlements,
         },
         map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
-        zone::{generate_zones, Zone, ZoneKind, ZoneParent, ZoneRegistry, ZoneTopology, OVERWORLD_ZONE},
+        zone::{generate_zones, Portal, PortalKind, ZoneAnchor, ZoneRegistry, ZoneTopology, OVERWORLD_ZONE},
     },
 };
 
@@ -50,7 +51,7 @@ use crate::plugins::{
 
 /// Bump this whenever any generation algorithm changes so stale cache files are
 /// automatically discarded and regenerated.
-const WORLD_CACHE_VERSION: u32 = 1;
+const WORLD_CACHE_VERSION: u32 = 2;
 
 /// Runtime map generation configuration — insert before [`MapGenPlugin`] is added.
 #[derive(Resource, Reflect, Clone)]
@@ -207,54 +208,87 @@ fn generate_world(mut commands: Commands, config: Res<MapGenConfig>) {
     insert_cache(&mut commands, cache);
 }
 
-/// Generate the zone graph from buildings and apply world-space anchor fixup.
+/// Generate the zone graph from buildings, then wire real world-space anchors
+/// and Door portals connecting overworld ↔ each building's floor 0.
 ///
 /// Kept as a standalone function so `populate_zones` (Bevy system) and
 /// `generate_world` (cache builder) share the same logic.
 fn build_zone_graph(
     buildings: &[fellytip_shared::world::civilization::Building],
-    _seed: u64,
+    seed: u64,
 ) -> (ZoneRegistry, ZoneTopology) {
-    use fellytip_shared::world::civilization::BuildingKind;
-    use fellytip_shared::world::zone::ZoneId;
+    let (mut registry, mut topology, building_to_floor0) = generate_zones(buildings, seed);
 
-    let (mut registry, topology) = generate_zones(buildings, WORLD_SEED);
+    let mut next_portal_id = topology.portals.len() as u32;
 
-    let mut next_id: u32 = 1;
+    // Add a Door portal pair (overworld ↔ floor 0) for each multi-story building.
     for building in buildings {
-        let floor_count = match building.kind {
-            BuildingKind::Tavern | BuildingKind::Barracks => 2,
-            BuildingKind::Tower => 4,
-            BuildingKind::Keep => 3,
-            _ => 0u8,
-        };
-        if floor_count < 2 { continue; }
-
-        let floor_0_id = ZoneId(next_id);
-        next_id += floor_count as u32;
+        let Some(&floor_0_id) = building_to_floor0.get(&building.id) else { continue };
 
         let world_x = building.tx as f32 - MAP_HALF_WIDTH  as f32 + 0.5;
         let world_y = building.ty as f32 - MAP_HALF_HEIGHT as f32 + 0.5;
+        let anchor_name = SmolStr::new(format!("door_{}", &building.id.to_string()[..8]));
 
-        if let Some(zone) = registry.zones.get_mut(&floor_0_id) {
-            for anchor in &mut zone.anchors {
-                if anchor.name == "entrance" {
-                    anchor.pos = Vec2::new(world_x, world_y);
-                }
-            }
+        // Add the overworld-side anchor at the building's world-space position.
+        if let Some(overworld) = registry.zones.get_mut(&OVERWORLD_ZONE) {
+            overworld.anchors.push(ZoneAnchor {
+                name: anchor_name.clone(),
+                pos: Vec2::new(world_x, world_y),
+            });
         }
+
+        // Find floor-0's destination anchor (zone-local "entrance" point).
+        let floor0_anchor = registry
+            .zones
+            .get(&floor_0_id)
+            .and_then(|z| z.anchors.iter().find(|a| a.name == "entrance").map(|a| a.name.clone()))
+            .unwrap_or_else(|| SmolStr::new("entrance"));
+
+        // Overworld → floor 0.
+        topology.add_portal(Portal {
+            id: next_portal_id,
+            kind: PortalKind::Door,
+            from_zone: OVERWORLD_ZONE,
+            from_anchor: anchor_name.clone(),
+            trigger_radius: 1.0,
+            traversal_cost: 1.0,
+            faction_permeable: true,
+            one_way: false,
+            to_zone: floor_0_id,
+            to_anchor: floor0_anchor.clone(),
+            shape: None,
+        });
+        next_portal_id += 1;
+
+        // Floor 0 → overworld (reverse).
+        topology.add_portal(Portal {
+            id: next_portal_id,
+            kind: PortalKind::Door,
+            from_zone: floor_0_id,
+            from_anchor: floor0_anchor,
+            trigger_radius: 1.0,
+            traversal_cost: 1.0,
+            faction_permeable: true,
+            one_way: false,
+            to_zone: OVERWORLD_ZONE,
+            to_anchor: anchor_name,
+            shape: None,
+        });
+        next_portal_id += 1;
     }
 
-    registry.zones.entry(OVERWORLD_ZONE).or_insert_with(|| Zone {
-        id:          OVERWORLD_ZONE,
-        kind:        ZoneKind::Overworld,
-        parent:      ZoneParent::Overworld,
-        world_id:    fellytip_shared::world::zone::WORLD_SURFACE,
-        width:       1024,
-        height:      1024,
-        template_id: 0,
-        anchors:     Vec::new(),
-    });
+    // Wire the cave entrance anchor on the overworld at a seeded world-space position.
+    let cave_x = (seed % 128) as f32 - 64.0;
+    let cave_y = ((seed >> 8) % 128) as f32 - 64.0;
+    if let Some(overworld) = registry.zones.get_mut(&OVERWORLD_ZONE) {
+        overworld.anchors.push(ZoneAnchor {
+            name: SmolStr::new("cave_entrance"),
+            pos: Vec2::new(cave_x, cave_y),
+        });
+    }
+
+    #[allow(unused_assignments)]
+    { next_portal_id += 1; }
 
     tracing::info!(
         zones   = registry.zones.len(),

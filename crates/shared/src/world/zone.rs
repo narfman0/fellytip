@@ -367,10 +367,11 @@ use crate::world::civilization::Building;
 pub fn generate_zones(
     buildings: &[Building],
     _seed: u64,
-) -> (ZoneRegistry, ZoneTopology) {
+) -> (ZoneRegistry, ZoneTopology, HashMap<Uuid, ZoneId>) {
     let mut registry = ZoneRegistry::default();
     let mut topology = ZoneTopology::default();
     let mut next_portal_id: u32 = 0;
+    let mut building_to_floor0: HashMap<Uuid, ZoneId> = HashMap::new();
 
     // Zone 0 — overworld. Width/height reflect the world tile dimensions
     // (1024×1024) so clients can reason about the surface bounds. The tile
@@ -430,6 +431,8 @@ pub fn generate_zones(
             registry.insert(zone, template);
             floor_zone_ids.push(zone_id);
         }
+
+        building_to_floor0.insert(building.id, floor_zone_ids[0]);
 
         // Staircase portal pairs between adjacent floors.
         for i in 0..(floor_zone_ids.len() - 1) {
@@ -687,7 +690,7 @@ pub fn generate_zones(
     #[allow(unused_assignments)]
     { next_portal_id += 1; }
 
-    (registry, topology)
+    (registry, topology, building_to_floor0)
 }
 
 // Tile generation helpers have been moved to `super::dungeon` (shared/world/dungeon.rs)
