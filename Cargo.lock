@@ -3614,6 +3614,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "bevy_egui",
+ "bevy_mesh",
  "dirs",
  "fellytip-server",
  "fellytip-shared",

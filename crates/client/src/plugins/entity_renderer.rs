@@ -331,9 +331,9 @@ fn build_building_colliders(
 
         let mut stack = vec![building_entity];
         while let Some(entity) = stack.pop() {
-            if let Ok((mesh_handle, gtf)) = mesh_q.get(entity) {
-                if let Some(mesh) = meshes.get(mesh_handle) {
-                    if let Some(VertexAttributeValues::Float32x3(verts)) =
+            if let Ok((mesh_handle, gtf)) = mesh_q.get(entity)
+                && let Some(mesh) = meshes.get(mesh_handle)
+                    && let Some(VertexAttributeValues::Float32x3(verts)) =
                         mesh.attribute(Mesh::ATTRIBUTE_POSITION)
                     {
                         let mat = gtf.affine();
@@ -344,8 +344,6 @@ fn build_building_colliders(
                         }
                         found = true;
                     }
-                }
-            }
             if let Ok(children) = children_q.get(entity) {
                 stack.extend(children.iter());
             }
@@ -404,11 +402,10 @@ fn spin_windmills(
     windmill_spin_enabled: Option<Res<WindmillSpinEnabled>>,
 ) {
     // Respect the global windmill-spin toggle if the resource exists.
-    if let Some(ref enabled) = windmill_spin_enabled {
-        if !enabled.0 {
+    if let Some(ref enabled) = windmill_spin_enabled
+        && !enabled.0 {
             return;
         }
-    }
     for mut transform in &mut q {
         transform.rotate_local_y(time.delta_secs() * 0.8);
     }
@@ -544,11 +541,10 @@ fn spawn_entity_visuals(
 ) {
     for (entity, pos, kind, growth, badge, wildlife_kind, settlement_kind) in &query {
         // Skip PBR if a billboard atlas is loaded for this entity kind.
-        if let Some(ref id) = atlas_id_for_entity(kind, badge, wildlife_kind) {
-            if sprites.atlases.contains_key(id.as_str()) {
+        if let Some(ref id) = atlas_id_for_entity(kind, badge, wildlife_kind)
+            && sprites.atlases.contains_key(id.as_str()) {
                 continue;
             }
-        }
         match kind {
             // ── Settlement ────────────────────────────────────────────────────
             // Spawn only the center-point marker; surrounding buildings are

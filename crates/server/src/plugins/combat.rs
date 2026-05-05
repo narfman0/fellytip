@@ -256,8 +256,8 @@ fn check_faction_aggression(
             let tier = standing_tier(reputation.score(gid.0, &fm.0));
             if faction.is_aggressive || tier.is_aggressive() {
                 // Spellcasters: try to pick a castable spell first.
-                if is_spellcaster(&cp.class) {
-                    if let (Some(book), Some(slots)) = (spellbook, spell_slots) {
+                if is_spellcaster(&cp.class)
+                    && let (Some(book), Some(slots)) = (spellbook, spell_slots) {
                         // Find a spell the NPC knows and has a slot for.
                         let chosen = book.known.iter().find_map(|&name| {
                             let spell = find_spell(name)?;
@@ -276,7 +276,6 @@ fn check_faction_aggression(
                             break;
                         }
                     }
-                }
 
                 // Fall back to class-appropriate ability.
                 let hp_pct = if health.max > 0 {
@@ -656,11 +655,10 @@ fn resolve_interrupts(
                     }
                 }
                 Effect::HealDamage { target, amount } => {
-                    if let Some(&target_entity) = id_to_entity.get(target) {
-                        if let Ok((_, _, mut health, ..)) = participants.get_mut(target_entity) {
+                    if let Some(&target_entity) = id_to_entity.get(target)
+                        && let Ok((_, _, mut health, ..)) = participants.get_mut(target_entity) {
                             health.current = (health.current + amount).min(health.max);
                         }
-                    }
                 }
                 Effect::Die { target } => {
                     if let Some(&target_entity) = id_to_entity.get(target) {
@@ -726,9 +724,9 @@ fn resolve_interrupts(
             .map(|(_, ae, _)| *ae)
             .collect();
         for (attacker_entity, defender_id, _) in &attack_meta {
-            if !damage_dealers.contains(attacker_entity) {
-                if let Some(&defender_entity) = id_to_entity.get(defender_id) {
-                    if let Ok(pos) = positions_query.get(defender_entity) {
+            if !damage_dealers.contains(attacker_entity)
+                && let Some(&defender_entity) = id_to_entity.get(defender_id)
+                    && let Ok(pos) = positions_query.get(defender_entity) {
                         damage_writer.write(ClientDamageMsg {
                             x: pos.x,
                             y: pos.z,
@@ -740,8 +738,6 @@ fn resolve_interrupts(
                             is_critical: false,
                         });
                     }
-                }
-            }
         }
     }
 

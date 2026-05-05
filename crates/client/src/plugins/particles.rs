@@ -138,11 +138,10 @@ fn tick_emitters(
     particles_enabled: Option<Res<ParticlesEnabled>>,
 ) {
     // Respect the global particles toggle if the resource exists.
-    if let Some(ref enabled) = particles_enabled {
-        if !enabled.0 {
+    if let Some(ref enabled) = particles_enabled
+        && !enabled.0 {
             return;
         }
-    }
     let Some(assets) = assets else { return };
     let mut rng = rand::rng();
 

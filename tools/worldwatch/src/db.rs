@@ -62,10 +62,10 @@ fn goal_label(v: &serde_json::Value) -> String {
     if let Some(s) = v.as_str() {
         return s.to_owned();
     }
-    if let Some(obj) = v.as_object() {
-        if let Some(key) = obj.keys().next() {
-            return key.clone();
-        }
+    if let Some(obj) = v.as_object()
+        && let Some(key) = obj.keys().next()
+    {
+        return key.clone();
     }
     "Unknown".to_owned()
 }

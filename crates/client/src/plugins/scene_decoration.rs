@@ -445,11 +445,10 @@ fn sway_trees(
     tree_sway_enabled: Option<Res<TreeSwayEnabled>>,
 ) {
     // Respect the global tree-sway toggle if the resource exists.
-    if let Some(ref enabled) = tree_sway_enabled {
-        if !enabled.0 {
+    if let Some(ref enabled) = tree_sway_enabled
+        && !enabled.0 {
             return;
         }
-    }
     let t = time.elapsed_secs();
     for (mut transform, global) in &mut q {
         let pos = global.translation();

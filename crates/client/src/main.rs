@@ -407,13 +407,12 @@ fn send_player_input(
     let has_physics = linear_vel.is_some();
 
     // ── Ground detection (physics mode) ──────────────────────────────────────
-    if has_physics {
-        if let Some(hits) = shape_hits {
+    if has_physics
+        && let Some(hits) = shape_hits {
             // normal1 is the outward normal on the cast sphere; for a downward cast
             // hitting a surface, normal1.y > 0 means the surface pushes us upward.
             pred.grounded = hits.iter().any(|h| h.normal1.y > 0.5);
         }
-    }
 
     // ── Jump ─────────────────────────────────────────────────────────────────
     if keyboard.just_pressed(KeyCode::Space) && pred.grounded {
@@ -530,11 +529,10 @@ fn send_player_input(
             } else {
                 pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
                 pred.z += pred.z_vel * dt;
-                if let Some(tz) = terrain_z {
-                    if pred.z <= tz + LAND_SNAP {
+                if let Some(tz) = terrain_z
+                    && pred.z <= tz + LAND_SNAP {
                         pred.z = tz; pred.z_vel = 0.0; pred.grounded = true;
                     }
-                }
             }
 
             // ── Slope speed correction ────────────────────────────────────────

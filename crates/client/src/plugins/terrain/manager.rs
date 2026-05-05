@@ -153,12 +153,11 @@ pub fn update_chunk_visibility(
         let my_lod = new_lod[&coord];
         for (ddx, ddy) in [(1i32,0),(-1,0),(0,1),(0,-1)] {
             let nb = ChunkCoord { cx: coord.cx + ddx, cy: coord.cy + ddy };
-            if let Some(nb_lod) = new_lod.get_mut(&nb) {
-                if *nb_lod > my_lod.coarser() {
+            if let Some(nb_lod) = new_lod.get_mut(&nb)
+                && *nb_lod > my_lod.coarser() {
                     *nb_lod = my_lod.coarser();
                     queue.push_back(nb);
                 }
-            }
         }
     }
 
@@ -212,11 +211,10 @@ pub fn rebuild_dirty_chunks(
         mgr.mesh_cache.insert((coord, lod), handle);
 
         // Build water overlay mesh (LOD-independent: always full resolution).
-        if let std::collections::hash_map::Entry::Vacant(e) = mgr.water_mesh_cache.entry(coord) {
-            if let Some(water_mesh) = build_water_mesh(&map, coord.cx, coord.cy) {
+        if let std::collections::hash_map::Entry::Vacant(e) = mgr.water_mesh_cache.entry(coord)
+            && let Some(water_mesh) = build_water_mesh(&map, coord.cx, coord.cy) {
                 e.insert(meshes.add(water_mesh));
             }
-        }
     }
 }
 
@@ -338,8 +336,8 @@ pub fn apply_chunk_meshes(
             lifecycle.newly_visible.push((coord, entity));
 
             // Spawn water overlay if this chunk has water tiles and we have the material.
-            if let Some(ref wmat) = water_mat {
-                if let Some(water_handle) = mgr.water_mesh_cache.get(&coord).cloned() {
+            if let Some(ref wmat) = water_mat
+                && let Some(water_handle) = mgr.water_mesh_cache.get(&coord).cloned() {
                     let water_entity = commands.spawn((
                         Mesh3d(water_handle),
                         MeshMaterial3d(wmat.0.clone()),
@@ -348,7 +346,6 @@ pub fn apply_chunk_meshes(
                     )).id();
                     mgr.water_spawned.insert(coord, water_entity);
                 }
-            }
         }
         mgr.applied_mesh.insert(coord, handle);
     }

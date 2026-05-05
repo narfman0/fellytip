@@ -271,21 +271,19 @@ pub fn tick_population(
         state.war_party_cooldown -= 1;
     } else if state.adult_count >= WAR_PARTY_THRESHOLD
         && state.military_strength >= WAR_PARTY_MILITARY_MIN
-    {
-        if let Some(&(target_id, tx, ty, _tz)) =
+        && let Some(&(target_id, tx, ty, _tz)) =
             nearest_target(state.home_x, state.home_y, state.home_z, hostile_targets)
-        {
-            effects.push(PopulationEffect::FormWarParty {
-                attacker_faction: state.faction_id.clone(),
-                target_settlement_id: target_id,
-                tx,
-                ty,
-            });
-            // Deduct war party from the adult count so the threshold isn't
-            // re-triggered next tick before the ECS has a chance to mark them.
-            state.adult_count = state.adult_count.saturating_sub(WAR_PARTY_SIZE);
-            state.war_party_cooldown = WAR_PARTY_COOLDOWN;
-        }
+    {
+        effects.push(PopulationEffect::FormWarParty {
+            attacker_faction: state.faction_id.clone(),
+            target_settlement_id: target_id,
+            tx,
+            ty,
+        });
+        // Deduct war party from the adult count so the threshold isn't
+        // re-triggered next tick before the ECS has a chance to mark them.
+        state.adult_count = state.adult_count.saturating_sub(WAR_PARTY_SIZE);
+        state.war_party_cooldown = WAR_PARTY_COOLDOWN;
     }
 
     (state, effects)

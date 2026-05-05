@@ -231,8 +231,8 @@ fn run_command(cmd: &str, console: &mut DebugConsole, player_q: &LocalPlayerQuer
                         "  Position: ({:.2}, {:.2}, {:.2})",
                         pred.x, pred.y, pred.z
                     ));
-                    if let Some(s) = standings {
-                        if !s.standings.is_empty() {
+                    if let Some(s) = standings
+                        && !s.standings.is_empty() {
                             let summary: Vec<String> = s
                                 .standings
                                 .iter()
@@ -243,7 +243,6 @@ fn run_command(cmd: &str, console: &mut DebugConsole, player_q: &LocalPlayerQuer
                                 .collect();
                             console.output.push(format!("  Standing: {}", summary.join(", ")));
                         }
-                    }
                 }
                 Err(_) => console.output.push("  not connected".into()),
             }

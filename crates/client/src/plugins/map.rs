@@ -114,13 +114,12 @@ fn toggle_map(
     let blocked = console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open);
     if !blocked && (kb.just_pressed(KeyCode::KeyM) || kb.just_pressed(KeyCode::Tab)) {
         map_win.open = !map_win.open;
-        if map_win.open {
-            if let Ok(pos) = player_q.single() {
+        if map_win.open
+            && let Ok(pos) = player_q.single() {
                 map_win.pan_x = pos.x;
                 map_win.pan_y = pos.y;
                 map_win.zoom = ZOOM_DEFAULT;
             }
-        }
     }
 }
 
@@ -359,8 +358,8 @@ fn draw_map(
             }
 
             // ── Faction sphere overlay ────────────────────────────────────────
-            if map_win.show_factions {
-                if let Some(ref setts) = settlements {
+            if map_win.show_factions
+                && let Some(ref setts) = settlements {
                     let standings = player_q.iter().next().and_then(|(_, s)| s);
                     for s in &setts.0 {
                         let wx = s.x - MAP_W / 2.0;
@@ -371,11 +370,10 @@ fn draw_map(
                         painter.circle_stroke(sp, r, egui::Stroke::new(2.0, color));
                     }
                 }
-            }
 
             // ── Settlement overlay ────────────────────────────────────────────
-            if map_win.show_settlements {
-                if let Some(ref setts) = settlements {
+            if map_win.show_settlements
+                && let Some(ref setts) = settlements {
                     for s in &setts.0 {
                         let wx = s.x - MAP_W / 2.0;
                         let wy = s.y - MAP_H / 2.0;
@@ -401,7 +399,6 @@ fn draw_map(
                         }
                     }
                 }
-            }
 
             // ── Player marker ─────────────────────────────────────────────────
             if let Ok((pos, _)) = player_q.single() {
@@ -607,15 +604,14 @@ fn draw_minimap(
                 };
                 ui.label(egui::RichText::new(world_label).small().color(world_color));
             }
-            if let Some(setts) = settlements {
-                if let Some(near) = nearest_within(Vec2::new(px, py), &setts, NEAR_RADIUS) {
+            if let Some(setts) = settlements
+                && let Some(near) = nearest_within(Vec2::new(px, py), &setts, NEAR_RADIUS) {
                     ui.label(
                         egui::RichText::new(format!("Near: {}", near.name))
                             .small()
                             .color(egui::Color32::from_rgb(255, 220, 120)),
                     );
                 }
-            }
         });
 
     Ok(())

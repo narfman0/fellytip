@@ -1223,11 +1223,10 @@ pub fn apply_battle_economy_effects(
         };
 
         // Credit winner.
-        if gold_transfer > 0.0 {
-            if let Some(winner) = pop.settlements.values_mut().find(|s| s.faction_id == winner_fid) {
+        if gold_transfer > 0.0
+            && let Some(winner) = pop.settlements.values_mut().find(|s| s.faction_id == winner_fid) {
                 winner.economy.gold += gold_transfer;
             }
-        }
 
         // Raid: attacker steals an extra 20% and burns 10% food.
         let is_raid = record.defender_casualties == 0 && record.attacker_casualties == 0;

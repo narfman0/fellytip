@@ -98,7 +98,7 @@ fn main() {
     // ── Statistics ─────────────────────────────────────────────────────────────
     println!("  Tile composition ({total_tiles} surface columns):");
     let mut sorted_counts: Vec<_> = counts.iter().collect();
-    sorted_counts.sort_by_key(|(_, &v)| std::cmp::Reverse(v));
+    sorted_counts.sort_by_key(|&(_, &v)| std::cmp::Reverse(v));
     for (kind, count) in &sorted_counts {
         let pct = **count as f32 / total_tiles as f32 * 100.0;
         println!("    {:20} {:6}  ({:.1}%)", format!("{kind:?}"), count, pct);

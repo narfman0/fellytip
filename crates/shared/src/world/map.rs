@@ -257,10 +257,10 @@ impl WorldMap {
     /// act as solid obstacles for the existing `is_walkable_at` movement check.
     pub fn mark_impassable(&mut self, ix: usize, iy: usize) {
         let idx = ix + iy * self.width;
-        if let Some(col) = self.columns.get_mut(idx) {
-            if let Some(layer) = col.layers.iter_mut().find(|l| l.is_surface_kind()) {
-                layer.walkable = false;
-            }
+        if let Some(col) = self.columns.get_mut(idx)
+            && let Some(layer) = col.layers.iter_mut().find(|l| l.is_surface_kind())
+        {
+            layer.walkable = false;
         }
     }
 

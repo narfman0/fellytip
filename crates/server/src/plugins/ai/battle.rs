@@ -278,11 +278,10 @@ pub fn run_battle_rounds(
 
         // Sync health from the updated CombatState back to ECS Health components.
         for (entity, snap, _, _) in attacker_snaps.iter().chain(defender_snaps.iter()) {
-            if let Some(cs) = state.get(&snap.id) {
-                if let Ok(mut health) = health_query.get_mut(*entity) {
+            if let Some(cs) = state.get(&snap.id)
+                && let Ok(mut health) = health_query.get_mut(*entity) {
                     health.current = cs.health;
                 }
-            }
         }
     }
 }

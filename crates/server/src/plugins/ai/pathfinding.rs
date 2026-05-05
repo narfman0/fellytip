@@ -322,12 +322,12 @@ pub fn advance_zone_parties(
         }
 
         // Emit UndergroundThreat when hops_to_surface <= 3.
-        if war_member.current_zone != fellytip_shared::world::zone::OVERWORLD_ZONE {
-            if let Some(hops) = topology.hop_distance(
+        if war_member.current_zone != fellytip_shared::world::zone::OVERWORLD_ZONE
+            && let Some(hops) = topology.hop_distance(
                 war_member.current_zone,
                 fellytip_shared::world::zone::OVERWORLD_ZONE,
-            ) {
-                if hops <= 3 {
+            )
+                && hops <= 3 {
                     story_writer.write(WriteStoryEvent(StoryEvent {
                         id: uuid::Uuid::new_v4(),
                         tick: tick.0,
@@ -341,8 +341,6 @@ pub fn advance_zone_parties(
                         lore_tags: Vec::new(),
                     }));
                 }
-            }
-        }
 
         // Find exit portal for the next hop in the route.
         let Some(&next_zone) = war_member.zone_route.first() else {

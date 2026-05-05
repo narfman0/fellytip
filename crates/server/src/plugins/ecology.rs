@@ -708,12 +708,11 @@ fn update_animal_behavior(
                         da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
                     });
 
-                if let Some(&(pred_entity, pred_pos, _)) = nearest_pred {
-                    if dist_sq(self_pos, pred_pos) <= FLEE_RANGE_SQ {
+                if let Some(&(pred_entity, pred_pos, _)) = nearest_pred
+                    && dist_sq(self_pos, pred_pos) <= FLEE_RANGE_SQ {
                         new_targets.insert(self_entity, (AnimalState::Fleeing, Some(pred_entity)));
                         continue;
                     }
-                }
                 // Alternate resting/grazing every 100 ticks.
                 let entity_bits = self_entity.to_bits();
                 let state = if (tick.0.wrapping_add(entity_bits) % 100) < 80 {
@@ -733,12 +732,11 @@ fn update_animal_behavior(
                         da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
                     });
 
-                if let Some(&(prey_entity, prey_pos, _)) = nearest_prey {
-                    if dist_sq(self_pos, prey_pos) <= HUNT_RANGE_SQ {
+                if let Some(&(prey_entity, prey_pos, _)) = nearest_prey
+                    && dist_sq(self_pos, prey_pos) <= HUNT_RANGE_SQ {
                         new_targets.insert(self_entity, (AnimalState::Hunting, Some(prey_entity)));
                         continue;
                     }
-                }
                 new_targets.insert(self_entity, (AnimalState::Grazing, None));
             }
             EcologyRole::Scavenger => {
@@ -759,8 +757,8 @@ fn update_animal_behavior(
 
         match &behavior.state {
             AnimalState::Fleeing => {
-                if let Some(threat_entity) = behavior.target {
-                    if let Some(&threat_pos) = pos_lookup.get(&threat_entity) {
+                if let Some(threat_entity) = behavior.target
+                    && let Some(&threat_pos) = pos_lookup.get(&threat_entity) {
                         let dx = pos.x - threat_pos[0];
                         let dy = pos.y - threat_pos[1];
                         let len = (dx * dx + dy * dy).sqrt().max(0.001);
@@ -768,11 +766,10 @@ fn update_animal_behavior(
                         pos.x += (dx / len) * 0.4;
                         pos.y += (dy / len) * 0.4;
                     }
-                }
             }
             AnimalState::Hunting => {
-                if let Some(prey_entity) = behavior.target {
-                    if let Some(&prey_pos) = pos_lookup.get(&prey_entity) {
+                if let Some(prey_entity) = behavior.target
+                    && let Some(&prey_pos) = pos_lookup.get(&prey_entity) {
                         let dx = prey_pos[0] - pos.x;
                         let dy = prey_pos[1] - pos.y;
                         let d_sq = dx * dx + dy * dy;
@@ -785,7 +782,6 @@ fn update_animal_behavior(
                         // not applied here to avoid borrow conflicts; a dedicated
                         // combat system would handle that.
                     }
-                }
             }
             AnimalState::Grazing | AnimalState::Resting => {}
         }

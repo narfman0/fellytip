@@ -135,10 +135,10 @@ pub fn apply_effects(
                 }
             }
             Effect::ApplyStatus { target, status } => {
-                if let Some(c) = state.get_mut(target) {
-                    if !c.statuses.contains(status) {
-                        c.statuses.push(status.clone());
-                    }
+                if let Some(c) = state.get_mut(target)
+                    && !c.statuses.contains(status)
+                {
+                    c.statuses.push(status.clone());
                 }
             }
             Effect::Die { .. } => {
