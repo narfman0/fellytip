@@ -8,6 +8,7 @@ See `docs/` for product documentation:
 - `docs/requirements.md` — what the game must do
 - `docs/architecture.md` — crate layout, design constraints, data flow
 - `docs/milestones.md` — milestone definitions and status
+- `docs/brp.md` — BRP endpoint reference (`dm/*` methods, ralph client API)
 - `docs/systems/` — one file per major system (world-map, combat, civilization, world-sim, networking, persistence, rendering, pathfinding, perf, zones, underground)
 
 ## Crate map
@@ -24,9 +25,7 @@ See `docs/` for product documentation:
 | `tools/character_studio` | Sprite atlas generator + desktop studio: `cargo run -p character_studio` — opens the egui GUI. Select an entity, choose Mock/OpenAI/Stability backend, generate 4 variants, approve one. |
 | `tools/mesh_gen` | Rigged+animated 3D model pipeline: `cargo run -p mesh_gen -- --all` (mock) or `--backend live` (requires `MESHY_API_KEY`). Uses Meshy text-to-3d to produce animated GLBs. Outputs to `assets/models/`. Sprite generation is handled by `character_studio`. |
 
-### Bestiary
-
-`assets/bestiary.toml` is the single source of truth for sprite entities. It currently contains **15 D&D SRD Tier 1 monster entries** (Goblin, Kobold, Orc, Hobgoblin, Bugbear, Skeleton, Zombie, Ghoul, Owlbear, Troll, Giant Spider, Giant Rat, Gelatinous Cube, Hill Giant, Young Red Dragon) in addition to the hero, faction NPCs, and wildlife. The old `goblin_scout` placeholder has been removed — the renderer now uses `atlas_id_for_entity()` (in `crates/client/src/plugins/billboard_sprite.rs`) to pick an atlas from `EntityKind` + `FactionBadge` + `WildlifeKind`.
+See `docs/systems/rendering.md` for bestiary / atlas details (`atlas_id_for_entity`, sprite generation, drift-guard test).
 
 ## Non-negotiable architecture rules
 
@@ -85,49 +84,18 @@ Run `cargo clippy` before considering any task done.
 
 ## Ralph loop (automated feedback)
 
-`fellytip-client --headless` runs both client and server logic in one process and exposes BRP on port **15702** (see `BRP_PORT` in `crates/client/src/main.rs`). There is no separate `fellytip-server` binary today — `fellytip-server` is a library crate that the client consumes. Launch order:
+`fellytip-client --headless` exposes BRP on port **15702**. Launch order:
 
 ```bash
 cargo run -p fellytip-client -- --headless &
 cargo run -p ralph -- --scenario all
 ```
 
-Ralph scenarios are the acceptance criteria for each milestone. A scenario passing = milestone shipped.
+Ralph scenarios are the acceptance criteria for each milestone. See **`docs/brp.md`** for the full `dm/*` method reference, built-in `world.*` endpoints, and the typed ralph BRP client API.
 
-### DM BRP methods (live world control)
+## Milestones & implementation order
 
-The headless client registers a set of `dm/*` custom BRP methods (see `crates/server/src/plugins/dm.rs`) used by ralph scenarios and `tools/worldwatch` for live testing:
-
-| Method | Params | Effect |
-|---|---|---|
-| `dm/spawn_npc` | `{ faction, x, y, z, level? }` | Spawn a full-stat faction NPC |
-| `dm/kill` | `{ entity }` | Despawn any entity by id |
-| `dm/teleport` | `{ entity, x, y, z }` | Move an entity to a new position |
-| `dm/set_faction` | `{ faction, food?, gold?, military? }` | Override faction resources |
-| `dm/trigger_war_party` | `{ attacker_faction, target_faction }` | Immediately form a war party targeting the nearest hostile settlement |
-| `dm/set_ecology` | `{ region, prey?, predator? }` | Override prey / predator counts in a macro region |
-| `dm/battle_history` | `{ limit? }` | Read the rolling battle record history, newest-first |
-| `dm/clear_battle_history` | `{}` | Drop every queued `BattleRecord` — test helper so scenarios can isolate their own battle |
-| `dm/underground_pressure` | `{}` | Read the `UndergroundPressure` snapshot `{ score, last_raid_tick }` |
-| `dm/force_underground_pressure` | `{}` | Force `UndergroundPressure.score = 1.0` so the next 1 Hz tick spawns a raid — used by `underground_e2e` |
-| `dm/move_entity` | `{ entity, x, y, z }` | A* path any entity (PC or NPC) to a world target; inserts `NavPath` + `NavigationGoal` — used by `movement_e2e` |
-
-Bevy 0.18 renamed the built-in BRP endpoints from `bevy/*` to `world.*` (e.g. `world.query`, `world.get`, `world.spawn`). All new ralph code should call the `world.*` names.
-
-## Milestones (current target: work top-to-bottom)
-
-| # | Done when |
-|---|---|
-| **0 – Bones** | Server + client connect; `WorldPosition` replicated; WASD moves sprite |
-| **0b – Ralph** | ralph `basic_movement` scenario passes via BRP |
-| **1 – Living World** | Factions, ecology, story log in egui; world survives restart |
-| **2 – First Blood** | Player attacks NPC; NPC death → story log; proptest green |
-| **3 – Party Play** | 4 simultaneous clients; party HUD; visibility culling |
-| **4 – MVF** | 3 classes, 1 dungeon, faction consequences; 2-hour session stable |
-
-## Implementation order
-
-Follow the milestone sequence in `docs/milestones.md`. Each milestone's acceptance criteria define what "done" means. System docs in `docs/systems/` describe the current implementation.
+See **`docs/milestones.md`** for the full milestone table and acceptance criteria. Work top-to-bottom. System docs in `docs/systems/` describe the current implementation of each major system.
 
 ## Style
 
