@@ -2,12 +2,15 @@ pub use fellytip_combat_rules::combat;
 pub mod world;
 
 pub mod bestiary;
+pub mod bridge;
 pub mod components;
 pub mod inputs;
 pub use fellytip_world_types::math;
 pub mod protocol;
 pub mod resources;
 pub mod sprite_math;
+pub mod utils;
+pub use utils::parse_arg;
 
 // ── Network constants shared by server and client ────────────────────────────
 

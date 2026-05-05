@@ -44,7 +44,7 @@ use fellytip_shared::{
 };
 use uuid::Uuid;
 
-use crate::plugins::{
+use fellytip_game::plugins::{
     ai::{BattleHistory, FactionMember, FactionPopulationState, FactionRegistry, UndergroundPressure, WarPartyMember},
     ai::population::faction_npc_bundle,
     combat::{CombatParticipant, ExperienceReward},
@@ -464,9 +464,9 @@ pub fn dm_move_entity(In(params): In<Option<Value>>, world: &mut World) -> BrpRe
         .map(|p| (p.x, p.y))?;
 
     let (nav_path, goal) = {
-        let nav = world.get_resource::<crate::plugins::nav::NavGrid>()
+        let nav = world.get_resource::<fellytip_game::plugins::nav::NavGrid>()
             .ok_or_else(|| BrpError::internal("NavGrid not ready"))?;
-        crate::plugins::nav::compute_nav_path(nav, from, (x, y, z))
+        fellytip_game::plugins::nav::compute_nav_path(nav, from, (x, y, z))
             .ok_or_else(|| BrpError::internal("no path found to destination"))?
     };
 

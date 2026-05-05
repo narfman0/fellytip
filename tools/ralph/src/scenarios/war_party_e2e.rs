@@ -23,7 +23,7 @@ const BATTLE_POLL:    Duration = Duration::from_secs(2);
 const HISTORY_TIMEOUT: Duration = Duration::from_secs(5);
 const HISTORY_POLL:    Duration = Duration::from_millis(250);
 
-const WAR_PARTY_MEMBER: &str = "fellytip_server::plugins::ai::WarPartyMember";
+const WAR_PARTY_MEMBER: &str = "fellytip_game::plugins::ai::WarPartyMember";
 
 const ATTACKER: &str = "iron_wolves";
 const DEFENDER: &str = "ash_covenant";

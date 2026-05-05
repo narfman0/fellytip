@@ -167,7 +167,7 @@ pub fn assign_economic_role(npc_index: usize, is_capital: bool, home_tile: (u32,
 ///
 /// `level` is clamped to `u32` at the call site (DM handler receives `u32`);
 /// we store it as `u32` here matching `CombatParticipant`.
-pub(crate) fn faction_npc_bundle(
+pub fn faction_npc_bundle(
     faction_id: FactionId,
     pos: WorldPosition,
     level: u32,

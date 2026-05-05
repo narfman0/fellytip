@@ -13,7 +13,7 @@ use fellytip_shared::protocol::ClientDamageMsg;
 use fellytip_shared::{
     combat::{
         asi_levels_for_class, find_spell, hit_die_for_class, hp_on_level_up, xp_to_next_level,
-        interrupt::{AbilityContext, AttackContext, InterruptFrame, InterruptStack},
+        interrupt::{AbilityContext, AttackContext, InterruptFrame},
         spells::{SpellSlots, Spellbook},
         types::{
             CharacterClass, CombatState, CombatantId, CombatantSnapshot, CombatantState,
@@ -59,40 +59,7 @@ use crate::plugins::ai::{FactionMember, FactionNpcRank, FactionRegistry};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-// ── Local player input buffer ─────────────────────────────────────────────────
-
-/// Actions queued by the client input system for the current frame.
-///
-/// The client pushes to this resource from `send_player_input` in Update;
-/// `process_player_input` drains it in FixedUpdate.
-///
-/// MULTIPLAYER: replace with MessageReceiver<PlayerInput> on ClientOf entities.
-#[derive(Resource, Default)]
-pub struct LocalPlayerInput {
-    pub actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)>,
-}
-
-/// Server-only combat participant tracking.
-#[derive(Component)]
-pub struct CombatParticipant {
-    pub id: CombatantId,
-    pub interrupt_stack: InterruptStack,
-    pub class: CharacterClass,
-    pub level: u32,
-    /// Armour Class — threshold an attack roll must meet or beat to hit.
-    /// See `docs/dnd5e-srd-reference.md`.
-    pub armor_class: i32,
-    pub strength: i32,
-    pub dexterity: i32,
-    pub constitution: i32,
-    pub intelligence: i32,
-    pub wisdom: i32,
-    pub charisma: i32,
-}
-
-/// XP granted to the killer when this entity dies. Server-only (NPCs/bosses).
-#[derive(Component)]
-pub struct ExperienceReward(pub u32);
+pub use fellytip_shared::bridge::{CombatParticipant, ExperienceReward, LocalPlayerInput};
 
 /// Stores the most-recently-received movement direction for a player entity.
 ///

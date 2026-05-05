@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 use uuid::Uuid;
-use fellytip_server::plugins::combat::{CombatParticipant, ExperienceReward};
+use fellytip_shared::bridge::{CombatParticipant, ExperienceReward};
 use fellytip_shared::components::{Pacifist, WorldPosition};
 use super::action_menu::EguiPointerConsumed;
 use super::camera::OrbitCamera;

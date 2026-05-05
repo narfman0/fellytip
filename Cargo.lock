@@ -3616,6 +3616,7 @@ dependencies = [
  "bevy_egui",
  "bevy_mesh",
  "dirs",
+ "fellytip-game",
  "fellytip-server",
  "fellytip-shared",
  "image",
@@ -3644,7 +3645,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fellytip-server"
+name = "fellytip-game"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3660,6 +3661,20 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "fellytip-server"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "fellytip-game",
+ "fellytip-shared",
+ "rand 0.10.0",
+ "serde",
+ "serde_json",
+ "tracing",
  "uuid",
 ]
 

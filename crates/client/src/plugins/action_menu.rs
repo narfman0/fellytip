@@ -8,8 +8,8 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use uuid::Uuid;
+use fellytip_shared::bridge::LocalPlayerInput;
 use fellytip_shared::inputs::ActionIntent;
-use fellytip_server::plugins::combat::LocalPlayerInput;
 use super::target_select::HoveredTarget;
 
 /// Set to true this frame if egui consumed the pointer (so left-click attack is suppressed).

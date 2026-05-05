@@ -133,7 +133,7 @@ async fn fetch_overview(brp: &BrpClient) -> Result<OverviewSnapshot> {
 
     // World tick: from the reflected WorldSimTick resource.
     let world_tick = brp
-        .get_resource("fellytip_server::plugins::world_sim::WorldSimTick")
+        .get_resource("fellytip_game::plugins::world_sim::WorldSimTick")
         .await
         .ok()
         .and_then(|v| v["0"].as_u64())

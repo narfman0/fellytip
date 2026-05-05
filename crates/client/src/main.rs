@@ -6,12 +6,10 @@ use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, http::RemoteHttpPlugin};
 #[cfg(not(target_family = "wasm"))]
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use fellytip_server::{
-    plugins::{combat::LocalPlayerInput, perf::ClientFrameTimings},
-    ServerGamePlugin,
-};
+use fellytip_game::ServerGamePlugin;
 use fellytip_shared::{
     PLAYER_SPEED, WORLD_SEED,
+    bridge::{ClientFrameTimings, LocalPlayerInput},
     combat::types::CharacterClass,
     components::{EntityBounds, Experience, WorldPosition},
     inputs::ActionIntent,
@@ -111,11 +109,11 @@ fn main() {
     let mut app = App::new();
 
     let args: Vec<String> = std::env::args().collect();
-    let seed          = fellytip_server::parse_arg(&args, "--seed",              WORLD_SEED);
-    let map_width     = fellytip_server::parse_arg(&args, "--map-width",         MAP_WIDTH);
-    let map_height    = fellytip_server::parse_arg(&args, "--map-height",        MAP_HEIGHT);
-    let history_warp  = fellytip_server::parse_arg(&args, "--history-warp-ticks", 0u64);
-    let npcs_per_fac  = fellytip_server::parse_arg(&args, "--npcs-per-faction",  3usize);
+    let seed          = fellytip_shared::parse_arg(&args, "--seed",              WORLD_SEED);
+    let map_width     = fellytip_shared::parse_arg(&args, "--map-width",         MAP_WIDTH);
+    let map_height    = fellytip_shared::parse_arg(&args, "--map-height",        MAP_HEIGHT);
+    let history_warp  = fellytip_shared::parse_arg(&args, "--history-warp-ticks", 0u64);
+    let npcs_per_fac  = fellytip_shared::parse_arg(&args, "--npcs-per-faction",  3usize);
 
     #[cfg(not(target_family = "wasm"))]
     {
@@ -258,7 +256,7 @@ fn tag_local_player(
         (
             With<Experience>,
             Without<LocalPlayer>,
-            Without<fellytip_server::plugins::bot::BotController>,
+            Without<fellytip_game::plugins::bot::BotController>,
         ),
     >,
     mut commands: Commands,
@@ -817,7 +815,7 @@ fn dm_enter_portal(
     In(params): In<Option<serde_json::Value>>,
     world: &mut World,
 ) -> BrpResult {
-    use fellytip_server::plugins::portal::PlayerZoneTransition;
+    use fellytip_game::plugins::portal::PlayerZoneTransition;
     use fellytip_shared::world::zone::{ZoneMembership, ZoneTopology};
     use fellytip_shared::components::WorldPosition;
 
@@ -848,7 +846,7 @@ fn dm_enter_portal(
             }
         } else {
             // Use portal system's PortalTrigger query to find the nearest one.
-            let mut trigger_q = world.query::<(&fellytip_server::plugins::portal::PortalTrigger, &WorldPosition, Option<&ZoneMembership>)>();
+            let mut trigger_q = world.query::<(&fellytip_game::plugins::portal::PortalTrigger, &WorldPosition, Option<&ZoneMembership>)>();
             let nearest = trigger_q
                 .iter(world)
                 .filter(|(trigger, tpos, tzone)| {

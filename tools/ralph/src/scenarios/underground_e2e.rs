@@ -23,7 +23,7 @@ use std::{thread::sleep, time::{Duration, Instant}};
 
 pub struct UndergroundE2e;
 
-const WAR_PARTY_MEMBER: &str = "fellytip_server::plugins::ai::WarPartyMember";
+const WAR_PARTY_MEMBER: &str = "fellytip_game::plugins::ai::WarPartyMember";
 const FACTION_BADGE: &str = "fellytip_shared::components::FactionBadge";
 const ZONE_MEMBERSHIP: &str = "fellytip_shared::world::zone::ZoneMembership";
 

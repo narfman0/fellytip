@@ -1,18 +1,24 @@
 [package]
-name    = "fellytip-server"
+name    = "fellytip-game"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "fellytip_server"
+name = "fellytip_game"
 path = "src/lib.rs"
 
 [dependencies]
 fellytip-shared    = { workspace = true }
-fellytip-game      = { workspace = true }
 bevy               = { workspace = true, features = ["bevy_log", "multi_threaded", "bevy_remote"] }
 rand               = { workspace = true }
 serde              = { workspace = true }
 serde_json         = { workspace = true }
+bincode            = { workspace = true }
+smol_str           = { workspace = true }
+sqlx               = { workspace = true }
 uuid               = { workspace = true }
+tokio              = { workspace = true }
+anyhow             = { workspace = true }
+toml               = { workspace = true }
 tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }

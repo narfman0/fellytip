@@ -14,34 +14,7 @@ use crate::plugins::world_sim::WorldSimSchedule;
 /// Target tick budget for the 1 Hz world-sim schedule (server default).
 pub const AI_TICK_BUDGET_MS: f32 = 50.0;
 
-/// Frame-time floor for the host-mode render thread (seconds).
-/// When the client's rolling-average frame time exceeds this value the host
-/// is considered under pressure and the throttle level is bumped up one step.
-pub const HOST_FRAME_FLOOR_SECS: f32 = 1.0 / 30.0;
-
-/// Rolling window of recent render frame times (seconds), written by the
-/// client in host mode. Read by `update_throttle_level` to apply a one-step
-/// throttle boost when the render thread is overloaded.
-#[derive(Resource, Default)]
-pub struct ClientFrameTimings {
-    samples: VecDeque<f32>,
-    pub under_pressure: bool,
-}
-
-impl ClientFrameTimings {
-    pub fn push(&mut self, delta_secs: f32) {
-        if self.samples.len() >= 60 {
-            self.samples.pop_front();
-        }
-        self.samples.push_back(delta_secs);
-        let avg = self.samples.iter().sum::<f32>() / self.samples.len() as f32;
-        self.under_pressure = avg > HOST_FRAME_FLOOR_SECS;
-    }
-
-    pub fn sample_count(&self) -> usize {
-        self.samples.len()
-    }
-}
+pub use fellytip_shared::bridge::{ClientFrameTimings, HOST_FRAME_FLOOR_SECS};
 
 #[derive(Resource)]
 pub struct TickStartTime(pub Instant);

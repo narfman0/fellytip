@@ -5,6 +5,7 @@ members = [
     "crates/combat-rules",
     "crates/world-types",
     "crates/shared",
+    "crates/game",
     "crates/server",
     "crates/client",
     "tools/combat_sim",
@@ -43,6 +44,7 @@ avian3d             = { version = "0.6", features = ["3d", "f32"] }
 bevy_mesh           = "0.18"
 fellytip-world-types = { path = "crates/world-types" }
 fellytip-shared     = { path = "crates/shared" }
+fellytip-game       = { path = "crates/game" }
 
 [profile.dev]
 opt-level = 2

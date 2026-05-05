@@ -11,11 +11,12 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContext, EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext, egui};
 use fellytip_shared::{
+    bridge::CombatParticipant,
     combat::spells::SpellSlots,
     components::{ActionBudget, Experience, Health, PlayerStandings},
     world::faction::standing_tier,
 };
-use fellytip_server::plugins::{combat::CombatParticipant, party::PartyRegistry};
+use fellytip_game::plugins::party::PartyRegistry;
 use crate::LocalPlayer;
 use crate::plugins::battle::{BattleLog, ClientStoryLog};
 use crate::plugins::debug_console::DebugConsole;
