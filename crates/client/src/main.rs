@@ -61,6 +61,7 @@ const ASSET_PATH: &str = "assets";
 
 fn add_windowed_plugins(app: &mut App) {
     app.add_plugins(PhysicsPlugins::default())
+        .add_plugins(avian3d::debug_render::PhysicsDebugPlugin)
         .add_plugins(
             DefaultPlugins.build()
                 .set(AssetPlugin {

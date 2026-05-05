@@ -42,7 +42,7 @@ pub const ANIM_RUN:    usize = 2;
 #[allow(dead_code)] pub const ANIM_DEATH:  usize = 7;
 
 /// Base world-space scale applied to all character models.
-pub const CHARACTER_SCALE: f32 = 0.125;
+pub const CHARACTER_SCALE: f32 = 0.025;
 
 /// Movement speed (world units / second) above which walk replaces idle.
 const WALK_THRESHOLD: f32 = 0.3;
