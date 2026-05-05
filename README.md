@@ -9,51 +9,84 @@ Multiplayer action RPG in Rust/Bevy where the world simulates itself independent
 - Rust stable (edition 2024)
 - A C linker (MSVC on Windows, `gcc`/`clang` on Linux/macOS)
 
-## Run
+## Run modes
 
 ```bash
-# Game client + embedded server (windowed)
-cargo run
+# Single-player (default): client runs the game plugin in-process, no network.
+cargo run -p fellytip-client
 
-# Headless mode (no window, for testing / CI)
-cargo run -- --headless
+# Headless mode (no window) for ralph scenarios, bots, and external BRP tooling.
+# Exposes BRP on port 15702 and registers all dm/* methods.
+cargo run -p fellytip-client -- --headless
 
-# Preview the generated world as ASCII art
+# Preview the generated world as ASCII art.
 cargo run -p world_gen -- --seed 42
-cargo run -p world_gen -- --seed 42 --width 120 --height 50
 
-# Sprite + 3D mesh studio — browse entities, generate sprites, approve atlas images
+# Sprite + 3D mesh studio.
 cargo run -p character_studio
 ```
 
 See [`tools/character_studio/README.md`](tools/character_studio/README.md) for backend setup (OpenAI / Stability AI / Mock) and the `MESHY_API_KEY` env var for 3D mesh generation.
 
-**Note:** Always run commands from the workspace root (`fellytip/`), not from inside a crate directory. The server and client run in separate terminals and connect automatically on localhost.
+**Note:** Always run commands from the workspace root (`fellytip/`), not from inside a crate directory.
 
 ## Verify with ralph
 
 `ralph` is an automated test driver that asserts live world state via the Bevy Remote Protocol (BRP).
 
 ```bash
-# With server + headless client already running:
+# With a headless client already running:
 cargo run -p ralph -- --scenario basic_movement
+cargo run -p ralph -- --scenario all
 ```
 
 ## Tests
 
 ```bash
-cargo test --workspace               # 58 tests across all crates
-cargo test -p fellytip-shared        # pure logic: map gen, biomes, civilization, combat (58 tests)
+cargo test --workspace
+cargo test -p fellytip-shared        # pure logic: protocol, components, sprite math
+cargo test -p fellytip-world-types   # map gen, biomes, civilization, ecology, zones
+cargo test -p fellytip-combat-rules  # combat rules, interrupts, spells
+cargo test -p fellytip-game          # plugin-level tests
 cargo test -p combat_sim             # proptest invariants for combat + ecology
 cargo clippy --workspace -- -D warnings
 ```
+
+## Crates
+
+| Crate | Purpose |
+|---|---|
+| `crates/shared` | ECS components, replicated protocol, input intents, math/sprite utilities |
+| `crates/combat-rules` | Pure combat logic — `CharacterClass`, `SpellSlots`, rules, interrupt stack |
+| `crates/world-types` | Pure world data types — map, zone, faction, population, ecology, civilization, dungeon, cave, grid |
+| `crates/game` | `ServerGamePlugin` + all 16 game simulation plugins (combat, AI, ecology, nav, portal, party, persistence, perf, story, world-sim, dungeon, bot, interest, character-persistence, map-gen, combat-test) |
+| `crates/server` | Thin shim over `fellytip-game` + DM/RPC admin tools (`dm_spawn_npc`, `dm_kill`, `dm_teleport`, `dm_trigger_war_party`, `dm_set_ecology`, …) |
+| `crates/client` | Bevy rendering + UI binary; hosts `ServerGamePlugin` in-process for both windowed and headless runs |
+| `tools/ralph` | BRP HTTP test driver |
+| `tools/combat_sim` | proptest harness for combat + ecology rules |
+| `tools/world_gen` | ASCII world preview |
+| `tools/worldwatch` | Live BRP + SQLite dashboard |
+| `tools/character_studio` | AI sprite pipeline + egui desktop studio |
+
+## Bots / fake players
+
+The headless client exposes BRP methods for spawning server-side fake players that are indistinguishable from real players (same component bundle, same combat / aggro / persistence handling):
+
+| Method | Effect |
+|---|---|
+| `dm/spawn_bot` | Spawn a bot at a world position with a `BotPolicy` (Idle / Wander / Aggressive) |
+| `dm/despawn_bot` | Despawn a bot by entity id |
+| `dm/list_bots` | List all live bots |
+| `dm/set_bot_action` | Queue a one-shot `ActionIntent` on a bot |
+
+See `docs/brp.md` for the full `dm/*` reference.
 
 ## What's implemented
 
 | Area | State |
 |---|---|
-| Networking (Lightyear 0.26) | Server + client connect; `WorldPosition {x,y,z}` replicated |
-| BRP observability | Server port 15702, headless client port 15703 |
+| Networking (Lightyear 0.26) | Server + client protocol; `WorldPosition {x,y,z}` replicated |
+| BRP observability | Headless client port 15702 |
 | SQLite persistence | Migrations run on startup; `Db` resource available |
 | World sim (1 Hz) | `WorldSimSchedule` drives ecology, faction AI, story flush |
 | **World map** | 512×512 tile grid, stacked layers, fBm terrain, 3D height (`z`) |
@@ -81,19 +114,7 @@ cargo clippy --workspace -- -D warnings
 | **Party HUD** | egui health bars for all party members; updates from replicated `Health` components |
 | **Roof cutaway** | `RoofTile` + `update_roof_cutaway` hides interior roof tiles when player is in a `BuildingFloor` zone |
 | **Zone-aware A*** | `find_path_zone_aware` in shared; `ZoneNavGrids::zone_astar` bridge; wired into NPC wander |
-
-## Crates
-
-| Crate | Purpose |
-|---|---|
-| `crates/shared` | Types, protocol, combat rules, world gen — no I/O |
-| `crates/server` | Bevy server: networking, world sim, persistence, map gen |
-| `crates/client` | Bevy client: networking, rendering (WIP) |
-| `tools/ralph` | BRP test driver |
-| `tools/combat_sim` | proptest harness for combat + ecology rules |
-| `tools/world_gen` | ASCII world preview — `cargo run -p world_gen -- --seed N` |
-| `tools/worldwatch` | Windows tray app: live BRP + SQLite dashboard |
-| `tools/character_studio` | AI sprite pipeline (DALL-E 3) + egui desktop studio — `cargo run -p character_studio` |
+| **Bots / fake players** | `dm/spawn_bot` etc. spawn full-fidelity player entities with `BotController` + `BotPolicy` |
 
 ## ASCII map legend
 

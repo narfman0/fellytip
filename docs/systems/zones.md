@@ -12,17 +12,17 @@ Single-story village buildings use a cheaper **roof-cutaway** shortcut: the inte
 
 | Component | Location | Status | Gaps / TODOs |
 |---|---|---|---|
-| Zone data types (`Zone`, `ZoneKind`, `ZoneParent`, `InteriorTile`, `ZoneAnchor`, `Portal`, `PortalKind`) | `crates/shared/src/world/zone.rs` | ✅ Done | — |
-| `ZoneTemplate` + content-hash dedupe (`ZoneTemplateId = u64`) | `crates/shared/src/world/zone.rs` | ✅ Done | — |
-| `ZoneRegistry` + `ZoneTopology` resources | `crates/shared/src/world/zone.rs` | ✅ Done | — |
-| `ZoneMembership` component | `crates/shared/src/world/zone.rs` | ✅ Done | — |
-| `ZoneTopology::hop_distance` (BFS) | `crates/shared/src/world/zone.rs` | ✅ Done | `shortest_path` helper currently lives in `ai.rs` (`shortest_zone_path`); should move to `ZoneTopology` impl |
-| `generate_zones(&buildings, seed)` pure fn | `crates/shared/src/world/zone.rs` | ✅ Done | Only multi-floor `BuildingKind`s produce zones; single-story buildings stay on overworld. Underground chain is currently a hard-coded 3 depths for testing. |
-| `PortalPlugin` — spawns `PortalTrigger` entities, handles `PlayerZoneTransition` events | `crates/server/src/plugins/portal.rs` | ✅ Done | Anchor world positions are `(0,0)` placeholder — need building world-coord propagation so intra-zone triggers are placed correctly. |
-| `ZoneNavGrids` resource + `build_zone_nav_grids` startup system | `crates/server/src/plugins/nav.rs` | ✅ Done | Zone-aware A* wired into `wander_npcs`; pure logic in `crates/shared/src/world/pathfinding.rs`. |
-| `UndergroundSimSchedule` (0.1 Hz) + `UndergroundPressure` resource | `crates/server/src/plugins/world_sim.rs`, `plugins/ai.rs` | ✅ Done | See `docs/systems/underground.md`. |
-| `advance_zone_parties` — zone-hopping for war-party members | `crates/server/src/plugins/ai.rs` | ✅ Done | Trigger-radius check compares to world origin until anchor world positions are wired. |
-| `spawn_underground_raid` — pressure→raid party conversion | `crates/server/src/plugins/ai.rs` | ✅ Done | — |
+| Zone data types (`Zone`, `ZoneKind`, `ZoneParent`, `InteriorTile`, `ZoneAnchor`, `Portal`, `PortalKind`) | `crates/world-types/src/zone.rs` | ✅ Done | — |
+| `ZoneTemplate` + content-hash dedupe (`ZoneTemplateId = u64`) | `crates/world-types/src/zone.rs` | ✅ Done | — |
+| `ZoneRegistry` + `ZoneTopology` resources | `crates/world-types/src/zone.rs` | ✅ Done | — |
+| `ZoneMembership` component | `crates/world-types/src/zone.rs` | ✅ Done | — |
+| `ZoneTopology::hop_distance` (BFS) | `crates/world-types/src/zone.rs` | ✅ Done | `shortest_path` helper currently lives in `ai.rs` (`shortest_zone_path`); should move to `ZoneTopology` impl |
+| `generate_zones(&buildings, seed)` pure fn | `crates/world-types/src/zone.rs` | ✅ Done | Only multi-floor `BuildingKind`s produce zones; single-story buildings stay on overworld. Underground chain is currently a hard-coded 3 depths for testing. |
+| `PortalPlugin` — spawns `PortalTrigger` entities, handles `PlayerZoneTransition` events | `crates/game/src/plugins/portal.rs` | ✅ Done | Anchor world positions are `(0,0)` placeholder — need building world-coord propagation so intra-zone triggers are placed correctly. |
+| `ZoneNavGrids` resource + `build_zone_nav_grids` startup system | `crates/game/src/plugins/nav.rs` | ✅ Done | Zone-aware A* wired into `wander_npcs`; pure logic in `crates/shared/src/world/pathfinding.rs`. |
+| `UndergroundSimSchedule` (0.1 Hz) + `UndergroundPressure` resource | `crates/game/src/plugins/world_sim.rs`, `plugins/ai.rs` | ✅ Done | See `docs/systems/underground.md`. |
+| `advance_zone_parties` — zone-hopping for war-party members | `crates/game/src/plugins/ai.rs` | ✅ Done | Trigger-radius check compares to world origin until anchor world positions are wired. |
+| `spawn_underground_raid` — pressure→raid party conversion | `crates/game/src/plugins/ai.rs` | ✅ Done | — |
 | `dm/underground_pressure`, `dm/force_underground_pressure` BRP methods | `crates/server/src/plugins/dm.rs`, registered in `crates/client/src/main.rs` | ✅ Done | — |
 | `ZoneTileMessage` server→client protocol + `ZoneCache` resource | `crates/shared/src/protocol.rs`, `crates/client/src/plugins/zone_cache.rs` | ✅ Done | Message should carry an explicit `ZoneKind` field instead of the client-side tile-shape heuristic in `zone_renderer::classify_zone`. |
 | `ZoneRendererPlugin` — interior mesh spawn/despawn | `crates/client/src/plugins/zone_renderer.rs` | ✅ Done (scaffold) | One unlit quad per tile; no instancing, atlas, or lighting pass yet. |
@@ -42,7 +42,7 @@ Single-story village buildings use a cheaper **roof-cutaway** shortcut: the inte
 
 ## Data Model (actual shapes as implemented)
 
-> Lives in `crates/shared/src/world/zone.rs`. No ECS here — pure types except for `Resource` / `Component` derives for Bevy wiring.
+> Lives in `crates/world-types/src/zone.rs`. No ECS here — pure types except for `Resource` / `Component` derives for Bevy wiring.
 
 ```rust
 pub const OVERWORLD_ZONE: ZoneId = ZoneId(0);
@@ -251,7 +251,7 @@ Tile handling: `Floor`/`Stair`/`Water` → floor quad; `Wall`/`Window` → verti
 
 ## Implementation Order (what's done vs remaining)
 
-1. ✅ `crates/shared/src/world/zone.rs` — data types + `ZoneRegistry`/`ZoneTopology` + `generate_zones()`.
+1. ✅ `crates/world-types/src/zone.rs` — data types + `ZoneRegistry`/`ZoneTopology` + `generate_zones()`.
 2. ✅ `generate_zones()` — produces child zones for `Tavern`/`Barracks`/`Tower`/`Keep` + hard-coded 3-depth underground chain.
 3. ✅ `ZoneNavGrids` — per-zone `Grid<NavCell>` built on startup.
 4. ✅ `PortalPlugin` — spawns trigger entities, emits `PlayerZoneTransition`, applies transitions, broadcasts `ZoneTileMessage` with neighbours.

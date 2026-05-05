@@ -2,7 +2,7 @@
 
 The civilization system generates settlements, assigns territory, and connects settlements with roads. All generation is pure and deterministic from a seed; it runs after `generate_map` returns and before the server accepts player connections.
 
-Exact placement parameters (grid cell size, minimum spacing, habitability thresholds) live in `crates/shared/src/world/civilization.rs` — that file is the authority.
+Exact placement parameters (grid cell size, minimum spacing, habitability thresholds) live in `crates/world-types/src/civilization.rs` — that file is the authority.
 
 ## Settlements
 

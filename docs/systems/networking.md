@@ -43,7 +43,7 @@ process_player_input (FixedUpdate, reads LocalPlayerInput)
   → queues PendingAttack, clears LocalPlayerInput.actions
 ```
 
-`LocalPlayerInput` is defined in `crates/server/src/plugins/combat.rs` and inserted as a `Resource` by `CombatPlugin`.
+`LocalPlayerInput` is defined in `crates/game/src/plugins/combat.rs` and inserted as a `Resource` by `CombatPlugin`.
 
 ## Player lifecycle
 
@@ -56,7 +56,7 @@ The local player entity is spawned by `spawn_local_player` in `PostStartup` (aft
 
 `tag_local_player` runs every `Update` frame until it finds an entity with `With<Experience>, Without<LocalPlayer>` and attaches the `LocalPlayer` marker and `PredictedPosition`.
 
-## Interest management (`crates/server/src/plugins/interest.rs`)
+## Interest management (`crates/game/src/plugins/interest.rs`)
 
 `ChunkTemperature` tracks Hot and Warm chunk sets centred on the single local player:
 

@@ -8,7 +8,7 @@ This system is the main load-bearing consumer of the Zone Graph (`docs/systems/z
 
 ## `UndergroundPressure` resource
 
-Defined in `crates/server/src/plugins/ai.rs`.
+Defined in `crates/game/src/plugins/ai.rs`.
 
 ```rust
 #[derive(Resource, Default, Debug, Clone, Copy)]
@@ -30,7 +30,7 @@ pub struct UndergroundPressure {
 | `UndergroundSimSchedule` | 0.1 Hz (every 10 real seconds) | `accumulate_underground_pressure`, `deliver_underground_signals` |
 | `WorldSimSchedule` | 1 Hz | `spawn_underground_raid`, `advance_zone_parties` |
 
-Both schedules are defined in `crates/server/src/plugins/world_sim.rs`. The 0.1 Hz cadence is explicitly slow so pressure buildup feels like a background environmental phenomenon rather than a tick-driven counter.
+Both schedules are defined in `crates/game/src/plugins/world_sim.rs`. The 0.1 Hz cadence is explicitly slow so pressure buildup feels like a background environmental phenomenon rather than a tick-driven counter.
 
 ---
 
@@ -106,7 +106,7 @@ When `current_zone` reaches `OVERWORLD_ZONE`, the existing `march_war_parties` s
 The underground system is deliberately **non-visible** until it's imminent:
 
 - `StoryEvent::UndergroundThreat` is emitted at the 0.4/0.7 thresholds and continuously while `hops_to_surface <= 3`. The story log surface-renders these.
-- Ecology hooks (consumers of `UndergroundThreat` lore tags — e.g. wildlife fleeing on the `imminent`/`fleeing` tags) are expected to react on the surface side. Those hooks live in `crates/server/src/plugins/ecology.rs` and are minimal today; the plumbing is in place.
+- Ecology hooks (consumers of `UndergroundThreat` lore tags — e.g. wildlife fleeing on the `imminent`/`fleeing` tags) are expected to react on the surface side. Those hooks live in `crates/game/src/plugins/ecology.rs` and are minimal today; the plumbing is in place.
 - Entities in deep underground zones are **not** replicated to surface players by design — the story event is the signal, not the entity presence. Lightyear per-zone interest groups will enforce this once wired (see `docs/systems/zones.md` Implementation Status).
 
 ---
@@ -126,7 +126,7 @@ The `underground_e2e` ralph scenario (`tools/ralph/src/scenarios/underground_e2e
 
 ## Tuning knobs (quick reference)
 
-All are `const` in `crates/server/src/plugins/ai.rs`:
+All are `const` in `crates/game/src/plugins/ai.rs`:
 
 - `UNDERGROUND_DECAY` — per 0.1 Hz tick multiplier, dominant term in the decay curve.
 - `UNDERGROUND_ACTIVE_BOOST` — added per tick if any WarPartyMember is in an underground zone.

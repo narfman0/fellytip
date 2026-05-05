@@ -44,7 +44,7 @@ Milestones are ordered by dependency. Each one builds on the previous.
 
 ### World Gen
 - `cargo run -p world_gen -- --seed 42` prints a recognisable ASCII world map.
-- Same seed always produces the same map (determinism test in `cargo test -p fellytip-shared`).
+- Same seed always produces the same map (determinism test in `cargo test -p fellytip-world-types`).
 - Server startup log shows settlement, road, and territory counts.
 
 ### Living World extension

@@ -2,9 +2,9 @@
 
 Combat is built in three layers: pure rules, an interrupt stack, and a thin ECS bridge. The layers are explicitly separated so the rules can be tested independently of Bevy.
 
-Exact dice sizes, damage modifiers, and XP thresholds are defined in `crates/shared/src/combat/` — that directory is the authority.
+Exact dice sizes, damage modifiers, and XP thresholds are defined in `crates/combat-rules/src/combat/` — that directory is the authority.
 
-## Layer 1 — Pure rules (`crates/shared/src/combat/`)
+## Layer 1 — Pure rules (`crates/combat-rules/src/combat/`)
 
 Combat rules are ordinary Rust functions. They take game state and explicit dice rolls as inputs and return effects as outputs. They never generate randomness internally.
 
@@ -16,7 +16,7 @@ Combat rules are ordinary Rust functions. They take game state and explicit dice
 
 `CombatantSnapshot` is a plain data struct copied from ECS components into the pure layer for each combat step.
 
-## Layer 2 — Interrupt stack (`crates/shared/src/combat/interrupt.rs`)
+## Layer 2 — Interrupt stack (`crates/combat-rules/src/combat/interrupt.rs`)
 
 The interrupt stack enables reactions to nest. An attack can be interrupted by a parry, which can itself be interrupted by a riposte, and so on. Each frame on the stack is one pending resolution.
 
@@ -30,7 +30,7 @@ Frame variants:
 
 The `InterruptFrame` match is exhaustive — no `_` wildcard. Every variant must be handled, which prevents silent fallthrough when new variants are added.
 
-## Layer 3 — ECS bridge (`crates/server/src/plugins/combat.rs`)
+## Layer 3 — ECS bridge (`crates/game/src/plugins/combat.rs`)
 
 The bridge runs in `FixedUpdate`. System ordering:
 
@@ -79,7 +79,7 @@ Text positions are projected to screen each frame and float upward 40 px over th
 
 ## Levelling
 
-XP required to reach the next level is computed by `xp_to_next_level(level)` in `crates/shared/src/combat/rules.rs`, using the official 5e SRD table (see `docs/dnd5e-srd-reference.md`). Multiple level-ups from a single kill are applied in a loop.
+XP required to reach the next level is computed by `xp_to_next_level(level)` in `crates/combat-rules/src/combat/rules.rs`, using the official 5e SRD table (see `docs/dnd5e-srd-reference.md`). Multiple level-ups from a single kill are applied in a loop.
 
 On each level-up, HP increases by rolling the class hit die + CON modifier (minimum 1), implemented in `hp_on_level_up()`. The player receives a full heal on level-up. Level is kept in sync between `Experience.level` and `CombatParticipant.level` so the proficiency bonus in attack rolls stays current.
 
@@ -93,7 +93,7 @@ When an entity reaches an ASI level, a `PendingAsi` marker component is inserted
 | Rogue | 4, 8, 10, 12, 16, 19 |
 | All others | 4, 8, 12, 16, 19 |
 
-`asi_levels_for_class(class)` in `crates/shared/src/combat/types.rs` returns these sets.
+`asi_levels_for_class(class)` in `crates/combat-rules/src/combat/types.rs` returns these sets.
 
 The `apply_npc_asi` system (FixedUpdate, after `resolve_interrupts`) immediately resolves `PendingAsi` for NPC entities (those carrying `EntityKind`) by calling `AbilityScores::with_npc_asi(class)`, which applies +2 to the class's primary stat (capped at 20). Player entities are left with `PendingAsi` pending UI resolution (future work).
 

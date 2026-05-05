@@ -1,6 +1,6 @@
 # System: Adaptive performance throttling
 
-`crates/server/src/plugins/perf.rs` samples how long each world-sim tick takes and derives an `AdaptiveScheduler` level that AI, pathfinding, and ecology systems read to decide whether to throttle their work. The goal is to keep the 1 Hz `WorldSimSchedule` inside its tick budget even under spikes without visibly degrading gameplay near the player.
+`crates/game/src/plugins/perf.rs` samples how long each world-sim tick takes and derives an `AdaptiveScheduler` level that AI, pathfinding, and ecology systems read to decide whether to throttle their work. The goal is to keep the 1 Hz `WorldSimSchedule` inside its tick budget even under spikes without visibly degrading gameplay near the player.
 
 ## Tick budget
 

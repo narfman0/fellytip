@@ -4,22 +4,36 @@
 
 | Crate | Responsibility |
 |---|---|
-| `crates/shared` | Pure types, combat rules, world generation, protocol — no ECS, no I/O |
-| `crates/server` | Bevy ECS game logic lib: world sim, AI, persistence, combat, map gen. No binary. |
-| `crates/client` | Single runnable binary: links server lib, adds rendering, input, egui HUD |
-| `tools/ralph` | BRP HTTP test driver — automated end-to-end scenario assertions |
-| `tools/combat_sim` | proptest harness for combat and ecology rules, no ECS |
-| `tools/world_gen` | Standalone ASCII world preview: `cargo run -p world_gen -- --seed N` |
-| `tools/worldwatch` | eframe desktop monitor: reads BRP + SQLite and displays live world state |
-| `tools/character_studio` | AI sprite-sheet generator + desktop studio: reads `assets/bestiary.toml`, calls mock or DALL-E 3 backend, writes atlas PNGs + RON manifests to `crates/client/assets/sprites/` |
+| `crates/shared` | ECS components, replicated protocol, input intents, math/sprite utilities. Re-exports `fellytip_combat_rules::combat` and `fellytip_world_types::math` for back-compat. |
+| `crates/combat-rules` | Pure combat logic: `CharacterClass`, `SpellSlots`, attack/damage rules, interrupt stack. No ECS, no I/O. |
+| `crates/world-types` | Pure world data types: map, zone, faction, population, ecology, civilization, dungeon, cave, grid, math/noise. No ECS, no I/O. |
+| `crates/game` | `ServerGamePlugin` and all game-simulation plugins (combat, AI, ecology, nav, portal, party, persistence, perf, story, world-sim, dungeon, bot, interest, character-persistence, map-gen, combat-test). |
+| `crates/server` | Thin shim over `fellytip-game` plus the DM/RPC admin tools (`dm_spawn_npc`, `dm_kill`, `dm_teleport`, `dm_trigger_war_party`, `dm_set_ecology`, …) used by ralph and worldwatch. |
+| `crates/client` | Single runnable binary: rendering, egui HUD, input. Hosts `ServerGamePlugin` in-process. `--headless` runs without a window and exposes BRP on port 15702. |
+| `tools/ralph` | BRP HTTP test driver — automated end-to-end scenario assertions. |
+| `tools/combat_sim` | proptest harness for combat and ecology rules, no ECS. |
+| `tools/world_gen` | Standalone ASCII world preview: `cargo run -p world_gen -- --seed N`. |
+| `tools/worldwatch` | eframe desktop monitor: reads BRP + SQLite and displays live world state. |
+| `tools/character_studio` | AI sprite-sheet generator + desktop studio. |
 
-`crates/server` is a **lib-only** crate. There is no separate server process. All plugins (`WorldSimPlugin`, `AiPlugin`, `CombatPlugin`, etc.) run in-process inside the single `fellytip-client` binary. The crate boundary is preserved so a true server binary can be re-introduced behind a `multiplayer` feature flag later without major surgery.
+There is no separate server binary. `fellytip-server` is a library; `fellytip-client` is the only `[[bin]]` and embeds the server-side `ServerGamePlugin` directly. A future networked server binary can be re-introduced behind a `multiplayer` feature flag without disturbing the crate boundaries.
+
+## Run modes
+
+| Mode | Command | Notes |
+|---|---|---|
+| Single-player (windowed) | `cargo run -p fellytip-client` | Client embeds `ServerGamePlugin`; no network. |
+| Headless | `cargo run -p fellytip-client -- --headless` | No window. BRP on port 15702 with all `dm/*` methods registered. Used by ralph, worldwatch, and external bot tooling. |
+
+## Bot / fake-player testing
+
+`crates/game/src/plugins/bot.rs` exposes server-side fake players that share the full real-player component bundle (`CombatParticipant`, `Health`, `Experience`, `ActionBudget`, `SpellSlots`, …). The only addition is `BotController`, used to distinguish bots from the local player and drive autonomous behaviour each `FixedUpdate` tick. BRP methods (`dm/spawn_bot`, `dm/despawn_bot`, `dm/list_bots`, `dm/set_bot_action`) are registered on the headless client and consumed by ralph + integration tests.
 
 ## Design constraints
 
 ### Pure simulation, thin ECS bridge
 
-All game logic lives in `crates/shared` as ordinary Rust functions: `fn(State) -> (State, Vec<Effect>)`. No Bevy types, no async, no I/O. ECS systems in `crates/server` snapshot component data into pure types, call the shared functions, and apply the returned effects back to the ECS world.
+All game logic lives in `crates/combat-rules` and `crates/world-types` as ordinary Rust functions: `fn(State) -> (State, Vec<Effect>)`. No Bevy types, no async, no I/O. ECS systems in `crates/game` snapshot component data into pure types, call the shared functions, and apply the returned effects back to the ECS world.
 
 This constraint means:
 - Logic is unit-testable without Bevy running.
@@ -30,12 +44,13 @@ This constraint means:
 
 Randomness is never generated inside pure logic. Every function that needs a random value takes `rng: &mut impl Iterator<Item=i32>` and reads from it. The ECS bridge feeds real dice; test harnesses feed deterministic values. This applies to combat (attack rolls, damage) and faction war battles (`seeded_dice` in `world/war.rs` uses `ChaCha8Rng` keyed on settlement ID + tick).
 
-### Two tick rates
+### Three tick rates
 
 | Schedule | Rate | What runs |
 |---|---|---|
 | `FixedUpdate` | 62.5 Hz | Combat resolution, player movement, input application |
 | `WorldSimSchedule` | 1 Hz | Faction AI, population, ecology, war parties, story event flush |
+| `UndergroundSimSchedule` | 0.1 Hz | Underground pressure accumulation + decay |
 
 These schedules never share mutable state during a tick. If a system needs to cross the boundary it must document why.
 
@@ -85,9 +100,11 @@ Messages (`BattleStartMsg`, `BattleEndMsg`, `BattleAttackMsg`, `StoryMsg`) flow 
 | Dependency | Version | Note |
 |---|---|---|
 | `bevy` | 0.18 | |
+| `lightyear` | 0.26.4 | |
 | `sqlx` | 0.8 | 0.9 is alpha; stay on 0.8 |
 | `bevy_egui` | 0.39 | |
 | `bevy-inspector-egui` | 0.36 | Behind `debug` feature flag |
+| `avian3d` | 0.6 | f32 + 3d features |
 | `rand` / `rand_chacha` | 0.10 / 0.10 | RngExt trait for `.random::<T>()` |
 
 ## Coordinate system

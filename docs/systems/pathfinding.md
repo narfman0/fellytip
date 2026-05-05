@@ -1,13 +1,13 @@
 # System: Pathfinding (navigation grid + flow fields)
 
-Navigation lives in `crates/server/src/plugins/nav.rs`. It provides a single static grid for AI pathfinding and two algorithms layered on top — A* for individual movement and BFS/Dijkstra flow fields for war parties that share a destination.
+Navigation lives in `crates/game/src/plugins/nav.rs`. It provides a single static grid for AI pathfinding and two algorithms layered on top — A* for individual movement and BFS/Dijkstra flow fields for war parties that share a destination.
 
 ## Storage: `Grid<T>`
 
 Both the overworld `NavGrid` and the per-zone `ZoneNavGrids` share a generic row-major 2D container:
 
 ```rust
-// crates/shared/src/world/grid.rs
+// crates/world-types/src/grid.rs
 pub struct Grid<T> {
     pub w: usize,
     pub h: usize,
@@ -63,7 +63,7 @@ War-party and NPC movement pay for pathfinding proportional to their `ChunkTempe
 | `Warm` | 0.25 | A* replan every 8 ticks; flow-field sampling at 0.25× speed |
 | `Frozen` | 0.05 | Skip A* and flow fields entirely; linear march toward the target at 0.05× speed |
 
-Frozen-zone NPCs always reach their goal — linear march is deliberately macro-correct. It trades locally-realistic routing for near-zero CPU cost when no player can see the party. See `crates/server/src/plugins/ai.rs` for the movement systems that consume `NavGrid` and `FlowField`.
+Frozen-zone NPCs always reach their goal — linear march is deliberately macro-correct. It trades locally-realistic routing for near-zero CPU cost when no player can see the party. See `crates/game/src/plugins/ai.rs` for the movement systems that consume `NavGrid` and `FlowField`.
 
 ## `ZoneNavGrids` — per-zone grids for interiors
 

@@ -2,7 +2,7 @@
 
 The world simulation runs independently of player presence. Two separate schedules tick at different rates; neither waits for the other.
 
-Exact tick rates and timing constants are defined in `crates/shared/src/lib.rs` (`TICK_HZ`) and `crates/server/src/plugins/world_sim.rs`.
+Exact tick rates and timing constants are defined in `crates/shared/src/lib.rs` (`TICK_HZ`) and `crates/game/src/plugins/world_sim.rs`.
 
 ## Tick rates
 
@@ -17,7 +17,7 @@ Exact tick rates and timing constants are defined in `crates/shared/src/lib.rs` 
 
 ## History warp
 
-On server startup, `MapGenPlugin` runs `WorldSimSchedule` synchronously for `HISTORY_WARP_TICKS` iterations (see `crates/server/src/plugins/map_gen.rs`) before accepting network connections. This pre-ages the world: factions have had time to expand and compete, ecology populations have stabilised or collapsed, and story events have accumulated. Players join a world with history, not a blank slate.
+On server startup, `MapGenPlugin` runs `WorldSimSchedule` synchronously for `HISTORY_WARP_TICKS` iterations (see `crates/game/src/plugins/map_gen.rs`) before accepting network connections. This pre-ages the world: factions have had time to expand and compete, ecology populations have stabilised or collapsed, and story events have accumulated. Players join a world with history, not a blank slate.
 
 ## Ecology (`world/ecology.rs`)
 

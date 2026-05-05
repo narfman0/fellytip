@@ -2,7 +2,7 @@
 
 Factions are independent political entities that simulate their own goals, resources, and inter-faction relationships. Each faction has standing rules that govern how it treats players, and an aggression flag that can override those rules entirely.
 
-Pure faction logic lives in `crates/shared/src/world/faction.rs`. Server-only ECS wiring lives in `crates/server/src/plugins/ai.rs`.
+Pure faction logic lives in `crates/world-types/src/faction.rs`. Server-only ECS wiring lives in `crates/game/src/plugins/ai.rs`.
 
 ## Faction roster
 

@@ -32,7 +32,7 @@ Source: *System Reference Document 5.1*, Creative Commons Attribution 4.0 Intern
 | 19    |   305,000         |       40,000                  |
 | 20    |   355,000         |       50,000                  |
 
-Implemented in: `crates/shared/src/combat/rules.rs → xp_to_next_level()`
+Implemented in: `crates/combat-rules/src/combat/rules.rs → xp_to_next_level()`
 
 ---
 
@@ -46,7 +46,7 @@ Implemented in: `crates/shared/src/combat/rules.rs → xp_to_next_level()`
 | 13–16  |       +5          |
 | 17–20  |       +6          |
 
-Implemented in: `crates/shared/src/combat/types.rs → proficiency_bonus(level)`
+Implemented in: `crates/combat-rules/src/combat/types.rs → proficiency_bonus(level)`
 
 ---
 
@@ -98,8 +98,8 @@ Representative spawn values in the codebase:
 HP gained on level-up: roll hit die + CON mod (minimum 1).
 
 Implemented in:
-- `crates/shared/src/combat/types.rs → hit_die_for_class(class)`
-- `crates/shared/src/combat/rules.rs → hp_on_level_up(class, con_mod, rng)`
+- `crates/combat-rules/src/combat/types.rs → hit_die_for_class(class)`
+- `crates/combat-rules/src/combat/rules.rs → hp_on_level_up(class, con_mod, rng)`
 
 ---
 
@@ -151,7 +151,7 @@ d20 + ability_modifier + proficiency_bonus  >=  target Armor Class (AC)  →  Hi
 - **Critical hit**: double the weapon dice (not modifiers); ignores nothing else in 5e base rules
 - Primary ability by class: STR (Fighter/Warrior/Paladin/Barbarian), DEX (Rogue/Monk/Ranger), INT (Mage/Wizard), CHA (Warlock/Bard/Sorcerer), WIS (Cleric/Druid)
 
-Implemented in: `crates/shared/src/combat/rules.rs → resolve_attack_roll()`
+Implemented in: `crates/combat-rules/src/combat/rules.rs → resolve_attack_roll()`
 
 ---
 
@@ -185,4 +185,4 @@ Miss:         0
 
 No base damage reduction (DR) in 5e. Armor affects whether you're hit, not how much damage you take.
 
-Implemented in: `crates/shared/src/combat/rules.rs → resolve_damage()`
+Implemented in: `crates/combat-rules/src/combat/rules.rs → resolve_damage()`
