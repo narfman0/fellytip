@@ -62,6 +62,10 @@ const ASSET_PATH: &str = "assets";
 fn add_windowed_plugins(app: &mut App) {
     app.add_plugins(PhysicsPlugins::default())
         .add_plugins(avian3d::debug_render::PhysicsDebugPlugin)
+        .insert_gizmo_config(
+            avian3d::debug_render::PhysicsGizmos::default(),
+            GizmoConfig { enabled: false, ..default() },
+        )
         .add_plugins(
             DefaultPlugins.build()
                 .set(AssetPlugin {
@@ -144,6 +148,7 @@ fn main() {
                         .with_method("dm/choose_class",           dm_choose_class)
                         .with_method("dm/set_time_of_day",        dm_set_time_of_day)
                         .with_method("dm/enter_portal",           dm_enter_portal)
+                        .with_method("dm/toggle_physics_debug",   dm_toggle_physics_debug)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -173,6 +178,7 @@ fn main() {
                     .with_method("dm/choose_class",               dm_choose_class)
                     .with_method("dm/set_time_of_day",            dm_set_time_of_day)
                     .with_method("dm/enter_portal",               dm_enter_portal)
+                    .with_method("dm/toggle_physics_debug",       dm_toggle_physics_debug)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }
@@ -260,6 +266,7 @@ fn tag_local_player(
             // via LinearVelocity.y so water buoyancy and jump logic stay unchanged.
             RigidBody::Dynamic,
             GravityScale(0.0),
+            Friction::ZERO,
             LockedAxes::ROTATION_LOCKED,
             LinearVelocity::ZERO,
             // SweptCcd prevents tunnelling when fall speed reaches MAX_FALL_SPEED
@@ -903,4 +910,25 @@ fn dm_set_camera_free(
     cam.free_orbit = free;
     tracing::info!(free, "DM camera free_orbit set");
     Ok(serde_json::json!({ "free": free }))
+}
+
+/// Toggle avian physics debug rendering (collider wireframes).
+///
+/// Params: `{ "enabled": bool }` — omit to flip the current state.
+/// Returns `{ "ok": true, "enabled": bool }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_toggle_physics_debug(
+    In(params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let mut store = world.resource_mut::<GizmoConfigStore>();
+    let (config, _) = store.config_mut::<avian3d::debug_render::PhysicsGizmos>();
+    let enabled = params
+        .as_ref()
+        .and_then(|p| p.get("enabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(!config.enabled);
+    config.enabled = enabled;
+    tracing::info!(enabled, "DM physics debug rendering toggled");
+    Ok(serde_json::json!({ "ok": true, "enabled": enabled }))
 }
