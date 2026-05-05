@@ -61,8 +61,8 @@ pub fn atlas_id_for_entity(
     }
 }
 
-/// World-space edge length of the billboard quad.  Roughly player-sized.
-const BILLBOARD_EDGE: f32 = 2.0;
+/// World-space edge length of the billboard quad.
+const BILLBOARD_EDGE: f32 = 0.4;
 
 pub struct BillboardSpritePlugin;
 
