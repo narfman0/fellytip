@@ -110,6 +110,7 @@ The headless client registers a set of `dm/*` custom BRP methods (see `crates/se
 | `dm/clear_battle_history` | `{}` | Drop every queued `BattleRecord` — test helper so scenarios can isolate their own battle |
 | `dm/underground_pressure` | `{}` | Read the `UndergroundPressure` snapshot `{ score, last_raid_tick }` |
 | `dm/force_underground_pressure` | `{}` | Force `UndergroundPressure.score = 1.0` so the next 1 Hz tick spawns a raid — used by `underground_e2e` |
+| `dm/move_entity` | `{ entity, x, y, z }` | A* path any entity (PC or NPC) to a world target; inserts `NavPath` + `NavigationGoal` — used by `movement_e2e` |
 
 Bevy 0.18 renamed the built-in BRP endpoints from `bevy/*` to `world.*` (e.g. `world.query`, `world.get`, `world.spawn`). All new ralph code should call the `world.*` names.
 

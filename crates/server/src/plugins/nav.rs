@@ -5,10 +5,15 @@
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use fellytip_shared::world::{
-    grid::Grid,
-    map::{TileKind, WorldMap, MAP_HALF_HEIGHT, MAP_HALF_WIDTH},
+use fellytip_shared::{
+    PLAYER_SPEED,
+    components::{NavPath, NavigationGoal, WorldPosition},
+    world::{
+        grid::Grid,
+        map::{TileKind, WorldMap, MAP_HALF_HEIGHT, MAP_HALF_WIDTH},
+    },
 };
+use crate::plugins::combat::LastPlayerInput;
 
 pub const NAV_WIDTH: usize = 256;
 pub const NAV_HEIGHT: usize = 256;
@@ -223,11 +228,72 @@ fn reconstruct_path(came_from: &[usize], mut cur: usize, start: usize, w: usize)
     waypoints
 }
 
+/// Compute an A* path between two world-space points and return the `NavPath`
+/// and `NavigationGoal` components to insert on the entity.
+///
+/// Returns `None` if no path exists between the two points.
+pub fn compute_nav_path(
+    nav: &NavGrid,
+    from: (f32, f32),
+    to: (f32, f32, f32),
+) -> Option<(NavPath, NavigationGoal)> {
+    let start = world_to_nav(from.0, from.1);
+    let goal = world_to_nav(to.0, to.1);
+    let waypoints = nav.astar(start, goal)?;
+    let path_world: Vec<[f32; 2]> = waypoints.iter()
+        .map(|&(wx, wy)| {
+            let (x, y) = nav_to_world(wx as usize, wy as usize);
+            [x, y]
+        })
+        .collect();
+    let nav_path = NavPath { waypoints, waypoint_index: 0 };
+    let goal_comp = NavigationGoal { target: [to.0, to.1, to.2], path_world };
+    Some((nav_path, goal_comp))
+}
+
+/// Move entities with an active `NavigationGoal` toward their A* waypoints.
+///
+/// Cancels on non-zero WASD input for player-controlled entities.
+/// Removes both `NavPath` and `NavigationGoal` on arrival.
+pub fn follow_navigation_goal(
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut WorldPosition, &mut NavPath, Option<&LastPlayerInput>),
+                     With<NavigationGoal>>,
+    time: Res<Time<Fixed>>,
+) {
+    let step = PLAYER_SPEED * time.delta_secs();
+    for (entity, mut pos, mut nav_path, last_input) in query.iter_mut() {
+        if last_input.is_some_and(|i| i.move_dir != [0.0, 0.0]) {
+            commands.entity(entity).remove::<(NavPath, NavigationGoal)>();
+            continue;
+        }
+        if let Some((wx, wy)) = nav_path.next_waypoint() {
+            let (target_x, target_y) = nav_to_world(wx as usize, wy as usize);
+            let dx = target_x - pos.x;
+            let dy = target_y - pos.y;
+            let dist_sq = dx * dx + dy * dy;
+            if dist_sq <= step * step {
+                pos.x = target_x;
+                pos.y = target_y;
+                nav_path.waypoint_index += 1;
+            } else {
+                let dist = dist_sq.sqrt();
+                pos.x += (dx / dist) * step;
+                pos.y += (dy / dist) * step;
+            }
+        }
+        if nav_path.is_complete() {
+            commands.entity(entity).remove::<(NavPath, NavigationGoal)>();
+        }
+    }
+}
+
 pub struct NavPlugin;
 
 impl Plugin for NavPlugin {
-    fn build(&self, _app: &mut App) {
+    fn build(&self, app: &mut App) {
         // NavGrid is inserted as a resource by build_nav_grid, called from MapGenPlugin.
+        app.add_systems(FixedUpdate, follow_navigation_goal);
     }
 }
 

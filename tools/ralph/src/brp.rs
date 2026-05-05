@@ -151,4 +151,18 @@ impl BrpClient {
         self.call("dm/force_underground_pressure", json!({}))?;
         Ok(())
     }
+
+    /// `dm/move_entity` — path any entity to a world-space target using A*.
+    ///
+    /// Returns the number of A* waypoints in the computed path.
+    pub fn dm_move_entity(&self, entity: u64, x: f32, y: f32, z: f32) -> Result<u32> {
+        let result = self.call(
+            "dm/move_entity",
+            json!({ "entity": entity, "x": x, "y": y, "z": z }),
+        )?;
+        result["waypoints"]
+            .as_u64()
+            .map(|n| n as u32)
+            .ok_or_else(|| anyhow::anyhow!("dm/move_entity: missing 'waypoints' in response"))
+    }
 }

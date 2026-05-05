@@ -269,6 +269,20 @@ impl NavPath {
 #[derive(Component, Clone, Debug, Default)]
 pub struct NavReplanTimer(pub u32);
 
+/// Explicit destination for any entity (PC or NPC) that overrides wander / manual input.
+///
+/// The server inserts this alongside `NavPath` via `compute_nav_path`. The follower
+/// system removes both when the entity arrives or when a player sends non-zero WASD.
+/// `path_world` is replicated to the client so it can draw path gizmos.
+#[derive(Component, Clone, Debug, Default, Reflect, Serialize, Deserialize)]
+#[reflect(Component)]
+pub struct NavigationGoal {
+    /// World-space destination `[x, y, z]`.
+    pub target: [f32; 3],
+    /// World-XY waypoints produced by A* for visualization; populated once on path compute.
+    pub path_world: Vec<[f32; 2]>,
+}
+
 /// Marker component: this entity never initiates combat.
 ///
 /// NPCs with this component are skipped by the faction aggression check —

@@ -4,7 +4,7 @@
 use bevy::ecs::message::MessageWriter;
 use bevy::prelude::*;
 use fellytip_shared::{
-    components::{NavPath, NavReplanTimer, PlayerStandings, WorldPosition},
+    components::{NavPath, NavReplanTimer, NavigationGoal, PlayerStandings, WorldPosition},
     protocol::BattleStartMsg,
     world::{
         faction::PlayerReputationMap,
@@ -66,7 +66,7 @@ pub fn wander_npcs(
             &mut NavReplanTimer,
             Option<&fellytip_shared::world::zone::ZoneMembership>,
         ),
-        (With<FactionMember>, Without<WarPartyMember>),
+        (With<FactionMember>, Without<WarPartyMember>, Without<NavigationGoal>),
     >,
     temp: Res<ChunkTemperature>,
     scheduler: Res<AdaptiveScheduler>,

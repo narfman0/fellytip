@@ -6,7 +6,7 @@ use fellytip_shared::{
     WORLD_SEED,
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}, SpellSlots, Spellbook},
     components::{AbilityModifiers, AbilityScores, ActionBudget, Experience, Health, HitDice, PlayerStandings, SavingThrowProficiencies, WorldMeta, WorldPosition},
-    protocol::ChooseClassMessage,
+    protocol::{ChooseClassMessage, MoveToMessage},
     world::{
         map::{find_surface_spawn, WorldMap, MAP_HEIGHT, MAP_WIDTH},
         story::GameEntityId,
@@ -85,7 +85,7 @@ impl Plugin for ServerGamePlugin {
                 .add_systems(Startup, (plugins::ai::seed_factions, plugins::ai::population::seed_faction_relations).chain())
                 // Player is now spawned in response to ChooseClassMessage (Update),
                 // not at PostStartup, so the class selection screen is respected.
-                .add_systems(Update, spawn_player_on_class_choice);
+                .add_systems(Update, (spawn_player_on_class_choice, handle_move_to_message));
         }
     }
 }
@@ -252,4 +252,29 @@ fn spawn_player_on_class_choice(
         (ActionBudget::default(), ActionCooldowns::default()),
     ));
     tracing::info!(uuid = %player_uuid, x = px, y = py, z = pz, "Player spawned after class selection");
+}
+
+/// Read `MoveToMessage` events and path the player to the requested position.
+///
+/// Uses A* on the overworld nav grid; inserts `NavPath` + `NavigationGoal` on
+/// the player entity. Silently drops the message if NavGrid is not yet ready.
+fn handle_move_to_message(
+    mut reader: MessageReader<MoveToMessage>,
+    players: Query<(Entity, &WorldPosition), With<LastPlayerInput>>,
+    mut commands: Commands,
+    nav: Option<Res<plugins::nav::NavGrid>>,
+) {
+    let Some(msg) = reader.read().next() else { return };
+    let Some(nav) = nav else { return };
+    let Ok((entity, pos)) = players.single() else { return };
+
+    if let Some((nav_path, goal)) =
+        plugins::nav::compute_nav_path(&nav, (pos.x, pos.y), (msg.x, msg.y, msg.z))
+    {
+        let n = nav_path.waypoints.len();
+        commands.entity(entity).insert((nav_path, goal));
+        tracing::debug!(x = msg.x, y = msg.y, z = msg.z, waypoints = n, "Player nav goal set via MoveToMessage");
+    } else {
+        tracing::warn!(x = msg.x, y = msg.y, z = msg.z, "MoveToMessage: no path found");
+    }
 }

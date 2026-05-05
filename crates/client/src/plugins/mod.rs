@@ -1,4 +1,5 @@
 pub mod action_menu;
+pub mod click_to_move;
 pub mod battle;
 pub mod billboard_sprite;
 pub mod floating_text;
@@ -22,6 +23,7 @@ pub mod zone_cache;
 pub mod zone_renderer;
 
 pub use action_menu::{ActionMenuPlugin, EguiPointerConsumed};
+pub use click_to_move::ClickToMovePlugin;
 pub use battle::BattleVisualsPlugin;
 pub use billboard_sprite::BillboardSpritePlugin;
 pub use camera::OrbitCameraPlugin;

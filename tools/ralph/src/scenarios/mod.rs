@@ -1,5 +1,6 @@
 pub mod basic_movement;
 pub mod combat_resolves;
+pub mod movement_e2e;
 pub mod npc_spawn_with_dm;
 pub mod player_moves;
 pub mod underground_e2e;
@@ -20,6 +21,7 @@ pub fn all_scenarios() -> Vec<Box<dyn Scenario>> {
         Box::new(npc_spawn_with_dm::NpcSpawnWithDm),
         Box::new(war_party_e2e::WarPartyE2e),
         Box::new(underground_e2e::UndergroundE2e),
+        Box::new(movement_e2e::MovementE2e),
     ]
 }
 

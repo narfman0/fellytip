@@ -9,7 +9,7 @@
 use bevy::ecs::message::Message;
 use bevy::prelude::*;
 use crate::combat::types::CharacterClass;
-use crate::components::{ActionBudget, EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, NpcClass, NpcLevel, PlayerStandings, SavingThrowProficiencies, WildlifeKind, WorldMeta, WorldPosition};
+use crate::components::{ActionBudget, EntityBounds, EntityKind, Experience, FactionBadge, GrowthStage, Health, NavigationGoal, NpcClass, NpcLevel, PlayerStandings, SavingThrowProficiencies, WildlifeKind, WorldMeta, WorldPosition};
 use crate::world::story::GameEntityId;
 use crate::world::zone::{InteriorTile, Portal, WorldId, ZoneAnchor, ZoneId, ZoneKind};
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,17 @@ pub struct BattleAttackMsg {
     pub target_combatant_id: Uuid,
     pub damage: i32,
     pub is_kill: bool,
+}
+
+/// Client → server: player wants to path-walk to a world position (click-to-move).
+///
+/// The server computes A* from the player's current position and stores the
+/// result as `NavPath` + `NavigationGoal` on the player entity.
+#[derive(Serialize, Deserialize, Debug, Clone, Message)]
+pub struct MoveToMessage {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
 /// Client → server: player has selected a class and wants to spawn.
@@ -160,9 +171,11 @@ impl Plugin for FellytipProtocolPlugin {
         app.register_type::<CharacterClass>();
         app.register_type::<NpcClass>();
         app.register_type::<NpcLevel>();
+        app.register_type::<NavigationGoal>();
         // ChooseClassMessage flows client→server; must be registered before
         // MessageWriter/MessageReader can be used.
         app.add_message::<ChooseClassMessage>();
+        app.add_message::<MoveToMessage>();
         app.add_message::<ClientDamageMsg>();
         // Messages are registered by the plugins that emit them (StoryPlugin, AiPlugin).
         // MULTIPLAYER: add_channel / register_message / register_component calls here.

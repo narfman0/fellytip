@@ -102,7 +102,8 @@ fn add_windowed_plugins(app: &mut App) {
     .add_plugins(plugins::ParticlesPlugin)
     .add_plugins(plugins::TargetSelectPlugin)
     .add_plugins(plugins::FloatingTextPlugin)
-    .add_plugins(plugins::ActionMenuPlugin);
+    .add_plugins(plugins::ActionMenuPlugin)
+    .add_plugins(plugins::ClickToMovePlugin);
 }
 
 fn main() {
@@ -149,6 +150,7 @@ fn main() {
                         .with_method("dm/set_time_of_day",        dm_set_time_of_day)
                         .with_method("dm/enter_portal",           dm_enter_portal)
                         .with_method("dm/toggle_physics_debug",   dm_toggle_physics_debug)
+                        .with_method("dm/move_entity",            fellytip_server::plugins::dm::dm_move_entity)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
@@ -179,6 +181,7 @@ fn main() {
                     .with_method("dm/set_time_of_day",            dm_set_time_of_day)
                     .with_method("dm/enter_portal",               dm_enter_portal)
                     .with_method("dm/toggle_physics_debug",       dm_toggle_physics_debug)
+                    .with_method("dm/move_entity",                fellytip_server::plugins::dm::dm_move_entity)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
         }

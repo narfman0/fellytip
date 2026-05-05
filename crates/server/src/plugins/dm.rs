@@ -440,3 +440,37 @@ pub fn dm_list_settlements(In(params): In<Option<Value>>, world: &mut World) -> 
     tracing::debug!(count = list.len(), "DM listed settlements");
     Ok(json!(list))
 }
+
+// ── dm/move_entity ────────────────────────────────────────────────────────────
+
+/// Path any entity (PC or NPC) to a world-space target using A*.
+///
+/// Params: `{ entity: u64, x: f32, y: f32, z: f32 }`
+///
+/// Inserts `NavPath` + `NavigationGoal` on the entity; the `follow_navigation_goal`
+/// system drives movement from there. Returns `{ ok: true, waypoints: N }`.
+pub fn dm_move_entity(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let entity_bits: u64 = require(&params, "entity")?;
+    let x: f32 = require(&params, "x")?;
+    let y: f32 = require(&params, "y")?;
+    let z: f32 = require(&params, "z")?;
+
+    let entity = Entity::from_bits(entity_bits);
+
+    let from = world.get::<WorldPosition>(entity)
+        .ok_or_else(|| BrpError::internal("entity has no WorldPosition"))
+        .map(|p| (p.x, p.y))?;
+
+    let (nav_path, goal) = {
+        let nav = world.get_resource::<crate::plugins::nav::NavGrid>()
+            .ok_or_else(|| BrpError::internal("NavGrid not ready"))?;
+        crate::plugins::nav::compute_nav_path(nav, from, (x, y, z))
+            .ok_or_else(|| BrpError::internal("no path found to destination"))?
+    };
+
+    let n = nav_path.waypoints.len();
+    world.entity_mut(entity).insert((nav_path, goal));
+
+    tracing::info!(?entity, x, y, z, waypoints = n, "DM set entity destination");
+    Ok(json!({ "ok": true, "waypoints": n }))
+}
