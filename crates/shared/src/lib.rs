@@ -1,4 +1,4 @@
-pub mod combat;
+pub use fellytip_combat_rules::combat;
 pub mod world;
 
 pub mod bestiary;

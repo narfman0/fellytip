@@ -10,9 +10,7 @@ use uuid::Uuid;
 
 // ── Identifiers ───────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct FactionId(pub SmolStr);
+pub use fellytip_combat_rules::FactionId;
 
 // ── Disposition ───────────────────────────────────────────────────────────────
 

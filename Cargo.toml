@@ -2,6 +2,7 @@
 resolver = "2"
 default-members = ["crates/client"]
 members = [
+    "crates/combat-rules",
     "crates/shared",
     "crates/server",
     "crates/client",

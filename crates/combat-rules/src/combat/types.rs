@@ -2,7 +2,7 @@
 //!
 //! All types here are pure data — no ECS, no I/O.
 
-use crate::world::faction::FactionId;
+use crate::FactionId;
 use bevy::reflect::Reflect;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;

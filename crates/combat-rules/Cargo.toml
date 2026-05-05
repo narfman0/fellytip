@@ -1,0 +1,13 @@
+[package]
+name    = "fellytip-combat-rules"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy        = { workspace = true }
+serde       = { workspace = true }
+uuid        = { workspace = true }
+smol_str    = { workspace = true }
+rand        = { workspace = true }
+rand_chacha = { workspace = true }
+glam        = "0.30"

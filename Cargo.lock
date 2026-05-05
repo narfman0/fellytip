@@ -3631,6 +3631,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fellytip-combat-rules"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "glam",
+ "rand 0.10.0",
+ "rand_chacha 0.10.0",
+ "serde",
+ "smol_str 0.3.6",
+ "uuid",
+]
+
+[[package]]
 name = "fellytip-server"
 version = "0.1.0"
 dependencies = [
@@ -3656,6 +3669,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
+ "fellytip-combat-rules",
  "glam",
  "rand 0.10.0",
  "rand_chacha 0.10.0",
