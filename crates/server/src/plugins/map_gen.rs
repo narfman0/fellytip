@@ -36,7 +36,8 @@ use fellytip_shared::{
             generate_settlements_full, Buildings, Settlements,
         },
         map::{generate_map, generate_spawn_points, WorldMap, MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
-        zone::{generate_zones, Portal, PortalKind, ZoneAnchor, ZoneRegistry, ZoneTopology, OVERWORLD_ZONE},
+        zone::{generate_zones, Portal, PortalKind, ZoneAnchor, ZoneKind, ZoneRegistry, ZoneTopology, OVERWORLD_ZONE},
+        cave::find_portal_tiles,
     },
 };
 
@@ -145,7 +146,7 @@ fn run_generation(config: &MapGenConfig) -> WorldGenCache {
     let road_count = map.road_tiles.iter().filter(|&&r| r).count();
     tracing::info!(road_count, count = buildings.len(), spawns = map.spawn_points.len(), "Map pipeline complete");
 
-    let (zone_registry, zone_topology) = build_zone_graph(&buildings, config.seed);
+    let (zone_registry, zone_topology) = build_zone_graph(&buildings, config.seed, Some(&map));
     let nav_grid = build_nav_grid_from_map(&map);
     let zone_nav_grids = build_zone_nav_grids_from_registry(&zone_registry);
 
@@ -213,9 +214,14 @@ fn generate_world(mut commands: Commands, config: Res<MapGenConfig>) {
 ///
 /// Kept as a standalone function so `populate_zones` (Bevy system) and
 /// `generate_world` (cache builder) share the same logic.
+///
+/// `map` is used to read `CavePortal` tile positions stamped by
+/// `generate_underground_civilization`; pass `None` to fall back to a
+/// seeded position (used when no map is available at zone-graph build time).
 fn build_zone_graph(
     buildings: &[fellytip_shared::world::civilization::Building],
     seed: u64,
+    map: Option<&WorldMap>,
 ) -> (ZoneRegistry, ZoneTopology) {
     let (mut registry, mut topology, building_to_floor0) = generate_zones(buildings, seed);
 
@@ -277,14 +283,83 @@ fn build_zone_graph(
         next_portal_id += 1;
     }
 
-    // Wire the cave entrance anchor on the overworld at a seeded world-space position.
-    let cave_x = (seed % 128) as f32 - 64.0;
-    let cave_y = ((seed >> 8) % 128) as f32 - 64.0;
-    if let Some(overworld) = registry.zones.get_mut(&OVERWORLD_ZONE) {
-        overworld.anchors.push(ZoneAnchor {
-            name: SmolStr::new("cave_entrance"),
-            pos: Vec2::new(cave_x, cave_y),
-        });
+    // Wire CaveEntrance anchors from actual CavePortal tile positions stamped by
+    // generate_underground_civilization. Falls back to a seeded position if the
+    // map is unavailable or no portal tiles were placed.
+    let underground_1_id = registry
+        .zones
+        .values()
+        .find(|z| z.kind == ZoneKind::Underground { depth: 1 })
+        .map(|z| z.id);
+
+    let portal_tiles: Vec<(usize, usize)> = map
+        .map(|m| find_portal_tiles(m, 1))
+        .unwrap_or_default();
+
+    if portal_tiles.is_empty() {
+        // Seeded fallback (no map or no cave portals generated yet).
+        let cave_x = (seed % 128) as f32 - 64.0;
+        let cave_y = ((seed >> 8) % 128) as f32 - 64.0;
+        if let Some(overworld) = registry.zones.get_mut(&OVERWORLD_ZONE) {
+            overworld.anchors.push(ZoneAnchor {
+                name: SmolStr::new("cave_entrance"),
+                pos: Vec2::new(cave_x, cave_y),
+            });
+        }
+    } else if let Some(u1_id) = underground_1_id {
+        let underground_up = SmolStr::new("up");
+
+        for (i, &(ix, iy)) in portal_tiles.iter().enumerate() {
+            let world_x = ix as f32 - MAP_HALF_WIDTH  as f32 + 0.5;
+            let world_y = iy as f32 - MAP_HALF_HEIGHT as f32 + 0.5;
+
+            // First portal reuses the "cave_entrance" anchor already referenced by
+            // the topology portal created in generate_zones. Additional portals
+            // get unique anchor names + new portal pairs.
+            let anchor_name = if i == 0 {
+                SmolStr::new("cave_entrance")
+            } else {
+                SmolStr::new(format!("cave_entrance_{i}"))
+            };
+
+            if let Some(overworld) = registry.zones.get_mut(&OVERWORLD_ZONE) {
+                overworld.anchors.push(ZoneAnchor {
+                    name: anchor_name.clone(),
+                    pos: Vec2::new(world_x, world_y),
+                });
+            }
+
+            if i > 0 {
+                topology.add_portal(Portal {
+                    id: next_portal_id,
+                    kind: PortalKind::CaveEntrance,
+                    from_zone: OVERWORLD_ZONE,
+                    from_anchor: anchor_name.clone(),
+                    trigger_radius: 2.0,
+                    traversal_cost: 2.0,
+                    faction_permeable: true,
+                    one_way: false,
+                    to_zone: u1_id,
+                    to_anchor: underground_up.clone(),
+                    shape: None,
+                });
+                next_portal_id += 1;
+                topology.add_portal(Portal {
+                    id: next_portal_id,
+                    kind: PortalKind::CaveEntrance,
+                    from_zone: u1_id,
+                    from_anchor: underground_up.clone(),
+                    trigger_radius: 2.0,
+                    traversal_cost: 2.0,
+                    faction_permeable: true,
+                    one_way: false,
+                    to_zone: OVERWORLD_ZONE,
+                    to_anchor: anchor_name,
+                    shape: None,
+                });
+                next_portal_id += 1;
+            }
+        }
     }
 
     #[allow(unused_assignments)]
@@ -293,6 +368,7 @@ fn build_zone_graph(
     tracing::info!(
         zones   = registry.zones.len(),
         portals = topology.portals.len(),
+        cave_entrances = portal_tiles.len(),
         "Zone graph built"
     );
 
@@ -304,6 +380,7 @@ fn build_zone_graph(
 pub fn populate_zones(
     mut commands: Commands,
     buildings: Option<Res<Buildings>>,
+    map: Option<Res<WorldMap>>,
     existing: Option<Res<ZoneRegistry>>,
 ) {
     if existing.is_some() {
@@ -314,7 +391,7 @@ pub fn populate_zones(
     let empty: Vec<fellytip_shared::world::civilization::Building> = Vec::new();
     let slice = buildings.as_deref().map(|b| b.0.as_slice()).unwrap_or(&empty);
 
-    let (registry, topology) = build_zone_graph(slice, WORLD_SEED);
+    let (registry, topology) = build_zone_graph(slice, WORLD_SEED, map.as_deref());
     commands.insert_resource(registry);
     commands.insert_resource(topology);
 }
