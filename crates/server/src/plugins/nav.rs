@@ -546,3 +546,159 @@ pub fn build_zone_nav_grids(
     let Some(registry) = registry else { return };
     *zone_grids = build_zone_nav_grids_from_registry(&registry);
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fellytip_shared::components::WorldPosition;
+    use fellytip_shared::world::civilization::{Settlement, SettlementKind, Settlements};
+    use smol_str::SmolStr;
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    /// Convert a settlement's tile-space coords to world-space `(x, y, z)`.
+    fn settlement_world_pos(s: &Settlement) -> (f32, f32, f32) {
+        (
+            s.x - MAP_HALF_WIDTH as f32,
+            s.y - MAP_HALF_HEIGHT as f32,
+            s.z,
+        )
+    }
+
+    /// Find the settlement closest to `from` in world-space.
+    fn nearest_settlement(from: &WorldPosition, settlements: &Settlements) -> (f32, f32, f32) {
+        settlements
+            .0
+            .iter()
+            .map(|s| {
+                let w = settlement_world_pos(s);
+                let dx = w.0 - from.x;
+                let dy = w.1 - from.y;
+                (dx * dx + dy * dy, w)
+            })
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(_, w)| w)
+            .expect("settlements list must not be empty")
+    }
+
+    fn dist2d(a: (f32, f32), b: (f32, f32)) -> f32 {
+        ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+    }
+
+    /// Spawn a player, find the nearest settlement, navigate toward it via the
+    /// pathfinding/nav system, and assert that the player position has moved
+    /// closer to the settlement than the spawn point.
+    #[test]
+    fn player_moves_toward_nearest_settlement() {
+        // Build a fully-passable nav grid (skips the cost of generate_map).
+        let nav = NavGrid {
+            grid: Grid::from_cells(
+                NAV_WIDTH,
+                NAV_HEIGHT,
+                vec![NavCell::Passable; NAV_WIDTH * NAV_HEIGHT],
+            ),
+        };
+
+        // Spawn player at world origin.
+        let spawn = WorldPosition { x: 0.0, y: 0.0, z: 0.0 };
+
+        // Two settlements; the "Near" one is the one the player should walk to.
+        // Settlement coordinates are tile-space, so add MAP_HALF_* to the
+        // desired world-space position.
+        let hw = MAP_HALF_WIDTH as f32;
+        let hh = MAP_HALF_HEIGHT as f32;
+        let settlements = Settlements(vec![
+            Settlement {
+                id: Uuid::new_v4(),
+                name: SmolStr::new("Near"),
+                kind: SettlementKind::Town,
+                x: hw + 5.0,
+                y: hh + 5.0,
+                z: 0.0,
+            },
+            Settlement {
+                id: Uuid::new_v4(),
+                name: SmolStr::new("Far"),
+                kind: SettlementKind::Capital,
+                x: hw + 80.0,
+                y: hh + 80.0,
+                z: 0.0,
+            },
+        ]);
+
+        // Find the nearest settlement and its world-space position.
+        let target = nearest_settlement(&spawn, &settlements);
+        let initial_dist = dist2d((spawn.x, spawn.y), (target.0, target.1));
+        assert!(initial_dist > 1.0, "spawn must start meaningfully far from settlement");
+        // Sanity: should pick the near one (~7.07), not the far one (~113).
+        assert!(initial_dist < 20.0, "nearest_settlement should pick the close one");
+
+        // Set up a minimal Bevy app with the navigation follower system.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(FixedUpdate, follow_navigation_goal);
+        app.insert_resource(nav);
+        app.insert_resource(settlements);
+
+        // Compute the path from spawn to target via the public nav API.
+        let nav_res = app.world().resource::<NavGrid>();
+        let (nav_path, goal) = compute_nav_path(
+            nav_res,
+            (spawn.x, spawn.y),
+            (target.0, target.1, target.2),
+        )
+        .expect("path should exist on a fully-passable nav grid");
+        assert!(!nav_path.waypoints.is_empty(), "path should contain waypoints");
+
+        // Spawn the player entity with WorldPosition + the nav components.
+        let player = app
+            .world_mut()
+            .spawn((spawn.clone(), nav_path, goal))
+            .id();
+
+        // Drive FixedUpdate at a 1/64 s timestep until the path completes
+        // (the system removes NavPath on arrival) or 8 simulated seconds pass.
+        // PLAYER_SPEED = 2.5 u/s → 8 s covers ~20 units, well above the
+        // ~7.07 unit start distance.
+        let timestep = Duration::from_secs_f32(1.0 / 64.0);
+        let max_ticks = 64 * 8;
+        let mut ticks = 0;
+        loop {
+            app.world_mut()
+                .resource_mut::<Time<Fixed>>()
+                .advance_by(timestep);
+            app.world_mut().run_schedule(FixedUpdate);
+            ticks += 1;
+            // Stop early once the system has removed NavPath (arrived).
+            if app.world().entity(player).get::<NavPath>().is_none() {
+                break;
+            }
+            if ticks >= max_ticks {
+                break;
+            }
+        }
+
+        // Assert position changed and is now closer to the settlement.
+        let final_pos = app
+            .world()
+            .entity(player)
+            .get::<WorldPosition>()
+            .expect("player must still have WorldPosition")
+            .clone();
+
+        assert!(
+            (final_pos.x, final_pos.y) != (spawn.x, spawn.y),
+            "player position must have changed from spawn ({}, {}) → ({}, {})",
+            spawn.x, spawn.y, final_pos.x, final_pos.y,
+        );
+
+        let final_dist = dist2d((final_pos.x, final_pos.y), (target.0, target.1));
+        assert!(
+            final_dist < initial_dist,
+            "player should be closer to settlement after pathing: \
+             initial={initial_dist}, final={final_dist}",
+        );
+    }
+}
