@@ -252,9 +252,19 @@ fn tag_local_player(
             PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
             EntityBounds::PLAYER,
             initial_transform,
-            RigidBody::Kinematic,
+            // Dynamic so avian's contact solver pushes the capsule out of static
+            // terrain.  Kinematic bodies have dominance=128 (same as Static), so
+            // the constraint solver sees two zero-inv-mass bodies and produces no
+            // push-back — the capsule passed straight through.
+            // GravityScale(0) disables avian's built-in gravity; we drive it manually
+            // via LinearVelocity.y so water buoyancy and jump logic stay unchanged.
+            RigidBody::Dynamic,
+            GravityScale(0.0),
             LockedAxes::ROTATION_LOCKED,
             LinearVelocity::ZERO,
+            // SweptCcd prevents tunnelling when fall speed reaches MAX_FALL_SPEED
+            // (50 m/s → 0.8 m per 62.5 Hz step, enough to skip a 1-m terrain tile).
+            SweptCcd::default(),
             // ShapeCaster probes just below the feet (parent origin = feet level).
             ShapeCaster::new(
                 Collider::sphere(0.28),

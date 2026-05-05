@@ -318,14 +318,22 @@ pub fn apply_chunk_meshes(
         } else {
             // Spawn a new chunk entity. Vertex positions are in world space,
             // so Transform::IDENTITY places it correctly with no offset.
-            let entity = commands.spawn((
+            // Build the collider synchronously — the mesh was just added to
+            // Assets<Mesh> by rebuild_dirty_chunks this same frame, so
+            // meshes.get() will succeed and the collider is live immediately.
+            let mut bundle = commands.spawn((
                 Mesh3d(handle.clone()),
                 MeshMaterial3d(mat),
                 Transform::IDENTITY,
                 SurfaceTerrain,
                 RigidBody::Static,
-                ColliderConstructor::TrimeshFromMesh,
-            )).id();
+            ));
+            if let Some(collider) = meshes.get(&handle).and_then(Collider::trimesh_from_mesh) {
+                bundle.insert(collider);
+            } else {
+                bundle.insert(ColliderConstructor::TrimeshFromMesh);
+            }
+            let entity = bundle.id();
             mgr.spawned.insert(coord, entity);
             lifecycle.newly_visible.push((coord, entity));
 
