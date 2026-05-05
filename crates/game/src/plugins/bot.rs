@@ -299,7 +299,7 @@ fn drive_bots(
         &mut ActionCooldowns,
         &CombatParticipant,
     )>,
-    enemies: Query<(Entity, &WorldPosition, &CombatParticipant), With<ExperienceReward>>,
+    enemies: Query<(Entity, &WorldPosition, &CombatParticipant), (With<ExperienceReward>, Without<BotController>)>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
@@ -362,7 +362,7 @@ fn drive_bots(
 
 fn nearest_enemy(
     from: &WorldPosition,
-    enemies: &Query<(Entity, &WorldPosition, &CombatParticipant), With<ExperienceReward>>,
+    enemies: &Query<(Entity, &WorldPosition, &CombatParticipant), (With<ExperienceReward>, Without<BotController>)>,
 ) -> Option<Uuid> {
     enemies
         .iter()
@@ -381,7 +381,7 @@ fn apply_bot_action(
     bot_entity: Entity,
     intent: ActionIntent,
     target_uuid: Option<Uuid>,
-    enemies: &Query<(Entity, &WorldPosition, &CombatParticipant), With<ExperienceReward>>,
+    enemies: &Query<(Entity, &WorldPosition, &CombatParticipant), (With<ExperienceReward>, Without<BotController>)>,
     budget: &mut ActionBudget,
     cds: &mut ActionCooldowns,
     commands: &mut Commands,
