@@ -15,9 +15,12 @@
 use glam::Vec2;
 use smol_str::SmolStr;
 
-use crate::world::{
-    civilization::BuildingKind,
-    zone::{InteriorTile, ZoneAnchor},
+use crate::{
+    math::{fbm, lattice_hash},
+    world::{
+        civilization::BuildingKind,
+        zone::{InteriorTile, ZoneAnchor},
+    },
 };
 
 /// How many BuildingFloor zones does this building kind produce. 0/1 = no interior zones.
@@ -262,9 +265,129 @@ pub fn capital_tower_floor(floor: u8) -> (u16, u16, Vec<InteriorTile>, Vec<ZoneA
     (w, h, tiles, anchors)
 }
 
+/// Procedural cave zone tile layout for underground zones.
+///
+/// Uses fBm noise to carve open rooms out of solid rock. The resulting grid is
+/// 24×24. Two stair anchors ("up" in the NW quadrant, "down" in the SE
+/// quadrant) are guaranteed to be reachable — a 3×3 clear area is carved around
+/// each anchor.
+///
+/// Depth and seed are mixed so each zone gets a distinct layout.
+pub fn cave_zone_tiles(depth: u8, seed: u64) -> (u16, u16, Vec<InteriorTile>, Vec<ZoneAnchor>) {
+    const W: u16 = 24;
+    const H: u16 = 24;
+    const OPEN_THRESHOLD: f32 = 0.44;
+
+    let depth_seed = seed.wrapping_add((depth as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let ox = (depth_seed.wrapping_mul(2_654_435_761) % 100_000) as f32;
+    let oy = (depth_seed.wrapping_mul(805_459_861) % 100_000) as f32;
+    let freq = 3.5 / W as f32;
+
+    let mut tiles = Vec::with_capacity((W * H) as usize);
+    for iy in 0..H as usize {
+        for ix in 0..W as usize {
+            let n = fbm(
+                (ix as f32 + ox) * freq,
+                (iy as f32 + oy) * freq,
+                4,
+                0.5,
+                2.0,
+            );
+            let kind = if n > OPEN_THRESHOLD {
+                let h = lattice_hash(ix as i32 + depth as i32 * 997, iy as i32 + depth as i32 * 1009);
+                if h < 0.015 {
+                    InteriorTile::Pit
+                } else if h < 0.04 {
+                    InteriorTile::Water
+                } else {
+                    InteriorTile::Floor
+                }
+            } else {
+                InteriorTile::Wall
+            };
+            tiles.push(kind);
+        }
+    }
+
+    // Anchor positions: NW for "up", SE for "down".
+    let up_x: usize = 2;
+    let up_y: usize = 2;
+    let down_x: usize = W as usize - 4;
+    let down_y: usize = H as usize - 4;
+
+    // Carve a 3×3 clear area around each anchor so traversal is never blocked.
+    for dy in 0..3usize {
+        for dx in 0..3usize {
+            let ix = (up_x + dx).min(W as usize - 1);
+            let iy = (up_y + dy).min(H as usize - 1);
+            tiles[iy * W as usize + ix] = InteriorTile::Floor;
+            let ix2 = (down_x + dx).min(W as usize - 1);
+            let iy2 = (down_y + dy).min(H as usize - 1);
+            tiles[iy2 * W as usize + ix2] = InteriorTile::Floor;
+        }
+    }
+    tiles[up_y * W as usize + up_x] = InteriorTile::Stair;
+    tiles[down_y * W as usize + down_x] = InteriorTile::Stair;
+
+    let anchors = vec![
+        ZoneAnchor {
+            name: SmolStr::new("up"),
+            pos: Vec2::new(up_x as f32, up_y as f32),
+        },
+        ZoneAnchor {
+            name: SmolStr::new("down"),
+            pos: Vec2::new(down_x as f32, down_y as f32),
+        },
+    ];
+
+    (W, H, tiles, anchors)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cave_zone_tiles_returns_correct_dimensions() {
+        let (w, h, tiles, anchors) = cave_zone_tiles(1, 42);
+        assert_eq!(w, 24);
+        assert_eq!(h, 24);
+        assert_eq!(tiles.len(), 576);
+        assert!(anchors.iter().any(|a| a.name == "up"));
+        assert!(anchors.iter().any(|a| a.name == "down"));
+    }
+
+    #[test]
+    fn cave_zone_tiles_has_open_and_walls() {
+        let (_, _, tiles, _) = cave_zone_tiles(1, 7);
+        let open = tiles.iter().filter(|&&t| !matches!(t, InteriorTile::Wall)).count();
+        let walls = tiles.iter().filter(|&&t| t == InteriorTile::Wall).count();
+        assert!(open > 0, "expected open floor tiles, got {open}");
+        assert!(walls > 0, "expected wall tiles, got {walls}");
+    }
+
+    #[test]
+    fn cave_zone_tiles_anchors_on_floor() {
+        let (w, _, tiles, anchors) = cave_zone_tiles(1, 99);
+        for anchor in &anchors {
+            let ix = anchor.pos.x as usize;
+            let iy = anchor.pos.y as usize;
+            let tile = tiles[iy * w as usize + ix];
+            assert_eq!(
+                tile,
+                InteriorTile::Stair,
+                "anchor '{}' at ({},{}) should be Stair, got {:?}",
+                anchor.name, ix, iy, tile
+            );
+        }
+    }
+
+    #[test]
+    fn cave_zone_tiles_different_depths_differ() {
+        let (_, _, t1, _) = cave_zone_tiles(1, 42);
+        let (_, _, t2, _) = cave_zone_tiles(2, 42);
+        assert!(t1 != t2, "depth 1 and depth 2 should produce different layouts");
+    }
 
     #[test]
     fn capital_tower_has_five_floors() {

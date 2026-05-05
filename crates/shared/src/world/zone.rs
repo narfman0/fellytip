@@ -476,43 +476,31 @@ pub fn generate_zones(
     }
 
     // Underground chain (the Sunken Realm): 2 zones — depth 1 (shallow) and
-    // depth 2 (deep). Overworld attaches via CaveEntrance portal to depth 1;
-    // a SealRift portal links depth 1 → depth 2.
-    let underground_template_tiles: Vec<InteriorTile> = vec![InteriorTile::Floor; 16 * 16];
-    let underground_template_id = ZoneTemplate::compute_id(&underground_template_tiles);
-    let underground_template = ZoneTemplate {
-        id: underground_template_id,
-        width: 16,
-        height: 16,
-        tiles: underground_template_tiles.clone(),
-        anchors: vec![
-            ZoneAnchor {
-                name: SmolStr::new("up"),
-                pos: Vec2::new(1.0, 1.0),
-            },
-            ZoneAnchor {
-                name: SmolStr::new("down"),
-                pos: Vec2::new(14.0, 14.0),
-            },
-        ],
-    };
-
-    // Depth 1 = Sunken Realm shallow; depth 2 = Sunken Realm deep.
+    // depth 2 (deep). Each depth gets a procedurally generated cave room layout
+    // seeded by depth + world seed so layouts differ between levels.
     let mut underground_ids: Vec<ZoneId> = Vec::with_capacity(2);
     for depth in 1u8..=2 {
+        let (w, h, tiles, anchors) = cave_zone_tiles(depth, _seed);
+        let template_id = ZoneTemplate::compute_id(&tiles);
+        let template = ZoneTemplate {
+            id: template_id,
+            width: w,
+            height: h,
+            tiles,
+            anchors: anchors.clone(),
+        };
         let zone_id = registry.alloc_id();
         let zone = Zone {
             id: zone_id,
             kind: ZoneKind::Underground { depth },
             parent: ZoneParent::Underground,
             world_id: WORLD_SUNKEN_REALM,
-            width: 16,
-            height: 16,
-            template_id: underground_template_id,
-            anchors: underground_template.anchors.clone(),
+            width: w,
+            height: h,
+            template_id,
+            anchors,
         };
-        // Reuse the same template for both depths.
-        registry.insert(zone, underground_template.clone());
+        registry.insert(zone, template);
         underground_ids.push(zone_id);
     }
 
@@ -693,9 +681,8 @@ pub fn generate_zones(
     (registry, topology, building_to_floor0)
 }
 
-// Tile generation helpers have been moved to `super::dungeon` (shared/world/dungeon.rs)
-// so both server and client can call them. Import them here for use by `generate_zones`.
-use super::dungeon::{build_floor_tiles, building_floor_count};
+// Tile generation helpers live in `super::dungeon` (shared/world/dungeon.rs).
+use super::dungeon::{build_floor_tiles, building_floor_count, cave_zone_tiles};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
