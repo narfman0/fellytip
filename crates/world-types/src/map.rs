@@ -235,7 +235,7 @@ pub struct WorldMap {
     pub height: usize,
     pub seed: u64,
     /// Flat row-major road flag array. `true` = road tile (same indexing as `columns`).
-    /// Populated after `generate_map` by [`crate::world::civilization::generate_roads`].
+    /// Populated after `generate_map` by [`crate::civilization::generate_roads`].
     #[serde(default)]
     pub road_tiles: Vec<bool>,
     /// Precomputed world-space (x, y, z) spawn positions with verified open neighbors.
@@ -364,14 +364,14 @@ fn column_is_clear(col: &TileColumn, entity_z: f32) -> bool {
 /// that falls outside the map boundary is treated as impassable.
 ///
 /// Replaces [`is_walkable_at`] in the movement loop. Passing
-/// [`crate::components::EntityBounds::POINT`] reproduces the legacy
+/// [`crate::bounds::EntityBounds::POINT`] reproduces the legacy
 /// single-point behaviour exactly.
 pub fn is_passable_with_bounds(
     map: &WorldMap,
     cx: f32,
     cy: f32,
     entity_z: f32,
-    bounds: crate::components::EntityBounds,
+    bounds: crate::bounds::EntityBounds,
 ) -> bool {
     for (dx, dy) in bounds.corners() {
         match map.column_at(cx + dx, cy + dy) {
@@ -1147,7 +1147,7 @@ mod tests {
 
     #[test]
     fn spawn_tile_passable_with_point_bounds() {
-        use crate::components::EntityBounds;
+        use crate::bounds::EntityBounds;
         let map = generate_map(42, 64, 64);
         let (sx, sy, sz) = find_surface_spawn(&map);
         assert!(
@@ -1158,7 +1158,7 @@ mod tests {
 
     #[test]
     fn mountain_tile_blocked_below_peak() {
-        use crate::components::EntityBounds;
+        use crate::bounds::EntityBounds;
         let map = generate_map(42, 64, 64);
         let mountain = map.columns.iter().enumerate().find(|(_, col)| {
             col.layers.iter().any(|l| l.kind == TileKind::Mountain)
@@ -1179,7 +1179,7 @@ mod tests {
 
     #[test]
     fn entity_above_obstacle_can_pass() {
-        use crate::components::EntityBounds;
+        use crate::bounds::EntityBounds;
         let map = generate_map(42, 64, 64);
         let mountain = map.columns.iter().enumerate().find(|(_, col)| {
             col.layers.iter().any(|l| l.kind == TileKind::Mountain)
@@ -1199,7 +1199,7 @@ mod tests {
 
     #[test]
     fn wide_bounds_blocked_by_adjacent_obstacle() {
-        use crate::components::EntityBounds;
+        use crate::bounds::EntityBounds;
         let map = generate_map(42, 64, 64);
         'outer: for iy in 1..(map.height - 1) {
             for ix in 1..(map.width - 1) {

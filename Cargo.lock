@@ -3670,6 +3670,27 @@ dependencies = [
  "anyhow",
  "bevy",
  "fellytip-combat-rules",
+ "fellytip-world-types",
+ "glam",
+ "rand 0.10.0",
+ "rand_chacha 0.10.0",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "smol_str 0.3.6",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fellytip-world-types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "fellytip-combat-rules",
  "glam",
  "rand 0.10.0",
  "rand_chacha 0.10.0",

@@ -17,10 +17,8 @@ use smol_str::SmolStr;
 
 use crate::{
     math::{fbm, lattice_hash},
-    world::{
-        civilization::BuildingKind,
-        zone::{InteriorTile, ZoneAnchor},
-    },
+    civilization::BuildingKind,
+    zone::{InteriorTile, ZoneAnchor},
 };
 
 /// How many BuildingFloor zones does this building kind produce. 0/1 = no interior zones.

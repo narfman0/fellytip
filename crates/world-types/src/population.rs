@@ -12,9 +12,9 @@
 //! 200 ticks); famine causes starvation (-1 NPC every 50 ticks). When population
 //! reaches 0 the settlement is considered collapsed.
 
-use crate::world::faction::FactionId;
-use crate::world::map::{TileKind, WorldMap};
-use crate::world::zone::WorldId;
+use crate::faction::FactionId;
+use crate::map::{TileKind, WorldMap};
+use crate::zone::WorldId;
 use uuid::Uuid;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -345,8 +345,8 @@ fn nearest_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::map::{TileColumn, TileLayer, TileKind};
-    use crate::world::zone::WORLD_SURFACE;
+    use crate::map::{TileColumn, TileLayer, TileKind};
+    use crate::zone::WORLD_SURFACE;
 
     fn make_pop(adult_count: u32) -> SettlementPopulation {
         SettlementPopulation {
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn crystal_cave_gives_growth_bonus() {
         let mut map = empty_map(16, 16);
-        let z = crate::world::cave::cave_z(1);
+        let z = crate::cave::cave_z(1);
         let cx = 5usize;
         let cy = 5usize;
         // Place CrystalCave tile at the settlement position.

@@ -194,8 +194,8 @@ impl FloraState {
 ///
 /// Temperate and tropical biomes have fast growth; polar biomes are slow.
 /// Returns growth increment per world-sim tick (1 Hz).
-pub fn tree_growth_rate(kind: crate::world::map::TileKind) -> f32 {
-    use crate::world::map::TileKind;
+pub fn tree_growth_rate(kind: crate::map::TileKind) -> f32 {
+    use crate::map::TileKind;
     match kind {
         TileKind::TemperateForest | TileKind::Forest
         | TileKind::TropicalForest | TileKind::TropicalRainforest => 1.0 / 200.0,
@@ -347,8 +347,8 @@ pub const MYCONID_COLONY: &str = "myconid";
 /// - `CrystalCave` — rich bioluminescent resources → elevated capacity.
 /// - `LavaFloor`   — hostile heat, sparse life → reduced capacity.
 /// - anything else — treated as a sealed wall → minimal capacity.
-pub fn cave_carrying_capacity(dominant_kind: crate::world::map::TileKind) -> f64 {
-    use crate::world::map::TileKind;
+pub fn cave_carrying_capacity(dominant_kind: crate::map::TileKind) -> f64 {
+    use crate::map::TileKind;
     match dominant_kind {
         TileKind::CaveFloor  => 100.0,
         TileKind::CrystalCave => 150.0,

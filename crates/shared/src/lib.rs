@@ -4,7 +4,7 @@ pub mod world;
 pub mod bestiary;
 pub mod components;
 pub mod inputs;
-pub mod math;
+pub use fellytip_world_types::math;
 pub mod protocol;
 pub mod resources;
 pub mod sprite_math;

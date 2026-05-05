@@ -1,11 +1,10 @@
 [package]
-name    = "fellytip-shared"
+name    = "fellytip-world-types"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 fellytip-combat-rules = { path = "../combat-rules" }
-fellytip-world-types  = { path = "../world-types" }
 bevy       = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }

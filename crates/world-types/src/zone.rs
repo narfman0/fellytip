@@ -356,7 +356,7 @@ pub struct ZoneMembership(pub ZoneId);
 
 // ── Zone generation ───────────────────────────────────────────────────────────
 
-use crate::world::civilization::Building;
+use crate::civilization::Building;
 
 /// Generate zone graph from a list of buildings plus a seeded underground chain.
 ///
@@ -681,8 +681,8 @@ pub fn generate_zones(
     (registry, topology, building_to_floor0)
 }
 
-// Tile generation helpers live in `super::dungeon` (shared/world/dungeon.rs).
-use super::dungeon::{build_floor_tiles, building_floor_count, cave_zone_tiles};
+// Tile generation helpers live in `crate::dungeon`.
+use crate::dungeon::{build_floor_tiles, building_floor_count, cave_zone_tiles};
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

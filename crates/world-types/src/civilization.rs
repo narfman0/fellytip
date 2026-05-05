@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::world::cave::{cave_z, find_cave_capital_site, generate_cave_layer, place_cave_portals};
-use crate::world::faction::faction_archetype;
-use crate::world::map::{TileKind, WorldMap};
+use crate::cave::{cave_z, find_cave_capital_site, generate_cave_layer, place_cave_portals};
+use crate::faction::faction_archetype;
+use crate::map::{TileKind, WorldMap};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -498,7 +498,7 @@ fn apply_tower_stair_tiles(b: &Building, map: &mut WorldMap) {
     // Center tile: a flat floor layer at each storey.
     for k in 0..=floors {
         let z = base_z + k as f32 * TOWER_FLOOR_H;
-        map.add_stair_layer(cx as usize, cy as usize, z, crate::world::map::TileKind::Stone);
+        map.add_stair_layer(cx as usize, cy as usize, z, crate::map::TileKind::Stone);
     }
 
     // Stair spiral: rising by STAIR_STEP per tile.
@@ -513,7 +513,7 @@ fn apply_tower_stair_tiles(b: &Building, map: &mut WorldMap) {
             && (tx as usize) < map.width
             && (ty as usize) < map.height
         {
-            map.add_stair_layer(tx as usize, ty as usize, z, crate::world::map::TileKind::Stone);
+            map.add_stair_layer(tx as usize, ty as usize, z, crate::map::TileKind::Stone);
         }
     }
 }
@@ -1021,7 +1021,7 @@ fn deterministic_uuid(rng: &mut impl rand::RngExt) -> Uuid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::map::{generate_map, MAP_WIDTH, MAP_HEIGHT};
+    use crate::map::{generate_map, MAP_WIDTH, MAP_HEIGHT};
 
     #[test]
     fn surface_settlements_are_generated() {
@@ -1265,7 +1265,7 @@ mod tests {
 
     #[test]
     fn tower_stair_layers_are_reachable() {
-        use crate::world::map::STEP_HEIGHT;
+        use crate::map::STEP_HEIGHT;
         let mut map = generate_map(5, MAP_WIDTH, MAP_HEIGHT);
         let settlements = generate_settlements(&map, 5);
         let buildings = generate_buildings(&settlements, &map, 5);
@@ -1313,8 +1313,8 @@ mod tests {
             .expect("should have an underground capital");
         assert!(cap.z < 0.0, "underground capital z={} should be negative", cap.z);
         assert!(
-            (cap.z - crate::world::cave::cave_z(1)).abs() < 0.5,
-            "underground capital z={} should be near cave depth 1 ({})", cap.z, crate::world::cave::cave_z(1)
+            (cap.z - crate::cave::cave_z(1)).abs() < 0.5,
+            "underground capital z={} should be near cave depth 1 ({})", cap.z, crate::cave::cave_z(1)
         );
     }
 

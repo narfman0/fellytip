@@ -1,7 +1,7 @@
 //! Faction data, goals, dispositions, and the pure utility-scoring function.
 
-use crate::world::civilization::BuildingKind;
-use crate::world::ecology::RegionId;
+use crate::civilization::BuildingKind;
+use crate::ecology::RegionId;
 use bevy::prelude::{Reflect, Resource};
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;

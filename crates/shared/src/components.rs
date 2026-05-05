@@ -215,35 +215,11 @@ pub struct WorldMeta {
     pub height: u32,
 }
 
-/// Axis-aligned bounding box for collision.
-///
-/// `half_w` is the horizontal radius checked in all four cardinal quadrants.
-/// `height` is the entity's vertical extent (feet to crown), reserved for
-/// ceiling-clearance checks in a future pass.
-#[derive(Component, Clone, Copy, PartialEq, Debug, Serialize, Deserialize, Reflect)]
-#[reflect(Component)]
-pub struct EntityBounds {
-    pub half_w: f32,
-    pub height: f32,
-}
-
-impl EntityBounds {
-    /// Default human-sized player bounds.
-    pub const PLAYER: Self = Self { half_w: 0.35, height: 1.8 };
-    /// Point check — identical to the old single-point `is_walkable_at` behaviour.
-    pub const POINT: Self = Self { half_w: 0.0, height: 0.0 };
-
-    /// The four corners of the footprint in (dx, dy) offsets from the entity centre.
-    #[inline]
-    pub fn corners(self) -> [(f32, f32); 4] {
-        let hw = self.half_w;
-        [(-hw, -hw), (hw, -hw), (-hw, hw), (hw, hw)]
-    }
-}
-
-impl Default for EntityBounds {
-    fn default() -> Self { Self::PLAYER }
-}
+// `EntityBounds` lives in `fellytip-world-types::bounds` so that
+// `world/map.rs::is_passable_with_bounds` can reference it without forcing the
+// world-types crate to depend on `fellytip-shared`. Re-exported here so
+// existing `crate::components::EntityBounds` paths keep working.
+pub use fellytip_world_types::bounds::EntityBounds;
 
 /// Sequence of nav-grid waypoints for an NPC to follow.
 ///

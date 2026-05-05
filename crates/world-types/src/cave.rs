@@ -7,7 +7,7 @@
 //! cave space out of solid rock.
 
 use crate::math::{fbm, lattice_hash};
-use crate::world::map::{TileKind, TileLayer, WorldMap};
+use crate::map::{TileKind, TileLayer, WorldMap};
 
 pub const CAVE_DEPTH_SPACING: f32 = 20.0;
 
@@ -237,7 +237,7 @@ pub fn is_cave_open(map: &WorldMap, ix: usize, iy: usize, depth: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::map::TileColumn;
+    use crate::map::TileColumn;
 
     fn empty_map(width: usize, height: usize) -> WorldMap {
         WorldMap {
@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn portal_exists_on_surface_and_underground() {
-        use crate::world::map::{MAP_WIDTH, MAP_HEIGHT, generate_map};
+        use crate::map::{MAP_WIDTH, MAP_HEIGHT, generate_map};
         let mut map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
         generate_cave_layer(&mut map, 42, 1);
         place_cave_portals(&mut map, 42, 1, 3);

@@ -3,6 +3,7 @@ resolver = "2"
 default-members = ["crates/client"]
 members = [
     "crates/combat-rules",
+    "crates/world-types",
     "crates/shared",
     "crates/server",
     "crates/client",
@@ -40,6 +41,7 @@ ron                 = "0.8"
 color_quant         = "1"
 avian3d             = { version = "0.6", features = ["3d", "f32"] }
 bevy_mesh           = "0.18"
+fellytip-world-types = { path = "crates/world-types" }
 fellytip-shared     = { path = "crates/shared" }
 
 [profile.dev]
