@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use avian3d::prelude::{ColliderConstructor, RigidBody};
+use avian3d::prelude::{Collider, ColliderConstructor, RigidBody};
 use super::material::{tilekind_to_biome_region, BiomeRegion};
 
 use bevy::prelude::*;
@@ -253,6 +253,7 @@ pub fn apply_chunk_meshes(
     mut mgr:       ResMut<ChunkManager>,
     assets:        Res<TerrainAssets>,
     map:           Res<WorldMap>,
+    meshes:        Res<Assets<Mesh>>,
     water_mat:     Option<Res<WaterMaterialHandle>>,
     mut lifecycle: ResMut<ChunkLifecycle>,
 ) {
@@ -302,13 +303,18 @@ pub fn apply_chunk_meshes(
             .clone();
 
         if let Some(&entity) = mgr.spawned.get(&coord) {
-            // LOD changed — swap mesh and trigger avian to rebuild the trimesh collider.
-            // Remove the old Collider first so ColliderConstructor is not blocked.
-            commands.entity(entity).remove::<avian3d::prelude::Collider>().insert((
-                Mesh3d(handle.clone()),
-                MeshMaterial3d(mat),
-                ColliderConstructor::TrimeshFromMesh,
-            ));
+            // LOD changed — build the new collider synchronously so the old one
+            // stays active until it is atomically replaced.  rebuild_dirty_chunks
+            // runs before this system, so the mesh is already in Assets<Mesh>.
+            let mut cmd = commands.entity(entity);
+            cmd.insert((Mesh3d(handle.clone()), MeshMaterial3d(mat)));
+            if let Some(collider) = meshes.get(&handle).and_then(Collider::trimesh_from_mesh) {
+                cmd.insert(collider);
+            } else {
+                // Mesh not in Assets yet (shouldn't happen) — fall back to deferred
+                // constructor, accepting the 1-frame gap rather than leaving no collider.
+                cmd.remove::<Collider>().insert(ColliderConstructor::TrimeshFromMesh);
+            }
         } else {
             // Spawn a new chunk entity. Vertex positions are in world space,
             // so Transform::IDENTITY places it correctly with no offset.
