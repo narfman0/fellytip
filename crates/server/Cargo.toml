@@ -7,6 +7,10 @@ edition = "2024"
 name = "fellytip_server"
 path = "src/lib.rs"
 
+[[bin]]
+name = "fellytip-server"
+path = "src/main.rs"
+
 [dependencies]
 fellytip-shared    = { workspace = true }
 fellytip-game      = { workspace = true }
