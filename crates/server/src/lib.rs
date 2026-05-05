@@ -67,6 +67,7 @@ impl Plugin for ServerGamePlugin {
             .add_plugins(plugins::perf::PerfPlugin)
             .add_plugins(plugins::story::StoryPlugin)
             .add_plugins(plugins::combat::CombatPlugin)
+            .add_plugins(plugins::bot::BotPlugin)
             .add_plugins(plugins::interest::InterestPlugin)
             .add_plugins(plugins::party::PartyPlugin)
             .add_plugins(plugins::portal::PortalPlugin)
@@ -149,8 +150,10 @@ fn spawn_player_on_class_choice(
     map: Option<Res<WorldMap>>,
     map_config: Option<Res<MapGenConfig>>,
     db: Res<Db>,
-    // Only allow spawning when there is no player entity yet.
-    existing_players: Query<Entity, With<Experience>>,
+    // Only allow spawning when there is no real player entity yet — bots
+    // (`With<BotController>`) are explicitly excluded so they don't block
+    // class selection.
+    existing_players: Query<Entity, (With<Experience>, Without<plugins::bot::BotController>)>,
     mut commands: Commands,
 ) {
     let msg = reader.read().next();

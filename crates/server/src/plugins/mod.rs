@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod bot;
 pub mod character_persistence;
 pub mod dm;
 pub mod combat;

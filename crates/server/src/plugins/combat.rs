@@ -300,7 +300,7 @@ type PlayerBudgetQuery<'w, 's> = Query<
     'w,
     's,
     (Entity, Option<&'static mut ActionBudget>, Option<&'static mut ActionCooldowns>),
-    Without<ExperienceReward>,
+    (Without<ExperienceReward>, Without<crate::plugins::bot::BotController>),
 >;
 
 /// Drain `LocalPlayerInput` actions and queue combat markers on the player entity.
@@ -314,7 +314,7 @@ type PlayerBudgetQuery<'w, 's> = Query<
 ///
 /// MULTIPLAYER: restore MessageReceiver<PlayerInput> iteration over ClientOf
 /// entities and re-add the position-acceptance + sanity-timer logic.
-fn process_player_input(
+pub(crate) fn process_player_input(
     mut local_input: ResMut<LocalPlayerInput>,
     mut player_q: PlayerBudgetQuery,
     enemies: Query<(Entity, &CombatParticipant), With<ExperienceReward>>,

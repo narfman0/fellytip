@@ -31,7 +31,7 @@ use fellytip_shared::{
         population::{
             tick_population, PopulationEffect, SettlementEconomy, SettlementPopulation,
             FARMER_FOOD_PER_TICK, HUNTER_FOOD_PER_TICK, MERCHANT_TRADE_PER_TICK,
-            WAR_PARTY_SIZE,
+            UNDERGROUND_RAID_PARTY_SIZE, WAR_PARTY_SIZE,
         },
         story::{StoryEvent, StoryEventKind, WriteStoryEvent},
     },
@@ -77,8 +77,6 @@ const UNDERGROUND_NATURAL_BOOST: f32 = 0.05;
 const UNDERGROUND_THRESHOLD_DISTANT_BIT: u8 = 1 << 0; // score >= 0.4
 const UNDERGROUND_THRESHOLD_IMMINENT_BIT: u8 = 1 << 1; // score >= 0.7
 
-/// Number of `WarPartyMember` entities spawned per underground raid.
-const UNDERGROUND_RAID_PARTY_SIZE: u32 = 3;
 /// Minimum pressure score before a raid is spawned.
 const UNDERGROUND_RAID_THRESHOLD: f32 = 0.8;
 

@@ -59,7 +59,7 @@ const ASSET_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 #[cfg(not(debug_assertions))]
 const ASSET_PATH: &str = "assets";
 
-fn add_windowed_plugins(app: &mut App) {
+fn add_windowed_plugins(app: &mut App, visible: bool) {
     app.add_plugins(PhysicsPlugins::default())
         .add_plugins(avian3d::debug_render::PhysicsDebugPlugin)
         .insert_gizmo_config(
@@ -75,6 +75,7 @@ fn add_windowed_plugins(app: &mut App) {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Fellytip".into(),
+                        visible,
                         ..default()
                     }),
                     ..default()
@@ -122,10 +123,8 @@ fn main() {
         let combat_test = args.iter().any(|a| a == "--combat-test");
         if headless {
             tracing_subscriber::fmt::init();
-            app.add_plugins(MinimalPlugins)
-                .init_resource::<plugins::portal_renderer::PortalDebugOverlay>()
-                .init_resource::<plugins::entity_renderer::CharacterDebugOverlay>()
-                .add_plugins(
+            add_windowed_plugins(&mut app, false);
+            app.add_plugins(
                     RemotePlugin::default()
                         .with_method("dm/spawn_npc",         fellytip_server::plugins::dm::dm_spawn_npc)
                         .with_method("dm/kill",              fellytip_server::plugins::dm::dm_kill)
@@ -140,6 +139,12 @@ fn main() {
                         .with_method("dm/query_portals",     fellytip_server::plugins::dm::dm_query_portals)
                         .with_method("dm/spawn_wildlife",    fellytip_server::plugins::dm::dm_spawn_wildlife)
                         .with_method("dm/list_settlements",  fellytip_server::plugins::dm::dm_list_settlements)
+                        .with_method("dm/spawn_raid",        fellytip_server::plugins::dm::dm_spawn_raid)
+                        .with_method("dm/give_gold",         fellytip_server::plugins::dm::dm_give_gold)
+                        .with_method("dm/spawn_bot",         fellytip_server::plugins::bot::dm_spawn_bot)
+                        .with_method("dm/despawn_bot",       fellytip_server::plugins::bot::dm_despawn_bot)
+                        .with_method("dm/list_bots",         fellytip_server::plugins::bot::dm_list_bots)
+                        .with_method("dm/set_bot_action",    fellytip_server::plugins::bot::dm_set_bot_action)
                         .with_method("dm/set_portal_debug",  dm_set_portal_debug)
                         .with_method("dm/take_screenshot",        dm_take_screenshot)
                         .with_method("dm/set_camera_distance",    dm_set_camera_distance)
@@ -155,7 +160,7 @@ fn main() {
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
                 .add_systems(Update, (headless_auto_attack, headless_auto_move));
         } else {
-            add_windowed_plugins(&mut app);
+            add_windowed_plugins(&mut app, true);
             app.add_plugins(
                 RemotePlugin::default()
                     .with_method("dm/spawn_npc",                  fellytip_server::plugins::dm::dm_spawn_npc)
@@ -171,6 +176,12 @@ fn main() {
                     .with_method("dm/query_portals",              fellytip_server::plugins::dm::dm_query_portals)
                     .with_method("dm/spawn_wildlife",             fellytip_server::plugins::dm::dm_spawn_wildlife)
                     .with_method("dm/list_settlements",           fellytip_server::plugins::dm::dm_list_settlements)
+                    .with_method("dm/spawn_raid",                 fellytip_server::plugins::dm::dm_spawn_raid)
+                    .with_method("dm/give_gold",                  fellytip_server::plugins::dm::dm_give_gold)
+                    .with_method("dm/spawn_bot",                  fellytip_server::plugins::bot::dm_spawn_bot)
+                    .with_method("dm/despawn_bot",                fellytip_server::plugins::bot::dm_despawn_bot)
+                    .with_method("dm/list_bots",                  fellytip_server::plugins::bot::dm_list_bots)
+                    .with_method("dm/set_bot_action",             fellytip_server::plugins::bot::dm_set_bot_action)
                     .with_method("dm/set_portal_debug",           dm_set_portal_debug)
                     .with_method("dm/take_screenshot",            dm_take_screenshot)
                     .with_method("dm/set_camera_distance",        dm_set_camera_distance)
@@ -197,7 +208,7 @@ fn main() {
     }
     #[cfg(target_family = "wasm")]
     {
-        add_windowed_plugins(&mut app);
+        add_windowed_plugins(&mut app, true);
         app.add_plugins(FellytipProtocolPlugin)
             .add_plugins(ServerGamePlugin {
                 seed,
@@ -242,7 +253,14 @@ fn main() {
 /// the visual model and PredictedPosition.z always represent the ground contact point.
 #[allow(clippy::type_complexity)]
 fn tag_local_player(
-    query: Query<(Entity, &WorldPosition), (With<Experience>, Without<LocalPlayer>)>,
+    query: Query<
+        (Entity, &WorldPosition),
+        (
+            With<Experience>,
+            Without<LocalPlayer>,
+            Without<fellytip_server::plugins::bot::BotController>,
+        ),
+    >,
     mut commands: Commands,
     map: Option<Res<WorldMap>>,
 ) {

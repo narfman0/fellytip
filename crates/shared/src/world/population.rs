@@ -45,6 +45,9 @@ pub const MAX_SETTLEMENT_POP: u32 = 30;
 /// Minimum military strength required before a war party can be dispatched.
 pub const WAR_PARTY_MILITARY_MIN: f32 = 15.0;
 
+/// Number of `WarPartyMember` entities spawned per underground raid.
+pub const UNDERGROUND_RAID_PARTY_SIZE: u32 = 3;
+
 /// Ticks between fed-population growth events (+1 NPC per surplus food tick).
 pub const ECONOMY_GROWTH_PERIOD: u32 = 200;
 

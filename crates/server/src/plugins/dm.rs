@@ -24,6 +24,8 @@
 //! | `dm/query_portals`              | List all portal trigger positions      |
 //! | `dm/spawn_wildlife`             | Spawn a wildlife entity at a world position |
 //! | `dm/list_settlements`           | Return all settlement names + world-space coords |
+//! | `dm/spawn_raid`                 | Spawn an underground raid party directly        |
+//! | `dm/give_gold`                  | Award a gold delta to a faction                 |
 
 use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult};
@@ -36,7 +38,7 @@ use fellytip_shared::{
         civilization::Settlements,
         ecology::RegionId,
         faction::FactionId,
-        population::WAR_PARTY_SIZE,
+        population::{UNDERGROUND_RAID_PARTY_SIZE, WAR_PARTY_SIZE},
         zone::ZoneMembership,
     },
 };
@@ -473,4 +475,75 @@ pub fn dm_move_entity(In(params): In<Option<Value>>, world: &mut World) -> BrpRe
 
     tracing::info!(?entity, x, y, z, waypoints = n, "DM set entity destination");
     Ok(json!({ "ok": true, "waypoints": n }))
+}
+
+// ── dm/spawn_raid ─────────────────────────────────────────────────────────────
+
+/// Spawn an underground raid party directly, bypassing pressure buildup.
+///
+/// Params: `{ faction: string, target_faction: string }`
+/// Returns `{ ok: true, raiders_spawned: usize }`.
+pub fn dm_spawn_raid(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let faction_id: String      = require(&params, "faction")?;
+    let target_id: String       = require(&params, "target_faction")?;
+
+    let attacker_fid = FactionId(faction_id.as_str().into());
+
+    let target_pos = {
+        let pop = world.resource::<FactionPopulationState>();
+        pop.settlements.values()
+            .find(|s| s.faction_id.0.as_str() == target_id)
+            .map(|s| (s.settlement_id, s.home_x, s.home_y))
+    };
+    let (target_uuid, tx, ty) = target_pos
+        .ok_or_else(|| BrpError::internal(format!("no settlement found for faction `{target_id}`")))?;
+
+    let mut raiders_spawned = 0usize;
+    for _ in 0..UNDERGROUND_RAID_PARTY_SIZE {
+        let pos = WorldPosition { x: 0.0, y: 0.0, z: -50.0 };
+        let entity = world.spawn((
+            faction_npc_bundle(attacker_fid.clone(), pos, 1),
+            GrowthStage(1.0),
+        )).id();
+        world.entity_mut(entity).insert(WarPartyMember {
+            target_settlement_id: target_uuid,
+            target_x: tx,
+            target_y: ty,
+            attacker_faction: attacker_fid.clone(),
+            player_target: None,
+            current_zone: fellytip_shared::world::zone::OVERWORLD_ZONE,
+            zone_route: Vec::new(),
+        });
+        raiders_spawned += 1;
+    }
+
+    tracing::info!(
+        faction   = %faction_id,
+        target    = %target_id,
+        spawned   = raiders_spawned,
+        "DM spawned raid party"
+    );
+    Ok(json!({ "ok": true, "raiders_spawned": raiders_spawned }))
+}
+
+// ── dm/give_gold ──────────────────────────────────────────────────────────────
+
+/// Award a gold delta to a faction (delta-based, clamped to >= 0).
+///
+/// Params: `{ faction_id: string, amount: f32 }`
+/// Returns `{ ok: true, new_gold: f32 }`.
+pub fn dm_give_gold(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let faction_id: String = require(&params, "faction_id")?;
+    let amount: f32        = require(&params, "amount")?;
+
+    let mut registry = world.resource_mut::<FactionRegistry>();
+    let faction = registry.factions.iter_mut()
+        .find(|f| f.id.0.as_str() == faction_id)
+        .ok_or_else(|| BrpError::internal(format!("faction `{faction_id}` not found")))?;
+
+    faction.resources.gold = (faction.resources.gold + amount).max(0.0);
+    let new_gold = faction.resources.gold;
+
+    tracing::info!(faction = %faction_id, amount, new_gold, "DM gave gold to faction");
+    Ok(json!({ "ok": true, "new_gold": new_gold }))
 }

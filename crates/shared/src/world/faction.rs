@@ -44,6 +44,15 @@ pub enum FactionGoal {
     Survive,
 }
 
+// ── Goal priority helpers ─────────────────────────────────────────────────────
+
+impl FactionGoal {
+    /// Returns true when this goal scores at or above the high-priority threshold.
+    pub fn high_priority(&self, faction: &Faction) -> bool {
+        score_goal(faction, self) >= 50.0
+    }
+}
+
 // ── Standing tiers ────────────────────────────────────────────────────────────
 
 pub const STANDING_EXALTED:    i32 =  750;
@@ -479,6 +488,27 @@ mod tests {
         let score = rep.score(id, &faction);
         assert_eq!(standing_tier(score), StandingTier::Hostile,
             "10 grunt kills should reach Hostile; score = {score}");
+    }
+
+    #[test]
+    fn high_priority_survive_low_food() {
+        let f = make_faction(5.0, 50.0);
+        let goal = FactionGoal::Survive;
+        assert!(goal.high_priority(&f), "Survive with food=5 should be high priority (score=100)");
+    }
+
+    #[test]
+    fn high_priority_defend_zero_military() {
+        let f = make_faction(50.0, 0.0);
+        let goal = FactionGoal::DefendSettlement { settlement_id: "s1".into() };
+        assert!(goal.high_priority(&f), "DefendSettlement with military=0 should be high priority (score=50)");
+    }
+
+    #[test]
+    fn high_priority_expand_not_urgent() {
+        let f = make_faction(20.0, 10.0);
+        let goal = FactionGoal::ExpandTerritory { target_region: RegionId("north".into()) };
+        assert!(!goal.high_priority(&f), "ExpandTerritory with food=20, military=10 should NOT be high priority (score=0)");
     }
 
     #[test]
