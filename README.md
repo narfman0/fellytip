@@ -6,20 +6,17 @@ Multiplayer action RPG in Rust/Bevy where the world simulates itself independent
 
 ## Prerequisites
 
-- Rust stable (edition 2021)
+- Rust stable (edition 2024)
 - A C linker (MSVC on Windows, `gcc`/`clang` on Linux/macOS)
 
 ## Run
 
 ```bash
-# Terminal 1 — game server (from the workspace root)
-cargo run -p fellytip-server
+# Game client + embedded server (windowed)
+cargo run
 
-# Terminal 2 — game client (windowed, connects to localhost automatically)
-cargo run -p fellytip-client
-
-# Terminal 2 alt — headless client (no window, for testing)
-cargo run -p fellytip-client -- --headless
+# Headless mode (no window, for testing / CI)
+cargo run -- --headless
 
 # Preview the generated world as ASCII art
 cargo run -p world_gen -- --seed 42
