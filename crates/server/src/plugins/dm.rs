@@ -33,7 +33,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use fellytip_shared::{
     combat::{interrupt::InterruptStack, types::{CharacterClass, CombatantId}},
-    components::{EntityKind, GrowthStage, Health, WildlifeKind, WorldPosition},
+    components::{EntityKind, Experience, GrowthStage, Health, WildlifeKind, WorldPosition},
     world::{
         civilization::Settlements,
         ecology::RegionId,
@@ -546,4 +546,29 @@ pub fn dm_give_gold(In(params): In<Option<Value>>, world: &mut World) -> BrpResu
 
     tracing::info!(faction = %faction_id, amount, new_gold, "DM gave gold to faction");
     Ok(json!({ "ok": true, "new_gold": new_gold }))
+}
+
+/// Award XP directly to a player entity (identified by having `Experience`).
+///
+/// Params: `{ amount: u32 }`
+/// Returns `{ ok: true, xp: u32, level: u32, leveled_up: bool }`.
+pub fn dm_give_xp(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let amount: u32 = require(&params, "amount")?;
+
+    let mut q = world.query::<&mut Experience>();
+    let mut exp = q.iter_mut(world).next()
+        .ok_or_else(|| BrpError::internal("no Experience entity found"))?;
+
+    let old_level = exp.level;
+    exp.xp += amount;
+    while exp.xp >= exp.xp_to_next {
+        exp.xp -= exp.xp_to_next;
+        exp.level += 1;
+        exp.xp_to_next = Experience::xp_to_next_level(exp.level);
+    }
+    let leveled_up = exp.level > old_level;
+    let (xp, level) = (exp.xp, exp.level);
+
+    tracing::info!(amount, level, xp, leveled_up, "DM gave XP");
+    Ok(json!({ "ok": true, "xp": xp, "level": level, "leveled_up": leveled_up }))
 }
