@@ -15,6 +15,7 @@
 use crate::faction::FactionId;
 use crate::map::{TileKind, WorldMap};
 use crate::zone::WorldId;
+use bevy::prelude::*;
 use uuid::Uuid;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -52,7 +53,16 @@ pub const UNDERGROUND_RAID_PARTY_SIZE: u32 = 3;
 pub const ECONOMY_GROWTH_PERIOD: u32 = 200;
 
 /// Ticks between starvation events (-1 NPC per deficit food tick).
-pub const ECONOMY_STARVE_PERIOD: u32 = 50;
+pub const ECONOMY_STARVE_PERIOD: u32 = 200;
+
+/// After a starvation event, `starve_ticks` is reset to this value (not 0)
+/// so a settlement that just lost a member doesn't immediately re-trigger
+/// the next starvation event one tick later.
+pub const ECONOMY_STARVE_GRACE_TICKS: u32 = 50;
+
+/// Initial food stockpile for a freshly seeded settlement so NPCs don't
+/// starve before farms/hunters can deliver their first yield.
+pub const INITIAL_SETTLEMENT_FOOD: f32 = 50.0;
 
 /// Food consumed per NPC per tick.
 pub const FOOD_CONSUMPTION_PER_NPC: f32 = 0.5;
@@ -72,7 +82,7 @@ pub const FARMER_FOOD_PER_TICK: f32 = 1.0;
 ///
 /// `food_supply` and `food_consumption` are updated each tick;
 /// `gold` and `trade_income` track economic activity.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SettlementEconomy {
     /// Current food stockpile.
     pub food_supply: f32,
@@ -88,6 +98,41 @@ pub struct SettlementEconomy {
     pub starve_ticks: u32,
     /// Ticks an enemy war party has been besieging this settlement (issue #109).
     pub siege_ticks: u32,
+}
+
+impl Default for SettlementEconomy {
+    fn default() -> Self {
+        Self {
+            food_supply: INITIAL_SETTLEMENT_FOOD,
+            food_consumption: 0.0,
+            gold: 0.0,
+            trade_income: 0.0,
+            growth_ticks: 0,
+            starve_ticks: 0,
+            siege_ticks: 0,
+        }
+    }
+}
+
+/// Per-NPC hunger state.
+///
+/// `satiation` falls each tick from food consumption. When it reaches 0 the NPC
+/// is starving and `hungry_ticks` accumulates; once it crosses a threshold the
+/// `update_npc_hunger` system applies HP damage. Eating refills `satiation` and
+/// clears `hungry_ticks`.
+#[derive(Component, Clone, Debug, Reflect)]
+#[reflect(Component)]
+pub struct Hunger {
+    /// 0.0 = starving, 100.0 = fully fed.
+    pub satiation: f32,
+    /// Consecutive ticks spent at `satiation == 0.0`.
+    pub hungry_ticks: u32,
+}
+
+impl Default for Hunger {
+    fn default() -> Self {
+        Self { satiation: 100.0, hungry_ticks: 0 }
+    }
 }
 
 // ── Economic role (issue #108) ────────────────────────────────────────────────
@@ -247,7 +292,9 @@ pub fn tick_population(
             state.economy.starve_ticks += 1;
             state.economy.growth_ticks = 0;
             if state.economy.starve_ticks >= ECONOMY_STARVE_PERIOD {
-                state.economy.starve_ticks = 0;
+                // Reset to a grace value (not 0) so a settlement that just lost
+                // a member doesn't immediately re-trigger another starvation event.
+                state.economy.starve_ticks = ECONOMY_STARVE_GRACE_TICKS;
                 if total_pop > 0 {
                     effects.push(PopulationEffect::Starvation { settlement_id: state.settlement_id });
                     // Decrement adult count immediately so war-party gate sees the hit.
@@ -601,28 +648,52 @@ mod tests {
     }
 
     #[test]
-    fn starvation_fires_after_50_deficit_ticks() {
+    fn starvation_fires_after_starve_period_deficit_ticks() {
         let mut state = make_pop(5);
         // No food supply at all — starvation starts immediately.
         state.economy.food_supply = 0.0;
         let mut starve_count = 0u32;
-        for _ in 0..50 {
+        for _ in 0..ECONOMY_STARVE_PERIOD {
             let (next, effects) = tick_population(state, &[], None);
             state = next;
             starve_count += effects.iter()
                 .filter(|e| matches!(e, PopulationEffect::Starvation { .. }))
                 .count() as u32;
         }
-        assert_eq!(starve_count, 1, "exactly one starvation event in 50 deficit ticks");
+        assert_eq!(starve_count, 1, "exactly one starvation event in ECONOMY_STARVE_PERIOD ticks");
+    }
+
+    #[test]
+    fn starvation_grace_prevents_immediate_repeat() {
+        // After a starvation event the counter resets to ECONOMY_STARVE_GRACE_TICKS.
+        // The next starvation event should fire after (PERIOD - GRACE) more ticks,
+        // not after 1 tick.
+        let mut state = make_pop(5);
+        state.economy.food_supply = 0.0;
+        // Walk to the first starvation event.
+        for _ in 0..ECONOMY_STARVE_PERIOD {
+            let (next, _) = tick_population(state, &[], None);
+            state = next;
+        }
+        assert_eq!(state.economy.starve_ticks, ECONOMY_STARVE_GRACE_TICKS);
+
+        // The very next tick must NOT produce another starvation event.
+        let (next, effects) = tick_population(state, &[], None);
+        state = next;
+        assert!(
+            !effects.iter().any(|e| matches!(e, PopulationEffect::Starvation { .. })),
+            "starvation should not re-trigger immediately after grace reset"
+        );
+        let _ = state;
     }
 
     #[test]
     fn settlement_collapses_when_all_starve() {
-        // One adult, no food — should collapse after 50 starvation ticks.
+        // One adult, no food — should collapse after enough starvation ticks.
         let mut state = make_pop(1);
         state.economy.food_supply = 0.0;
         let mut collapsed = false;
-        for _ in 0..100 {
+        for _ in 0..(ECONOMY_STARVE_PERIOD * 3) {
             let (next, effects) = tick_population(state, &[], None);
             state = next;
             if effects.iter().any(|e| matches!(e, PopulationEffect::SettlementCollapsed { .. })) {

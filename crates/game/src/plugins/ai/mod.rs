@@ -40,9 +40,10 @@ pub use pathfinding::{
 };
 pub use population::{
     accumulate_underground_pressure, age_npcs_system,
-    check_war_party_formation, deliver_underground_signals, flush_factions_to_db,
-    init_population_state, seed_factions, spawn_faction_npcs,
-    spawn_underground_raid, tick_population_system, FormWarPartyEvent,
+    check_war_party_formation, deliver_underground_signals, distribute_food_to_npcs,
+    flush_factions_to_db, init_population_state, seed_factions, spawn_faction_npcs,
+    spawn_underground_raid, sync_farms_to_settlements, tick_population_system,
+    tick_settlement_economy, update_npc_hunger, FormWarPartyEvent,
 };
 pub use surface_danger::{
     update_danger_levels, spawn_bandit_groups, spawn_portal_horrors,
@@ -218,32 +219,44 @@ impl Plugin for AiPlugin {
             .register_type::<fellytip_shared::world::civilization::AbandonedSettlement>()
             .register_type::<fellytip_shared::world::civilization::RuinsTile>()
             .register_type::<fellytip_shared::components::EconomicRole>()
+            .register_type::<fellytip_shared::world::population::Hunger>()
             .add_message::<BattleStartMsg>()
             .add_message::<BattleEndMsg>()
             .add_message::<BattleAttackMsg>();
         app.add_systems(
             WorldSimSchedule,
             (
-                update_faction_alerts,
-                update_faction_goals,
-                tick_population_system,
-                age_npcs_system,
-                check_war_party_formation,
-                update_war_party_player_targets,
-                advance_zone_parties,
-                spawn_underground_raid,
-                march_war_parties,
-                war_party_separation,
-                run_battle_rounds,
-                wander_npcs,
-                sync_player_standings,
+                (
+                    update_faction_alerts,
+                    update_faction_goals,
+                    // Food pipeline: economy roles → farm sync → meal distribution → hunger tick
+                    tick_settlement_economy,
+                    sync_farms_to_settlements,
+                    distribute_food_to_npcs,
+                    update_npc_hunger,
+                    tick_population_system,
+                    age_npcs_system,
+                ).chain(),
+                (
+                    check_war_party_formation,
+                    update_war_party_player_targets,
+                    advance_zone_parties,
+                    spawn_underground_raid,
+                    march_war_parties,
+                    war_party_separation,
+                    run_battle_rounds,
+                    wander_npcs,
+                    sync_player_standings,
+                ).chain(),
                 // Surface danger systems (issues #117-#121, #97)
-                update_danger_levels,
-                spawn_bandit_groups,
-                spawn_portal_horrors,
-                resolve_warfront_events,
-                update_threat_registry,
-                auto_generate_raids,
+                (
+                    update_danger_levels,
+                    spawn_bandit_groups,
+                    spawn_portal_horrors,
+                    resolve_warfront_events,
+                    update_threat_registry,
+                    auto_generate_raids,
+                ).chain(),
             ).chain(),
         );
         app.add_systems(

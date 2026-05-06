@@ -29,9 +29,9 @@ use fellytip_shared::{
         },
         map::{MAP_HALF_WIDTH, MAP_HALF_HEIGHT},
         population::{
-            tick_population, PopulationEffect, SettlementEconomy, SettlementPopulation,
-            FARMER_FOOD_PER_TICK, HUNTER_FOOD_PER_TICK, MERCHANT_TRADE_PER_TICK,
-            UNDERGROUND_RAID_PARTY_SIZE, WAR_PARTY_SIZE,
+            tick_population, Hunger, PopulationEffect, SettlementEconomy, SettlementPopulation,
+            FARMER_FOOD_PER_TICK, FOOD_CONSUMPTION_PER_NPC, HUNTER_FOOD_PER_TICK,
+            MERCHANT_TRADE_PER_TICK, UNDERGROUND_RAID_PARTY_SIZE, WAR_PARTY_SIZE,
         },
         story::{StoryEvent, StoryEventKind, WriteStoryEvent},
     },
@@ -199,6 +199,7 @@ pub fn faction_npc_bundle(
         CurrentGoal(None),
         HomePosition(pos),
         EntityKind::FactionNpc,
+        Hunger::default(),
         // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
         (
             NpcClass(class.clone()),
@@ -339,6 +340,7 @@ pub fn spawn_faction_npcs(
                 NavPath::default(),
                 NavReplanTimer::default(),
                 economic_role,
+                Hunger::default(),
                 // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
                 (
                     NpcClass(npc_class.clone()),
@@ -575,6 +577,7 @@ pub fn tick_population_system(
                         GrowthStage(0.0),
                         NavPath::default(),
                         NavReplanTimer::default(),
+                        Hunger::default(),
                         // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
                         (
                             NpcClass(child_class.clone()),
@@ -630,6 +633,7 @@ pub fn tick_population_system(
                         GrowthStage(0.0),
                         NavPath::default(),
                         NavReplanTimer::default(),
+                        Hunger::default(),
                         // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
                         (
                             NpcClass(child_class.clone()),
@@ -1033,6 +1037,7 @@ pub fn spawn_underground_raid(
                 zone_route: zone_route.clone(),
             },
             fellytip_shared::world::zone::ZoneMembership(deepest_id),
+            Hunger::default(),
             // Class/level/ability-score bundle (nested to stay within tuple Bundle limit).
             (
                 NpcClass(raid_class.clone()),
@@ -1368,6 +1373,108 @@ pub fn tick_settlement_rebuild(
                 x = pos.x, y = pos.y,
                 "Abandoned settlement colonised and rebuilt"
             );
+        }
+    }
+}
+
+// ── Food pipeline (farm → settlement → NPC hunger) ────────────────────────────
+
+/// Per-tick `satiation` drained from each NPC.
+const NPC_SATIATION_DECAY_PER_TICK: f32 = 0.5;
+/// Amount of `satiation` restored when an NPC eats from settlement stores.
+const NPC_SATIATION_PER_MEAL: f32 = 25.0;
+/// Threshold under which an NPC will request a meal (drawn from the settlement
+/// food supply during `distribute_food_to_npcs`).
+const NPC_HUNGRY_THRESHOLD: f32 = 75.0;
+/// Ticks an NPC must spend at `satiation == 0.0` before HP damage is applied.
+const NPC_STARVATION_DAMAGE_GRACE: u32 = 30;
+/// Ticks between successive HP losses while an NPC is starving.
+const NPC_STARVATION_DAMAGE_INTERVAL: u32 = 10;
+/// HP lost per starvation damage tick.
+const NPC_STARVATION_DAMAGE_HP: i32 = 1;
+
+/// Drain harvested farm food into the matching settlement's `food_supply`.
+///
+/// `FarmState::food_supply` accumulates yields keyed by the synthetic plot UUID
+/// strings produced by `seed_farm_plots`. Until farm plots are linked to real
+/// settlements (TODO: tie into `Settlements`) we pool everything and split it
+/// evenly across non-collapsed settlements so the food loop is at least closed.
+pub fn sync_farms_to_settlements(
+    mut farm: ResMut<crate::plugins::ecology::FarmState>,
+    mut pop: ResMut<FactionPopulationState>,
+) {
+    if farm.food_supply.is_empty() {
+        return;
+    }
+
+    // Drain the farm pool — taking by value clears the map.
+    let total: f32 = std::mem::take(&mut farm.food_supply).into_values().sum();
+    if total <= 0.0 {
+        return;
+    }
+
+    let recipients: Vec<Uuid> = pop.settlements
+        .iter()
+        .filter(|(_, s)| !s.collapsed)
+        .map(|(id, _)| *id)
+        .collect();
+    if recipients.is_empty() {
+        return;
+    }
+
+    let share = total / recipients.len() as f32;
+    for sid in recipients {
+        if let Some(state) = pop.settlements.get_mut(&sid) {
+            state.economy.food_supply += share;
+        }
+    }
+}
+
+/// Distribute settlement food stores to hungry NPCs.
+///
+/// For each NPC with `Hunger::satiation < NPC_HUNGRY_THRESHOLD`, attempt to
+/// draw `NPC_SATIATION_PER_MEAL / FOOD_CONSUMPTION_PER_NPC` food units from
+/// the NPC's home settlement. If the settlement has stock, refill the NPC.
+pub fn distribute_food_to_npcs(
+    mut pop: ResMut<FactionPopulationState>,
+    mut npcs: Query<(&FactionMember, &mut Hunger)>,
+) {
+    // Cost of a single meal in settlement food units.
+    let meal_cost = NPC_SATIATION_PER_MEAL * FOOD_CONSUMPTION_PER_NPC / 100.0;
+
+    for (member, mut hunger) in &mut npcs {
+        if hunger.satiation >= NPC_HUNGRY_THRESHOLD {
+            continue;
+        }
+        // Find a settlement belonging to this NPC's faction with food on hand.
+        let supply_settlement = pop.settlements.values_mut().find(|s| {
+            !s.collapsed && s.faction_id == member.0 && s.economy.food_supply >= meal_cost
+        });
+        if let Some(state) = supply_settlement {
+            state.economy.food_supply -= meal_cost;
+            hunger.satiation = (hunger.satiation + NPC_SATIATION_PER_MEAL).min(100.0);
+            hunger.hungry_ticks = 0;
+        }
+    }
+}
+
+/// Drain `Hunger::satiation` each tick and apply HP damage to starving NPCs.
+pub fn update_npc_hunger(
+    mut npcs: Query<(&mut Hunger, &mut Health)>,
+) {
+    for (mut hunger, mut health) in &mut npcs {
+        hunger.satiation = (hunger.satiation - NPC_SATIATION_DECAY_PER_TICK).max(0.0);
+        if hunger.satiation > 0.0 {
+            hunger.hungry_ticks = 0;
+            continue;
+        }
+        hunger.hungry_ticks = hunger.hungry_ticks.saturating_add(1);
+        // Past the grace period, lose 1 HP every NPC_STARVATION_DAMAGE_INTERVAL ticks.
+        if hunger.hungry_ticks > NPC_STARVATION_DAMAGE_GRACE
+            && (hunger.hungry_ticks - NPC_STARVATION_DAMAGE_GRACE)
+                .is_multiple_of(NPC_STARVATION_DAMAGE_INTERVAL)
+        {
+            health.current = (health.current - NPC_STARVATION_DAMAGE_HP).max(0);
         }
     }
 }
