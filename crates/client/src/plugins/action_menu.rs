@@ -3,14 +3,18 @@
 //! The menu content adapts based on what was under the cursor when right-click
 //! was pressed:
 //!   - **Hostile entity**: Attack (targeted), Class Action, Dodge, Cancel
-//!   - **No target / tile**: Attack (nearest), Ability, Dodge, Cancel
+//!   - **No target / tile**: Move Here, Attack (nearest), Ability, Dodge, Cancel
 
+use bevy::ecs::message::MessageWriter;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use uuid::Uuid;
 use fellytip_shared::bridge::LocalPlayerInput;
 use fellytip_shared::inputs::ActionIntent;
+use fellytip_shared::protocol::MoveToMessage;
 use super::target_select::HoveredTarget;
+use super::camera::OrbitCamera;
+use crate::PredictedPosition;
 
 /// Set to true this frame if egui consumed the pointer (so left-click attack is suppressed).
 #[derive(Resource, Default)]
@@ -30,6 +34,8 @@ pub struct ActionMenuState {
     pub open: bool,
     pub screen_pos: egui::Pos2,
     pub context: TargetContext,
+    /// World-space game position where the right-click ray hit the ground.
+    pub world_target: Option<(f32, f32, f32)>,
 }
 
 pub struct ActionMenuPlugin;
@@ -46,6 +52,8 @@ impl Plugin for ActionMenuPlugin {
 fn handle_right_click(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<OrbitCamera>>,
+    player_q: Query<&PredictedPosition>,
     hovered: Option<Res<HoveredTarget>>,
     mut state: ResMut<ActionMenuState>,
 ) {
@@ -63,6 +71,19 @@ fn handle_right_click(
             .and_then(|h| h.0)
             .map(|(_, uuid)| TargetContext::Hostile { uuid })
             .unwrap_or(TargetContext::None);
+
+        // Ray-cast to ground plane to capture the move target.
+        state.world_target = (|| {
+            let pred = player_q.single().ok()?;
+            let (camera, cam_tf) = camera_q.single().ok()?;
+            let ray = camera.viewport_to_world(cam_tf, cursor_pos).ok()?;
+            let denom = ray.direction.y;
+            if denom.abs() < 1e-6 { return None; }
+            let t = (pred.z - ray.origin.y) / denom;
+            if t < 0.0 { return None; }
+            let hit = ray.origin + ray.direction * t;
+            Some((hit.x, -hit.z, pred.z))
+        })();
     }
     if mouse.just_pressed(MouseButton::Left) && state.open {
         state.open = false;
@@ -74,6 +95,7 @@ fn draw_action_menu(
     mut state: ResMut<ActionMenuState>,
     mut local_input: ResMut<LocalPlayerInput>,
     mut consumed: ResMut<EguiPointerConsumed>,
+    mut move_writer: MessageWriter<MoveToMessage>,
 ) -> Result {
     consumed.0 = false;
     if !state.open {
@@ -132,6 +154,13 @@ fn draw_action_menu(
                     TargetContext::None => {
                         ui.label(egui::RichText::new("Actions").strong());
                         ui.separator();
+                        let can_move = state.world_target.is_some();
+                        if ui.add_enabled(can_move, egui::Button::new("🚶 Move Here")).clicked() {
+                            if let Some((x, y, z)) = state.world_target {
+                                move_writer.write(MoveToMessage { x, y, z });
+                            }
+                            state.open = false;
+                        }
                         if ui.button("⚔ Attack").clicked() {
                             local_input
                                 .actions
