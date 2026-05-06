@@ -972,33 +972,42 @@ async fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()
                                 }
                             }
                         }
-                        // Movement
-                        KeyCode::Char('w') | KeyCode::Up => {
+                        // Movement + entity selection (arrows dual-purpose)
+                        KeyCode::Char('w') => {
                             move_player(&state, &cmd_tx, 0.0, step).await;
                         }
-                        KeyCode::Char('s') | KeyCode::Down => {
+                        KeyCode::Char('s') => {
                             move_player(&state, &cmd_tx, 0.0, -step).await;
                         }
-                        KeyCode::Char('a') | KeyCode::Left => {
+                        KeyCode::Char('a') => {
                             move_player(&state, &cmd_tx, -step, 0.0).await;
                         }
-                        KeyCode::Char('d') | KeyCode::Right => {
+                        KeyCode::Char('d') => {
                             move_player(&state, &cmd_tx, step, 0.0).await;
                         }
-                        // Entity selection
                         KeyCode::Up => {
                             let n = state.lock().unwrap().nearby_entities.len();
                             if n > 0 {
                                 let sel = entity_list_state.selected().unwrap_or(0);
                                 entity_list_state.select(Some(sel.saturating_sub(1)));
+                            } else {
+                                move_player(&state, &cmd_tx, 0.0, step).await;
                             }
                         }
                         KeyCode::Down => {
                             let n = state.lock().unwrap().nearby_entities.len();
                             if n > 0 {
                                 let sel = entity_list_state.selected().unwrap_or(0);
-                                entity_list_state.select(Some((sel + 1).min(n - 1)));
+                                entity_list_state.select(Some((sel + 1).min(n.saturating_sub(1))));
+                            } else {
+                                move_player(&state, &cmd_tx, 0.0, -step).await;
                             }
+                        }
+                        KeyCode::Left => {
+                            move_player(&state, &cmd_tx, -step, 0.0).await;
+                        }
+                        KeyCode::Right => {
+                            move_player(&state, &cmd_tx, step, 0.0).await;
                         }
                         // Log scroll
                         KeyCode::PageUp => { log_scroll = log_scroll.saturating_add(5); }
