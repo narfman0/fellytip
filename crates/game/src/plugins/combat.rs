@@ -267,7 +267,7 @@ type PlayerBudgetQuery<'w, 's> = Query<
     'w,
     's,
     (Entity, Option<&'static mut ActionBudget>, Option<&'static mut ActionCooldowns>),
-    (Without<ExperienceReward>, Without<crate::plugins::bot::BotController>),
+    (With<CombatParticipant>, Without<ExperienceReward>, Without<crate::plugins::bot::BotController>),
 >;
 
 /// Drain `LocalPlayerInput` actions and queue combat markers on the player entity.
@@ -288,7 +288,11 @@ pub(crate) fn process_player_input(
     mut action_used: MessageWriter<ActionUsedEvent>,
     mut commands: Commands,
 ) {
-    let Ok((player_entity, mut budget_opt, mut cds_opt)) = player_q.single_mut() else { return };
+    let Ok((player_entity, mut budget_opt, mut cds_opt)) = player_q.single_mut() else {
+        tracing::warn!("process_player_input: single_mut() failed (0 or >1 player entities)");
+        local_input.actions.clear();
+        return;
+    };
 
     let pending_actions: Vec<(Option<ActionIntent>, Option<uuid::Uuid>)> =
         local_input.actions.drain(..).collect();
@@ -315,7 +319,7 @@ pub(crate) fn process_player_input(
                     commands
                         .entity(player_entity)
                         .insert(PendingAttack { target: target_entity });
-                    tracing::debug!(target = ?target_entity, "BasicAttack queued");
+                    tracing::warn!(target = ?target_entity, "BasicAttack queued by process_player_input");
                 }
             }
             Some(ActionIntent::UseAbility(ability_id)) => {
@@ -357,6 +361,7 @@ fn initiate_attacks(
     for (entity, attack, mut participant) in attacker_query.iter_mut() {
         let attacker_id = participant.id.clone();
         if let Ok(defender) = defender_query.get(attack.target) {
+            tracing::warn!(attacker = ?attacker_id.0, defender = ?defender.id.0, "initiate_attacks: pushing ResolvingAttack frame");
             let frame = InterruptFrame::ResolvingAttack {
                 ctx: AttackContext {
                     attacker: attacker_id,
@@ -366,6 +371,8 @@ fn initiate_attacks(
                 },
             };
             participant.interrupt_stack.push(frame);
+        } else {
+            tracing::warn!(target = ?attack.target, "initiate_attacks: defender NOT FOUND in query");
         }
         commands.entity(entity).remove::<PendingAttack>();
     }
@@ -497,9 +504,15 @@ fn resolve_interrupts(
         return;
     }
 
-    let xp_rewards: HashMap<Entity, u32> = participants
+    let xp_rewards: HashMap<Entity, (u32, u8)> = participants
         .iter()
-        .filter_map(|(e, _, _, _, reward, ..)| reward.map(|r| (e, r.0)))
+        .filter_map(|(e, _, _, _, reward, ..)| reward.map(|r| (e, (r.base_xp, r.cr))))
+        .collect();
+
+    // Map Entity → level for attacker scaling.
+    let entity_to_level: HashMap<Entity, u32> = participants
+        .iter()
+        .map(|(e, p, ..)| (e, p.level))
         .collect();
 
     // Map Entity → player GameEntityId (only entities that have one — i.e. players).
@@ -595,14 +608,55 @@ fn resolve_interrupts(
             match effect {
                 Effect::TakeDamage { target, amount } => {
                     if let Some(&target_entity) = id_to_entity.get(target) {
+                        let mut died = false;
                         if let Ok((_, _, mut health, ..)) = participants.get_mut(target_entity) {
+                            let prev_hp = health.current;
                             health.current = (health.current - amount).max(0);
-                            tracing::debug!(
+                            tracing::warn!(
                                 target = ?target.0,
                                 amount,
+                                prev = prev_hp,
                                 remaining = health.current,
-                                "Damage applied"
+                                "Damage applied (warn-level debug)"
                             );
+                            if health.current == 0 && prev_hp > 0 {
+                                died = true;
+                            }
+                        } else {
+                            tracing::warn!(target_entity = ?target_entity, "TakeDamage: participants.get_mut FAILED");
+                        }
+                        // If HP reached 0, handle death inline (same as Effect::Die branch).
+                        if died {
+                            tracing::warn!(target_entity = ?target_entity, in_xp_rewards = xp_rewards.contains_key(&target_entity), "death xp check");
+                            if let Some(&(base_xp, cr)) = xp_rewards.get(&target_entity) {
+                                let attacker_level = entity_to_level.get(attacker_entity).copied().unwrap_or(1);
+                                let effective_xp = (base_xp as f32 * xp_scale(attacker_level, cr)).round() as u32;
+                                xp_awards.push((*attacker_entity, effective_xp));
+                            }
+                            if let Some((loot_pos, loot)) = wildlife_loot_map.get(&target_entity) {
+                                loot_spawns.push((loot_pos.clone(), Loot { kind: loot.kind, quantity: loot.quantity }));
+                            }
+                            let killer_uuid = entity_to_game_id
+                                .get(attacker_entity)
+                                .copied()
+                                .unwrap_or(Uuid::nil());
+                            if killer_uuid != Uuid::nil() {
+                                reputation_kills.push((killer_uuid, target_entity));
+                            }
+                            story_events.push(StoryEvent {
+                                id: Uuid::new_v4(),
+                                tick: tick.0,
+                                world_day: (tick.0 / 86400) as u32,
+                                kind: StoryEventKind::PlayerKilledNamed {
+                                    victim: GameEntityId(target.0),
+                                    killer: GameEntityId(killer_uuid),
+                                },
+                                participants: vec![GameEntityId(target.0)],
+                                location: None,
+                                lore_tags: vec![SmolStr::new("death")],
+                            });
+                            tracing::warn!(target = ?target.0, "Combatant died (from TakeDamage)");
+                            despawn_list.push(target_entity);
                         }
                         // Emit client-side combat feedback (particles + floating text).
                         if let Ok(pos) = positions_query.get(target_entity) {
@@ -629,8 +683,10 @@ fn resolve_interrupts(
                 }
                 Effect::Die { target } => {
                     if let Some(&target_entity) = id_to_entity.get(target) {
-                        if let Some(&xp) = xp_rewards.get(&target_entity) {
-                            xp_awards.push((*attacker_entity, xp));
+                        if let Some(&(base_xp, cr)) = xp_rewards.get(&target_entity) {
+                            let attacker_level = entity_to_level.get(attacker_entity).copied().unwrap_or(1);
+                            let effective_xp = (base_xp as f32 * xp_scale(attacker_level, cr)).round() as u32;
+                            xp_awards.push((*attacker_entity, effective_xp));
                         }
                         // #115: Drop loot if the dead entity is wildlife with a Loot component.
                         if let Some((loot_pos, loot)) = wildlife_loot_map.get(&target_entity) {
@@ -726,7 +782,9 @@ fn resolve_interrupts(
     }
 
     // ── Phase 5: award XP and apply level-up ────────────────────────────────
+    tracing::warn!(count = xp_awards.len(), "xp_awards to process");
     for (attacker_entity, xp) in xp_awards {
+        tracing::warn!(attacker = ?attacker_entity, xp, "processing xp award");
         if let Ok((_, mut participant, mut health, Some(mut exp), _, _, _, _)) =
             participants.get_mut(attacker_entity)
         {
@@ -778,6 +836,19 @@ type NpcAsiQuery<'w, 's> = Query<
 
 /// Resolve pending ASIs for NPCs: increase the primary stat by 2 and remove the marker.
 ///
+/// Scale XP reward based on the level delta between the attacker and the target's CR.
+/// Over-levelled attackers receive progressively less XP for trivial kills.
+fn xp_scale(attacker_level: u32, cr: u8) -> f32 {
+    let delta = attacker_level as i32 - cr as i32;
+    match delta {
+        i32::MIN..=0 => 1.0,
+        1 => 0.75,
+        2 => 0.50,
+        3 => 0.25,
+        _ => 0.10,
+    }
+}
+
 /// NPCs carry `EntityKind`; player entities do not, so player ASIs stay pending
 /// until resolved via the UI (future work).
 fn apply_npc_asi(mut commands: Commands, mut q: NpcAsiQuery) {

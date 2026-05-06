@@ -44,7 +44,9 @@ impl Plugin for ServerGamePlugin {
         app.register_type::<fellytip_shared::components::AbilityScores>()
            .register_type::<fellytip_shared::components::HitDice>()
            .register_type::<fellytip_shared::components::AbilityModifiers>()
-           .register_type::<fellytip_shared::components::PendingAsi>();
+           .register_type::<fellytip_shared::components::PendingAsi>()
+           .register_type::<fellytip_shared::bridge::CombatParticipant>()
+           .register_type::<fellytip_shared::bridge::ExperienceReward>();
 
         app.insert_resource(MapGenConfig {
                 seed: self.seed,

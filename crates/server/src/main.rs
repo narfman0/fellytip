@@ -37,6 +37,7 @@ fn main() {
                 .with_method("dm/spawn_raid",              plugins::dm::dm_spawn_raid)
                 .with_method("dm/give_gold",               plugins::dm::dm_give_gold)
                 .with_method("dm/give_xp",                 plugins::dm::dm_give_xp)
+                .with_method("dm/attack",                  plugins::dm::dm_attack)
                 .with_method("dm/spawn_bot",               bot::dm_spawn_bot)
                 .with_method("dm/despawn_bot",             bot::dm_despawn_bot)
                 .with_method("dm/list_bots",               bot::dm_list_bots)

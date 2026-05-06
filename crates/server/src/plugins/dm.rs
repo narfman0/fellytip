@@ -47,7 +47,7 @@ use uuid::Uuid;
 use fellytip_game::plugins::{
     ai::{BattleHistory, FactionMember, FactionPopulationState, FactionRegistry, UndergroundPressure, WarPartyMember},
     ai::population::faction_npc_bundle,
-    combat::{CombatParticipant, ExperienceReward},
+    combat::{CombatParticipant, ExperienceReward, LocalPlayerInput},
     ecology::{EcologyState, WildlifeNpc},
     portal::PortalTrigger,
 };
@@ -123,11 +123,12 @@ pub fn dm_spawn_wildlife(In(params): In<Option<Value>>, world: &mut World) -> Br
     #[allow(clippy::cast_possible_truncation)]
     let pos = WorldPosition { x: x as f32, y: y as f32, z: z as f32 };
 
+    let npc_uuid = Uuid::new_v4();
     let entity = world.spawn((
         pos,
         Health { current: 15, max: 15 },
         CombatParticipant {
-            id: CombatantId(Uuid::new_v4()),
+            id: CombatantId(npc_uuid),
             interrupt_stack: InterruptStack::default(),
             class: CharacterClass::Rogue,
             level: 1,
@@ -139,14 +140,14 @@ pub fn dm_spawn_wildlife(In(params): In<Option<Value>>, world: &mut World) -> Br
             wisdom: 10,
             charisma: 5,
         },
-        ExperienceReward(25),
+        ExperienceReward { base_xp: 25, cr: 1 },
         WildlifeNpc { region: RegionId("dm_spawned".into()) },
         EntityKind::Wildlife,
         wildlife_kind,
     )).id();
 
-    tracing::info!(kind = %kind_str, x, y, z, entity = ?entity, "DM spawned wildlife");
-    Ok(json!({ "ok": true, "entity": entity.to_bits() }))
+    tracing::info!(kind = %kind_str, x, y, z, entity = ?entity, uuid = %npc_uuid, "DM spawned wildlife");
+    Ok(json!({ "ok": true, "entity": entity.to_bits(), "uuid": npc_uuid.to_string() }))
 }
 
 // ── dm/kill ───────────────────────────────────────────────────────────────────
@@ -571,4 +572,50 @@ pub fn dm_give_xp(In(params): In<Option<Value>>, world: &mut World) -> BrpResult
 
     tracing::info!(amount, level, xp, leveled_up, "DM gave XP");
     Ok(json!({ "ok": true, "xp": xp, "level": level, "leveled_up": leveled_up }))
+}
+
+// ── dm/attack ─────────────────────────────────────────────────────────────────
+
+/// Directly queue a BasicAttack on the player entity targeting the given UUID.
+///
+/// Bypasses the ActionBudget gate so it works even when the budget is spent.
+/// Finds the player (entity with `Experience` but without `ExperienceReward`),
+/// finds the target entity by `CombatParticipant.id == target_uuid`, then
+/// inserts `PendingAttack { target }` on the player.
+///
+/// Params: `{ target_uuid: string }`
+/// Returns `{ ok: true }`.
+pub fn dm_attack(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    use fellytip_game::plugins::combat::PendingAttack;
+    use fellytip_shared::components::Experience;
+
+    let target_str: String = require(&params, "target_uuid")?;
+    let target_uuid = uuid::Uuid::parse_str(&target_str)
+        .map_err(|e| BrpError::internal(format!("invalid target_uuid: {e}")))?;
+
+    // Find the target entity by UUID.
+    let mut enemy_q = world.query_filtered::<(Entity, &CombatParticipant), With<ExperienceReward>>();
+    let target_entity = enemy_q
+        .iter(world)
+        .find(|(_, cp)| cp.id.0 == target_uuid)
+        .map(|(e, _)| e)
+        .ok_or_else(|| BrpError::internal(format!("no enemy with uuid {target_str}")))?;
+
+    // Find the player entity (has Experience, no ExperienceReward).
+    let mut player_q = world.query_filtered::<Entity, (With<Experience>, Without<ExperienceReward>)>();
+    let player_entity = player_q
+        .iter(world)
+        .next()
+        .ok_or_else(|| BrpError::internal("no player entity found"))?;
+
+    // Directly insert PendingAttack, bypassing ActionBudget.
+    // Also clear LocalPlayerInput.actions so process_player_input doesn't overwrite
+    // this PendingAttack with the headless auto-attack target in the same FixedUpdate tick.
+    if let Some(mut input) = world.get_resource_mut::<LocalPlayerInput>() {
+        input.actions.clear();
+    }
+    world.entity_mut(player_entity).insert(PendingAttack { target: target_entity });
+
+    tracing::info!(%target_str, player = ?player_entity, target = ?target_entity, "DM inserted PendingAttack");
+    Ok(json!({ "ok": true }))
 }

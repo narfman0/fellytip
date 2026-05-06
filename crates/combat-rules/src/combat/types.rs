@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 // ── Stable identity ───────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Reflect)]
 pub struct CombatantId(pub Uuid);
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
