@@ -120,8 +120,10 @@ fn main() {
         let headless    = args.iter().any(|a| a == "--headless");
         let combat_test = args.iter().any(|a| a == "--combat-test");
         if headless {
-            tracing_subscriber::fmt::init();
-            add_windowed_plugins(&mut app, false);
+            app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
+                std::time::Duration::from_millis(50),
+            )))
+            .add_plugins(bevy::log::LogPlugin::default());
             app.add_plugins(
                     RemotePlugin::default()
                         .with_method("dm/spawn_npc",         fellytip_server::plugins::dm::dm_spawn_npc)
