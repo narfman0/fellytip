@@ -30,6 +30,10 @@ pub enum ClientSet {
 #[derive(Component)]
 pub struct LocalPlayer;
 
+/// Inserted as a resource when running with --headless. Disables physics/renderer setup.
+#[derive(Resource)]
+pub struct HeadlessMode;
+
 /// Client-only predicted world position updated immediately on input for
 /// zero-latency visual response. Synced to `WorldPosition` each frame.
 #[derive(Component, Default, Clone)]
@@ -123,7 +127,8 @@ fn main() {
             app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
                 std::time::Duration::from_millis(50),
             )))
-            .add_plugins(bevy::log::LogPlugin::default());
+            .add_plugins(bevy::log::LogPlugin::default())
+            .insert_resource(HeadlessMode);
             app.add_plugins(
                     RemotePlugin::default()
                         .with_method("dm/spawn_npc",         fellytip_server::plugins::dm::dm_spawn_npc)
@@ -149,6 +154,7 @@ fn main() {
                         .with_method("dm/take_screenshot",        dm_take_screenshot)
                         .with_method("dm/set_camera_distance",    dm_set_camera_distance)
                         .with_method("dm/teleport_player",        dm_teleport_player)
+                        .with_method("dm/player_position",        dm_player_position)
                         .with_method("dm/set_character_debug",    dm_set_character_debug)
                         .with_method("dm/set_camera_free",        dm_set_camera_free)
                         .with_method("dm/choose_class",           dm_choose_class)
@@ -158,7 +164,10 @@ fn main() {
                         .with_method("dm/move_entity",            fellytip_server::plugins::dm::dm_move_entity)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
-                .add_systems(Update, (headless_auto_attack, headless_auto_move));
+                .add_systems(Update, (
+                    headless_auto_attack,
+                    headless_auto_move.after(sync_pred_to_world),
+                ));
         } else {
             add_windowed_plugins(&mut app, true);
             app.add_plugins(
@@ -186,6 +195,7 @@ fn main() {
                     .with_method("dm/take_screenshot",            dm_take_screenshot)
                     .with_method("dm/set_camera_distance",        dm_set_camera_distance)
                     .with_method("dm/teleport_player",            dm_teleport_player)
+                    .with_method("dm/player_position",            dm_player_position)
                     .with_method("dm/set_character_debug",        dm_set_character_debug)
                     .with_method("dm/set_camera_free",            dm_set_camera_free)
                     .with_method("dm/choose_class",               dm_choose_class)
@@ -263,55 +273,44 @@ fn tag_local_player(
     >,
     mut commands: Commands,
     map: Option<Res<WorldMap>>,
+    headless: Option<Res<HeadlessMode>>,
 ) {
     let Ok((entity, pos)) = query.single() else { return };
-    // Snap z to the actual terrain surface using a high ceiling so that stale
-    // DB values or the (0,0,0) spawn fallback never place the player below ground.
     let initial_z = map.as_deref()
         .and_then(|m| smooth_surface_at(m, pos.x, pos.y, Z_SCALE * 3.0))
         .unwrap_or(pos.z);
-    // Bevy world space: x=east, y=up (vertical), z=south.
-    // PredictedPosition:  x=east, y=south,        z=up (vertical).
-    let initial_transform = Transform::from_xyz(pos.x, initial_z, pos.y);
-    commands.entity(entity)
-        .insert((
-            LocalPlayer,
-            PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
-            EntityBounds::PLAYER,
-            initial_transform,
-            // Dynamic so avian's contact solver pushes the capsule out of static
-            // terrain.  Kinematic bodies have dominance=128 (same as Static), so
-            // the constraint solver sees two zero-inv-mass bodies and produces no
-            // push-back — the capsule passed straight through.
-            // GravityScale(0) disables avian's built-in gravity; we drive it manually
-            // via LinearVelocity.y so water buoyancy and jump logic stay unchanged.
+
+    let mut entity_cmd = commands.entity(entity);
+    entity_cmd.insert((
+        LocalPlayer,
+        PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
+        EntityBounds::PLAYER,
+        Transform::from_xyz(pos.x, initial_z, pos.y),
+    ));
+
+    if headless.is_none() {
+        entity_cmd.insert((
             RigidBody::Dynamic,
             GravityScale(0.0),
             Friction::ZERO,
             LockedAxes::ROTATION_LOCKED,
             LinearVelocity::ZERO,
-            // SweptCcd prevents tunnelling when fall speed reaches MAX_FALL_SPEED
-            // (50 m/s → 0.8 m per 62.5 Hz step, enough to skip a 1-m terrain tile).
             SweptCcd::default(),
-            // ShapeCaster probes just below the feet (parent origin = feet level).
             ShapeCaster::new(
                 Collider::sphere(0.28),
                 Vec3::new(0.0, -0.05, 0.0),
                 Quat::IDENTITY,
                 Dir3::NEG_Y,
             ).with_max_distance(0.15),
-        ))
-        .with_children(|parent| {
-            // Bottom of capsule sits 0.05 above the parent origin (feet).
-            // The small buffer prevents avian from tunnelling through thin trimesh seams
-            // when the contact point is exactly at the edge of a terrain chunk.
-            // half_height=0.9, radius=0.35 → center = 0.9+0.35+0.05 = 1.30 above feet.
+        ));
+        entity_cmd.with_children(|parent| {
             parent.spawn((
                 Collider::capsule(0.9, 0.35),
                 Transform::from_translation(Vec3::Y * (0.9 + 0.35 + 0.05)),
             ));
         });
-    tracing::debug!("Tagged local player entity {entity:?} at z={initial_z:.2}");
+    }
+    tracing::debug!("Tagged local player entity {entity:?} at z={initial_z:.2} headless={}", headless.is_some());
 }
 
 // ── Host-mode frame-time monitoring ──────────────────────────────────────────
@@ -620,21 +619,28 @@ fn headless_auto_attack(
 }
 
 /// Headless-mode: walks the player right for 3 s then left for 3 s, repeating.
+///
+/// Writes `Transform`, `PredictedPosition`, and `WorldPosition` together so
+/// neither `sync_physics_to_pred` (PostUpdate) nor `sync_pred_to_world`
+/// (Update) reverts the delta. Headless has no avian3d integration, so the
+/// `Transform` placed by `tag_local_player` would otherwise stay frozen and
+/// be copied back into `pred` every frame.
 #[cfg(not(target_family = "wasm"))]
 fn headless_auto_move(
-    mut pred_q: Query<&mut PredictedPosition, With<LocalPlayer>>,
+    mut q: Query<(&mut WorldPosition, &mut PredictedPosition), With<LocalPlayer>>,
     time: Res<Time>,
     mut phase_elapsed: Local<f32>,
     mut phase_right: Local<bool>,
 ) {
-    let Ok(mut pred) = pred_q.single_mut() else { return };
+    let Ok((mut wpos, mut pred)) = q.single_mut() else { return };
     *phase_elapsed += time.delta_secs();
     if *phase_elapsed >= 3.0 {
         *phase_elapsed = 0.0;
         *phase_right = !*phase_right;
     }
-    let dir_x: f32 = if *phase_right { 1.0 } else { -1.0 };
-    pred.x += dir_x * PLAYER_SPEED * time.delta_secs();
+    let dx = if *phase_right { 1.0 } else { -1.0 } * PLAYER_SPEED * time.delta_secs();
+    pred.x += dx;
+    wpos.x = pred.x;
 }
 
 // ── dm/set_portal_debug ───────────────────────────────────────────────────────
@@ -699,18 +705,27 @@ fn dm_teleport_player(
     let x = p.get("x").and_then(|v| v.as_f64()).ok_or_else(|| BrpError::internal("missing x"))? as f32;
     let y = p.get("y").and_then(|v| v.as_f64()).ok_or_else(|| BrpError::internal("missing y"))? as f32;
 
-    let mut q = world.query_filtered::<(&mut Transform, &mut PredictedPosition, &mut WorldPosition), With<LocalPlayer>>();
-    let (mut tf, mut pred, mut wpos) = q.single_mut(world)
+    let mut q = world.query_filtered::<(&mut PredictedPosition, &mut WorldPosition), With<LocalPlayer>>();
+    let (mut pred, mut wpos) = q.single_mut(world)
         .map_err(|_| BrpError::internal("no local player found"))?;
     let z = p.get("z").and_then(|v| v.as_f64()).map(|v| v as f32).unwrap_or(pred.z);
-    // grounded=true lets the physics system snap z to terrain height next tick,
-    // preventing the player from free-falling when terrain hasn't loaded yet.
     pred.x = x; pred.y = y; pred.z = z; pred.z_vel = 0.0; pred.grounded = true;
     wpos.x = x; wpos.y = y; wpos.z = z;
-    // Also move the physics body so avian doesn't rubber-band back.
-    tf.translation = Vec3::new(x, z, y);
-    tracing::info!(x, y, z, "DM teleport player (PredictedPosition)");
+    tracing::info!(x, y, z, "DM teleport player");
     Ok(serde_json::json!({ "ok": true }))
+}
+
+/// Return the local player's current WorldPosition.
+/// Returns `{ x, y, z }`.
+#[cfg(not(target_family = "wasm"))]
+fn dm_player_position(
+    In(_params): In<Option<serde_json::Value>>,
+    world: &mut World,
+) -> BrpResult {
+    let mut q = world.query_filtered::<&WorldPosition, With<LocalPlayer>>();
+    let wpos = q.single(world)
+        .map_err(|_| BrpError::internal("no local player found"))?;
+    Ok(serde_json::json!({ "x": wpos.x, "y": wpos.y, "z": wpos.z }))
 }
 
 /// Enable or disable the character debug overlay (gizmo sphere at every entity

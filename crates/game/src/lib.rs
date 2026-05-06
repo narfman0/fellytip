@@ -75,6 +75,7 @@ impl Plugin for ServerGamePlugin {
                 .add_plugins(plugins::ecology::EcologyPlugin)
                 .add_plugins(plugins::ai::AiPlugin)
                 .add_plugins(plugins::dungeon::DungeonPlugin)
+                .add_plugins(plugins::nav::NavPlugin)
                 .add_systems(Startup, (plugins::ai::seed_factions, plugins::ai::population::seed_faction_relations).chain())
                 // Player is now spawned in response to ChooseClassMessage (Update),
                 // not at PostStartup, so the class selection screen is respected.
