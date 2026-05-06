@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, http::RemoteHttpPlugin};
 #[cfg(not(target_family = "wasm"))]
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use fellytip_game::ServerGamePlugin;
+use fellytip_game::{ServerGamePlugin, plugins::combat::LastPlayerInput};
 use fellytip_shared::{
     PLAYER_SPEED, WORLD_SEED,
     bridge::{ClientFrameTimings, LocalPlayerInput},
@@ -164,6 +164,7 @@ fn main() {
                         .with_method("dm/move_entity",            fellytip_server::plugins::dm::dm_move_entity)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
+                .add_systems(Startup, headless_auto_spawn)
                 .add_systems(Update, (
                     headless_auto_attack,
                     headless_auto_move.after(sync_pred_to_world),
@@ -385,6 +386,7 @@ fn send_player_input(
         &EntityBounds,
         Option<&mut LinearVelocity>,
         Option<&ShapeHits>,
+        Option<&mut LastPlayerInput>,
     ), With<LocalPlayer>>,
     map: Option<Res<WorldMap>>,
     time: Res<Time>,
@@ -420,11 +422,19 @@ fn send_player_input(
     let world_dx =  cos_yaw * raw_x - sin_yaw * raw_y;
     let world_dy = -sin_yaw * raw_x - cos_yaw * raw_y;
 
-    let Ok((mut transform, mut pred, bounds, mut linear_vel, shape_hits)) = pred_q.single_mut()
+    let Ok((mut transform, mut pred, bounds, mut linear_vel, shape_hits, mut last_input)) = pred_q.single_mut()
     else { return };
     let bounds = *bounds;
     let dt = time.delta_secs();
     let has_physics = linear_vel.is_some();
+
+    // ── Sync move_dir to LastPlayerInput so follow_navigation_goal cancels ────
+    // When WASD is held, update LastPlayerInput.move_dir so the server-side
+    // follow_navigation_goal system cancels any active NavigationGoal and stops
+    // fighting the direct WorldPosition write from sync_pred_to_world.
+    if let Some(ref mut li) = last_input {
+        li.move_dir = [world_dx, world_dy];
+    }
 
     // ── Ground detection (physics mode) ──────────────────────────────────────
     if has_physics
@@ -603,6 +613,14 @@ fn send_player_input(
 }
 
 // ── Headless automation (ralph test scenarios) ────────────────────────────────
+
+/// Headless-mode startup: automatically choose Warrior class so the player
+/// entity spawns without requiring a manual `dm/choose_class` BRP call.
+#[cfg(not(target_family = "wasm"))]
+fn headless_auto_spawn(mut writer: bevy::ecs::message::MessageWriter<ChooseClassMessage>) {
+    writer.write(ChooseClassMessage { class: CharacterClass::Warrior });
+    tracing::info!("Headless: auto-sent ChooseClassMessage {{ class: Warrior }} at startup");
+}
 
 /// Headless-mode: sends BasicAttack every 2 seconds via LocalPlayerInput.
 #[cfg(not(target_family = "wasm"))]
