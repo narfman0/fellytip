@@ -359,8 +359,13 @@ fn spawn_portal_meshes(
                 let dest_hop = entry.from_hop + 1;
                 let camera_layer = dest_hop.min(2);
 
-                // Portal camera positioned at to_anchor world-space position.
-                let camera_pos = entry.to_world_pos;
+                // Portal camera: position above the to_anchor and look down at it
+                // so the preview renders the destination zone centred on the
+                // landing point rather than at the world origin.
+                let dest_pos = entry.to_world_pos;
+                // Offset the camera 6 units above and 4 units back along Z so the
+                // view matches the main isometric camera angle.
+                let camera_pos = dest_pos + Vec3::new(0.0, 6.0, 4.0);
 
                 commands.spawn((
                     Camera3d::default(),
@@ -370,7 +375,7 @@ fn spawn_portal_meshes(
                         ..default()
                     },
                     RenderTarget::from(rt_image),
-                    Transform::from_translation(camera_pos).looking_at(Vec3::ZERO, Vec3::Y),
+                    Transform::from_translation(camera_pos).looking_at(dest_pos, Vec3::Y),
                     RenderLayers::layer(camera_layer as usize),
                     PortalCameraMarker { portal_id: portal.id },
                 ));
