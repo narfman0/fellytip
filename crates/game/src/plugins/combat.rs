@@ -782,9 +782,7 @@ fn resolve_interrupts(
     }
 
     // ── Phase 5: award XP and apply level-up ────────────────────────────────
-    tracing::warn!(count = xp_awards.len(), "xp_awards to process");
     for (attacker_entity, xp) in xp_awards {
-        tracing::warn!(attacker = ?attacker_entity, xp, "processing xp award");
         if let Ok((_, mut participant, mut health, Some(mut exp), _, _, _, _)) =
             participants.get_mut(attacker_entity)
         {
