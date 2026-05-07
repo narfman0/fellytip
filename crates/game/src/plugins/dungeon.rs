@@ -109,7 +109,7 @@ fn spawn_dungeon_boss(mut commands: Commands) {
             charisma: boss_scores.charisma as i32,
         },
         // CR 3 = 700 XP (SRD docs/dnd5e-srd-reference.md)
-        ExperienceReward(700),
+        ExperienceReward { base_xp: 700, cr: 3 },
     ));
     tracing::info!("Dungeon boss 'The Hollow King' spawned (Fighter, Boss rank)");
 }

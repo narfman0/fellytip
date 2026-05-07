@@ -571,7 +571,7 @@ fn sync_wildlife_entities(
                         wisdom: 10,
                         charisma: 3,
                     },
-                    ExperienceReward(5),
+                    ExperienceReward { base_xp: 5, cr: 0 },
                     WildlifeNpc { region: ecology.region.clone() },
                     EntityKind::Wildlife,
                     wildlife_kind,
@@ -597,7 +597,7 @@ fn sync_wildlife_entities(
                         charisma: 3,
                     },
                     // CR 1/8 = 25 XP (docs/dnd5e-srd-reference.md)
-                    ExperienceReward(25),
+                    ExperienceReward { base_xp: 25, cr: 0 },
                     WildlifeNpc { region: ecology.region.clone() },
                     EntityKind::Wildlife,
                     wildlife_kind,

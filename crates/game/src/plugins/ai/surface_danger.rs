@@ -357,10 +357,10 @@ pub fn spawn_bandit_groups(
             let scores = AbilityScores::for_class(&class, rank);
             let mods = AbilityModifiers::from_scores(&scores);
             let level = if rank == NpcRank::Named { 3 } else { 1 };
-            let (hp, ac, xp_reward) = match rank {
-                NpcRank::Grunt => (20, 12, 50),
-                NpcRank::Named => (35, 14, 200),
-                NpcRank::Boss => (55, 16, 500),
+            let (hp, ac, xp_reward, cr) = match rank {
+                NpcRank::Grunt => (20, 12, 50, 1u8),
+                NpcRank::Named => (35, 14, 200, 2u8),
+                NpcRank::Boss => (55, 16, 500, 4u8),
             };
             let offset_x = (i % 3) as f32 * 1.5;
             let offset_y = (i / 3) as f32 * 1.5;
@@ -381,7 +381,7 @@ pub fn spawn_bandit_groups(
                     wisdom: scores.wisdom as i32,
                     charisma: scores.charisma as i32,
                 },
-                ExperienceReward(xp_reward),
+                ExperienceReward { base_xp: xp_reward, cr },
                 FactionMember(iron_wolves.clone()),
                 FactionNpcRank(rank),
                 FactionBadge {
@@ -479,7 +479,7 @@ pub fn spawn_portal_horrors(
                     wisdom: warlock_scores.wisdom as i32,
                     charisma: warlock_scores.charisma as i32,
                 },
-                ExperienceReward(700),
+                ExperienceReward { base_xp: 700, cr: 3 },
                 FactionNpcRank(NpcRank::Named),
                 EntityKind::FactionNpc,
                 HomePosition(pos.clone()),
@@ -525,7 +525,7 @@ pub fn spawn_portal_horrors(
                     wisdom: druid_scores.wisdom as i32,
                     charisma: druid_scores.charisma as i32,
                 },
-                ExperienceReward(450),
+                ExperienceReward { base_xp: 450, cr: 2 },
                 FactionNpcRank(NpcRank::Named),
                 EntityKind::FactionNpc,
                 HomePosition(pos.clone()),
@@ -755,10 +755,10 @@ fn spawn_bounty_hunter(commands: &mut Commands, near: &WorldPosition, rank: NpcR
     let class = CharacterClass::Ranger;
     let scores = AbilityScores::for_class(&class, rank);
     let mods = AbilityModifiers::from_scores(&scores);
-    let (hp, ac, level, xp_reward) = match rank {
-        NpcRank::Grunt => (20, 13, 1u32, 50),
-        NpcRank::Named => (40, 15, 5u32, 300),
-        NpcRank::Boss => (65, 17, 8u32, 700),
+    let (hp, ac, level, xp_reward, cr) = match rank {
+        NpcRank::Grunt => (20, 13, 1u32, 50, 1u8),
+        NpcRank::Named => (40, 15, 5u32, 300, 4u8),
+        NpcRank::Boss => (65, 17, 8u32, 700, 6u8),
     };
     // Spawn slightly offset from player position.
     let offset = (tick % 5) as f32 * 3.0 + 5.0;
@@ -783,7 +783,7 @@ fn spawn_bounty_hunter(commands: &mut Commands, near: &WorldPosition, rank: NpcR
             wisdom: scores.wisdom as i32,
             charisma: scores.charisma as i32,
         },
-        ExperienceReward(xp_reward),
+        ExperienceReward { base_xp: xp_reward, cr },
         FactionMember(iron_wolves.clone()),
         FactionNpcRank(rank),
         FactionBadge { faction_id: "iron_wolves".to_string(), rank },

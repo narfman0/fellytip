@@ -87,7 +87,7 @@ fn spawn_combat_test_world(world: &mut World) {
                 wisdom:       10,
                 charisma:     14,
             },
-            ExperienceReward(50),
+            ExperienceReward { base_xp: 50, cr: 1 },
         ))
         .id();
 
