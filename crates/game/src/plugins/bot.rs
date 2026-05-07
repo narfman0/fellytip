@@ -50,6 +50,13 @@ use crate::plugins::combat::{
     PendingAttack, PositionSanityTimer,
 };
 
+type EnemyQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static WorldPosition, &'static CombatParticipant),
+    (With<ExperienceReward>, Without<BotController>),
+>;
+
 // ── Components ────────────────────────────────────────────────────────────────
 
 /// Behaviour policy for a fake player.
@@ -299,7 +306,7 @@ fn drive_bots(
         &mut ActionCooldowns,
         &CombatParticipant,
     )>,
-    enemies: Query<(Entity, &WorldPosition, &CombatParticipant), (With<ExperienceReward>, Without<BotController>)>,
+    enemies: EnemyQuery,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
@@ -362,7 +369,7 @@ fn drive_bots(
 
 fn nearest_enemy(
     from: &WorldPosition,
-    enemies: &Query<(Entity, &WorldPosition, &CombatParticipant), (With<ExperienceReward>, Without<BotController>)>,
+    enemies: &EnemyQuery,
 ) -> Option<Uuid> {
     enemies
         .iter()
@@ -381,7 +388,7 @@ fn apply_bot_action(
     bot_entity: Entity,
     intent: ActionIntent,
     target_uuid: Option<Uuid>,
-    enemies: &Query<(Entity, &WorldPosition, &CombatParticipant), (With<ExperienceReward>, Without<BotController>)>,
+    enemies: &EnemyQuery,
     budget: &mut ActionBudget,
     cds: &mut ActionCooldowns,
     commands: &mut Commands,

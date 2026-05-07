@@ -289,8 +289,13 @@ pub(crate) fn process_player_input(
     mut commands: Commands,
 ) {
     let Ok((player_entity, mut budget_opt, mut cds_opt)) = player_q.single_mut() else {
-        tracing::warn!("process_player_input: single_mut() failed (0 or >1 player entities)");
-        local_input.actions.clear();
+        if !local_input.actions.is_empty() {
+            tracing::warn!(
+                dropped = local_input.actions.len(),
+                "process_player_input: no unique player entity — dropping queued actions"
+            );
+            local_input.actions.clear();
+        }
         return;
     };
 
