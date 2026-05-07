@@ -14,7 +14,7 @@ use fellytip_shared::{
     components::{EntityBounds, Experience, WorldPosition},
     inputs::ActionIntent,
     protocol::{ChooseClassMessage, FellytipProtocolPlugin},
-    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, find_surface_spawn, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT, Z_SCALE},
+    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT, Z_SCALE},
 };
 use plugins::camera::OrbitCamera;
 
@@ -385,7 +385,6 @@ fn send_player_input(
     hovered_target: Option<Res<plugins::target_select::HoveredTarget>>,
     camera_q: Query<&OrbitCamera>,
     mut pred_q: Query<(
-        &mut Transform,
         &mut PredictedPosition,
         &EntityBounds,
         Option<&mut LinearVelocity>,
@@ -426,7 +425,7 @@ fn send_player_input(
     let world_dx =  cos_yaw * raw_x - sin_yaw * raw_y;
     let world_dy = -sin_yaw * raw_x - cos_yaw * raw_y;
 
-    let Ok((mut transform, mut pred, bounds, mut linear_vel, shape_hits, mut last_input)) = pred_q.single_mut()
+    let Ok((mut pred, bounds, mut linear_vel, shape_hits, mut last_input)) = pred_q.single_mut()
     else { return };
     let bounds = *bounds;
     let dt = time.delta_secs();
@@ -498,22 +497,6 @@ fn send_player_input(
                 lv.y = pred.z_vel;
             }
 
-            // Safety floor: teleport via Transform (avian's position) when the
-            // player falls through all geometry.
-            // -15.0 is below any surface terrain (max Z_SCALE=26) but above cave depth 2
-            // (-30), so it catches surface fall-through quickly without false-triggering
-            // on depth-1 cave players (~-10).
-            if pred.z < -15.0 {
-                let (sx, sy, sz) = m.spawn_points.first().copied()
-                    .unwrap_or_else(|| find_surface_spawn(m));
-                pred.x = sx; pred.y = sy; pred.z = sz;
-                pred.z_vel = 0.0; pred.grounded = true;
-                transform.translation = Vec3::new(sx, sz, sy);
-                if let Some(ref mut lv) = linear_vel {
-                    lv.x = 0.0; lv.y = 0.0; lv.z = 0.0;
-                }
-                tracing::warn!("Player fell below floor — respawned at ({sx:.1}, {sy:.1}, {sz:.1})");
-            }
         }
     } else {
         // ── No-physics path (headless / minimal plugins) ───────────────────────
@@ -580,14 +563,6 @@ fn send_player_input(
                 pred.z += v_proj.y * dt;
             }
 
-            // Safety floor (same -15.0 threshold as the physics path above).
-            if pred.z < -15.0 {
-                let (sx, sy, sz) = m.spawn_points.first().copied()
-                    .unwrap_or_else(|| find_surface_spawn(m));
-                pred.x = sx; pred.y = sy; pred.z = sz;
-                pred.z_vel = 0.0; pred.grounded = true;
-                tracing::warn!("Player fell below floor — respawned at ({sx:.1}, {sy:.1}, {sz:.1})");
-            }
         } else {
             pred.x = new_x;
             pred.y = new_y;
