@@ -74,7 +74,7 @@ impl Plugin for EntityRendererPlugin {
             .add_systems(
                 Update,
                 (
-                    spawn_entity_visuals,
+                    spawn_entity_visuals.in_set(ClientSet::EntityVisualSpawn),
                     spawn_building_visuals,
                     despawn_building_colliders,
                     build_building_colliders,
@@ -583,7 +583,9 @@ fn spawn_entity_visuals(
                 let growth_factor = growth
                     .map(|g| 0.3 + 0.7 * g.0.clamp(0.0, 1.0))
                     .unwrap_or(1.0);
-                let scale = CHARACTER_SCALE * growth_factor;
+                // Player entities (no EntityKind) are 3× the base scale.
+                let player_mul = if kind.is_none() { 3.0_f32 } else { 1.0 };
+                let scale = CHARACTER_SCALE * growth_factor * player_mul;
 
                 // Faction NPCs alternate between large male/female for visual variety.
                 let scene = match kind {

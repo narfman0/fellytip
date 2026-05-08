@@ -21,6 +21,12 @@ use plugins::camera::OrbitCamera;
 /// System-set ordering for client `Update` systems.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClientSet {
+    /// Entity visual spawning (SceneRoot, Transform) must run here so its
+    /// commands are buffered before `tag_local_player` runs. The shared
+    /// `ApplyDeferred` then flushes both command buffers in execution order,
+    /// letting `tag_local_player`'s `Transform(scale=1.0)` overwrite the
+    /// `Transform(scale=0.025)` from `spawn_entity_visuals`.
+    EntityVisualSpawn,
     Input,
     SyncVisuals,
     SyncCamera,
@@ -237,12 +243,16 @@ fn main() {
 
     app.configure_sets(
             Update,
-            (ClientSet::Input, ClientSet::SyncVisuals, ClientSet::SyncCamera).chain(),
+            (ClientSet::EntityVisualSpawn, ClientSet::Input, ClientSet::SyncVisuals, ClientSet::SyncCamera).chain(),
         )
         .add_systems(
             Update,
             (
-                tag_local_player,
+                // tag_local_player must run AFTER EntityVisualSpawn so that when
+                // ApplyDeferred flushes both command buffers in execution order,
+                // tag_local_player's Transform(scale=1.0) overwrites the
+                // Transform(scale=0.025) inserted by spawn_entity_visuals.
+                tag_local_player.after(ClientSet::EntityVisualSpawn),
                 ApplyDeferred,
                 send_player_input.in_set(ClientSet::Input),
             ).chain(),
@@ -302,16 +312,16 @@ fn tag_local_player(
             LinearVelocity::ZERO,
             SweptCcd::default(),
             ShapeCaster::new(
-                Collider::sphere(0.28),
-                Vec3::new(0.0, -0.05, 0.0),
+                Collider::sphere(0.84),
+                Vec3::new(0.0, -0.15, 0.0),
                 Quat::IDENTITY,
                 Dir3::NEG_Y,
-            ).with_max_distance(0.15),
+            ).with_max_distance(0.45),
         ));
         entity_cmd.with_children(|parent| {
             parent.spawn((
-                Collider::capsule(0.9, 0.35),
-                Transform::from_translation(Vec3::Y * (0.9 + 0.35 + 0.05)),
+                Collider::capsule(2.7, 1.05),
+                Transform::from_translation(Vec3::Y * (2.7 + 1.05 + 0.05)),
             ));
         });
     }
