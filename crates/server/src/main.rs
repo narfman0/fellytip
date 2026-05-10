@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::remote::{RemotePlugin, http::RemoteHttpPlugin};
-use fellytip_game::{MapGenConfig, ServerGamePlugin};
+use fellytip_game::ServerGamePlugin;
 use fellytip_shared::{utils::parse_arg, protocol::FellytipProtocolPlugin};
 use fellytip_server::plugins;
 use fellytip_game::plugins::bot;

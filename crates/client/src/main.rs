@@ -1,6 +1,5 @@
 mod plugins;
 
-use avian3d::prelude::*;
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, http::RemoteHttpPlugin};
@@ -14,7 +13,7 @@ use fellytip_shared::{
     components::{EntityBounds, Experience, WorldPosition},
     inputs::ActionIntent,
     protocol::{ChooseClassMessage, FellytipProtocolPlugin},
-    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT, Z_SCALE},
+    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, find_surface_spawn, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT, Z_SCALE},
 };
 use plugins::camera::OrbitCamera;
 
@@ -68,12 +67,7 @@ const ASSET_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
 const ASSET_PATH: &str = "assets";
 
 fn add_windowed_plugins(app: &mut App, visible: bool) {
-    app.add_plugins(PhysicsPlugins::default())
-        .add_plugins(avian3d::debug_render::PhysicsDebugPlugin)
-        .insert_gizmo_config(
-            avian3d::debug_render::PhysicsGizmos::default(),
-            GizmoConfig { enabled: false, ..default() },
-        )
+    app.add_plugins(avian3d::prelude::PhysicsPlugins::default())
         .add_plugins(
             DefaultPlugins.build()
                 .set(AssetPlugin {
@@ -168,7 +162,6 @@ fn main() {
                         .with_method("dm/choose_class",           dm_choose_class)
                         .with_method("dm/set_time_of_day",        dm_set_time_of_day)
                         .with_method("dm/enter_portal",           dm_enter_portal)
-                        .with_method("dm/toggle_physics_debug",   dm_toggle_physics_debug)
                         .with_method("dm/move_entity",            fellytip_server::plugins::dm::dm_move_entity)
                 )
                 .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT))
@@ -212,7 +205,6 @@ fn main() {
                     .with_method("dm/choose_class",               dm_choose_class)
                     .with_method("dm/set_time_of_day",            dm_set_time_of_day)
                     .with_method("dm/enter_portal",               dm_enter_portal)
-                    .with_method("dm/toggle_physics_debug",       dm_toggle_physics_debug)
                     .with_method("dm/move_entity",                fellytip_server::plugins::dm::dm_move_entity)
             )
             .add_plugins(RemoteHttpPlugin::default().with_port(BRP_PORT));
@@ -260,10 +252,6 @@ fn main() {
         .add_systems(
             Update,
             sync_pred_to_world.after(ClientSet::Input).before(ClientSet::SyncVisuals),
-        )
-        .add_systems(
-            PostUpdate,
-            sync_physics_to_pred,
         );
 
     app.run();
@@ -271,11 +259,10 @@ fn main() {
 
 // ── Local-player tagging ──────────────────────────────────────────────────────
 
-/// Insert `LocalPlayer`, `PredictedPosition`, and avian3d physics components on
-/// the player entity once it exists. The capsule collider (half-height 0.9, radius
-/// 0.35 ≈ 2.5 m tall) lives on a child entity offset upward so its bottom aligns
-/// with the parent origin (feet). The parent Transform stays at feet level so that
-/// the visual model and PredictedPosition.z always represent the ground contact point.
+/// Insert `LocalPlayer`, `PredictedPosition`, and `EntityBounds` on the player
+/// entity once it exists. Movement uses direct `PredictedPosition` mutation
+/// (no avian3d physics on the player) so input response is immediate and
+/// frame-order-independent.
 #[allow(clippy::type_complexity)]
 fn tag_local_player(
     query: Query<
@@ -295,36 +282,12 @@ fn tag_local_player(
         .and_then(|m| smooth_surface_at(m, pos.x, pos.y, Z_SCALE * 3.0))
         .unwrap_or(pos.z);
 
-    let mut entity_cmd = commands.entity(entity);
-    entity_cmd.insert((
+    commands.entity(entity).insert((
         LocalPlayer,
         PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
         EntityBounds::PLAYER,
         Transform::from_xyz(pos.x, initial_z, pos.y),
     ));
-
-    if headless.is_none() {
-        entity_cmd.insert((
-            RigidBody::Dynamic,
-            GravityScale(0.0),
-            Friction::ZERO,
-            LockedAxes::ROTATION_LOCKED,
-            LinearVelocity::ZERO,
-            SweptCcd::default(),
-            ShapeCaster::new(
-                Collider::sphere(0.84),
-                Vec3::new(0.0, -0.15, 0.0),
-                Quat::IDENTITY,
-                Dir3::NEG_Y,
-            ).with_max_distance(0.45),
-        ));
-        entity_cmd.with_children(|parent| {
-            parent.spawn((
-                Collider::capsule(2.7, 1.05),
-                Transform::from_translation(Vec3::Y * (2.7 + 1.05 + 0.05)),
-            ));
-        });
-    }
     tracing::debug!("Tagged local player entity {entity:?} at z={initial_z:.2} headless={}", headless.is_some());
 }
 
@@ -339,22 +302,6 @@ fn track_frame_time(time: Res<Time>, mut timings: ResMut<ClientFrameTimings>) {
 }
 
 // ── Position sync ─────────────────────────────────────────────────────────────
-
-/// After avian3d resolves physics in FixedUpdate, read the updated `Transform`
-/// back into `PredictedPosition` so the camera and WorldPosition sync use the
-/// collision-corrected position. Only runs for physics-controlled players
-/// (those with `LinearVelocity`). Runs in `PostUpdate`.
-#[allow(clippy::type_complexity)]
-fn sync_physics_to_pred(
-    mut q: Query<(&Transform, &mut PredictedPosition), (With<LocalPlayer>, With<LinearVelocity>)>,
-) {
-    for (transform, mut pred) in &mut q {
-        // Bevy world: x=east, y=up, z=south → PredictedPosition: x=east, y=south, z=up.
-        pred.x = transform.translation.x;
-        pred.y = transform.translation.z;
-        pred.z = transform.translation.y;
-    }
-}
 
 /// Copy PredictedPosition → WorldPosition for the local player each frame so
 /// that server-side combat and AI systems see the current position.
@@ -377,13 +324,9 @@ fn sync_pred_to_world(
 /// `PredictedPosition` (for instant visual response), and push any action
 /// intent into `LocalPlayerInput` for the server-side combat system to process.
 ///
-/// When `LinearVelocity` is present (windowed mode with avian3d physics), horizontal
-/// and vertical velocity are written to `LinearVelocity` and avian integrates them,
-/// resolving collisions against terrain trimesh colliders. `ShapeHits` (from the
-/// downward `ShapeCaster` inserted in `tag_local_player`) drives `pred.grounded`.
-///
-/// When `LinearVelocity` is absent (headless mode), the original direct-mutation
-/// logic runs unchanged, using `smooth_surface_at` for grounding.
+/// Uses direct `PredictedPosition` mutation for movement — no avian3d physics
+/// on the player. `smooth_surface_at` provides terrain-following and
+/// `is_passable_with_bounds` enforces walkability collision.
 ///
 /// MULTIPLAYER: restore MessageSender<PlayerInput> and send the full PlayerInput
 /// struct over the network instead of writing to LocalPlayerInput.
@@ -397,8 +340,6 @@ fn send_player_input(
     mut pred_q: Query<(
         &mut PredictedPosition,
         &EntityBounds,
-        Option<&mut LinearVelocity>,
-        Option<&ShapeHits>,
         Option<&mut LastPlayerInput>,
     ), With<LocalPlayer>>,
     map: Option<Res<WorldMap>>,
@@ -435,11 +376,10 @@ fn send_player_input(
     let world_dx =  cos_yaw * raw_x - sin_yaw * raw_y;
     let world_dy = -sin_yaw * raw_x - cos_yaw * raw_y;
 
-    let Ok((mut pred, bounds, mut linear_vel, shape_hits, mut last_input)) = pred_q.single_mut()
+    let Ok((mut pred, bounds, mut last_input)) = pred_q.single_mut()
     else { return };
     let bounds = *bounds;
     let dt = time.delta_secs();
-    let has_physics = linear_vel.is_some();
 
     // ── Sync move_dir to LastPlayerInput so follow_navigation_goal cancels ────
     // When WASD is held, update LastPlayerInput.move_dir so the server-side
@@ -448,14 +388,6 @@ fn send_player_input(
     if let Some(ref mut li) = last_input {
         li.move_dir = [world_dx, world_dy];
     }
-
-    // ── Ground detection (physics mode) ──────────────────────────────────────
-    if has_physics
-        && let Some(hits) = shape_hits {
-            // normal1 is the outward normal on the cast sphere; for a downward cast
-            // hitting a surface, normal1.y > 0 means the surface pushes us upward.
-            pred.grounded = hits.iter().any(|h| h.normal1.y > 0.5);
-        }
 
     // ── Jump ─────────────────────────────────────────────────────────────────
     if keyboard.just_pressed(KeyCode::Space) && pred.grounded {
@@ -475,108 +407,81 @@ fn send_player_input(
     let speed_mul = if in_water { 0.5 } else { 1.0 };
     let speed = if pred.dash_timer > 0.0 { DASH_SPEED } else { PLAYER_SPEED };
 
-    if has_physics {
-        // ── Physics path ──────────────────────────────────────────────────────
-        // Set horizontal velocity; avian integrates and resolves collisions.
-        if let Some(ref mut lv) = linear_vel {
-            lv.x = world_dx * speed * speed_mul;
-            lv.z = world_dy * speed * speed_mul;
-        }
+    // ── Direct-position movement ──────────────────────────────────────────────
+    let new_x = pred.x + world_dx * speed * speed_mul * dt;
+    let new_y = pred.y + world_dy * speed * speed_mul * dt;
 
-        // Vertical velocity: manual gravity/buoyancy written into lv.y.
-        if let Some(ref m) = map {
-            let water_z = water_surface_at(m, pred.x, pred.y);
-            if let Some(wz) = water_z {
-                if pred.z > wz + LAND_SNAP {
-                    pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
-                    pred.grounded = false;
-                } else if pred.z < wz - LAND_SNAP {
-                    pred.z_vel = (pred.z_vel + SWIM_BUOYANCY * dt).min(SWIM_RISE_SPEED);
-                    pred.grounded = false;
-                } else {
-                    pred.z_vel = 0.0;
-                    pred.grounded = true;
-                }
-            } else if pred.grounded {
-                pred.z_vel = 0.0;
-            } else {
-                pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
-            }
+    if let Some(ref m) = map {
+        // Allow movement into water tiles so the player can swim.
+        let can_xy = is_passable_with_bounds(m, new_x, new_y, pred.z, bounds) || is_water_at(m, new_x, new_y);
+        let can_x  = is_passable_with_bounds(m, new_x, pred.y, pred.z, bounds) || is_water_at(m, new_x, pred.y);
+        let can_y  = is_passable_with_bounds(m, pred.x, new_y, pred.z, bounds) || is_water_at(m, pred.x, new_y);
+        if      can_xy { pred.x = new_x; pred.y = new_y; }
+        else if can_x  { pred.x = new_x; }
+        else if can_y  { pred.y = new_y; }
 
-            if let Some(ref mut lv) = linear_vel {
-                lv.y = pred.z_vel;
-            }
+        // ── Vertical / gravity ────────────────────────────────────────────────
+        let terrain_z = smooth_surface_at(m, pred.x, pred.y, pred.z);
+        let water_z   = water_surface_at(m, pred.x, pred.y);
 
-        }
-    } else {
-        // ── No-physics path (headless / minimal plugins) ───────────────────────
-        let new_x = pred.x + world_dx * speed * speed_mul * dt;
-        let new_y = pred.y + world_dy * speed * speed_mul * dt;
-
-        if let Some(ref m) = map {
-            // Allow movement into water tiles so the player can swim.
-            let can_xy = is_passable_with_bounds(m, new_x, new_y, pred.z, bounds) || is_water_at(m, new_x, new_y);
-            let can_x  = is_passable_with_bounds(m, new_x, pred.y, pred.z, bounds) || is_water_at(m, new_x, pred.y);
-            let can_y  = is_passable_with_bounds(m, pred.x, new_y, pred.z, bounds) || is_water_at(m, pred.x, new_y);
-            if      can_xy { pred.x = new_x; pred.y = new_y; }
-            else if can_x  { pred.x = new_x; }
-            else if can_y  { pred.y = new_y; }
-
-            // ── Vertical / gravity ────────────────────────────────────────────
-            let terrain_z = smooth_surface_at(m, pred.x, pred.y, pred.z);
-            let water_z   = water_surface_at(m, pred.x, pred.y);
-
-            if let Some(wz) = water_z {
-                if pred.z > wz + LAND_SNAP {
-                    pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
-                    pred.z += pred.z_vel * dt;
-                    pred.grounded = false;
-                    if pred.z <= wz {
-                        pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
-                    }
-                } else if pred.z < wz - LAND_SNAP {
-                    pred.z_vel = (pred.z_vel + SWIM_BUOYANCY * dt).min(SWIM_RISE_SPEED);
-                    pred.z += pred.z_vel * dt;
-                    pred.grounded = false;
-                    if pred.z >= wz {
-                        pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
-                    }
-                } else {
-                    pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
-                }
-            } else if pred.grounded {
-                match terrain_z {
-                    Some(tz) if tz >= pred.z - STEP_HEIGHT => {
-                        pred.z = tz; pred.z_vel = 0.0;
-                    }
-                    _ => {
-                        pred.grounded = false; pred.z_vel = 0.0;
-                    }
-                }
-            } else {
+        if let Some(wz) = water_z {
+            if pred.z > wz + LAND_SNAP {
                 pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
                 pred.z += pred.z_vel * dt;
-                if let Some(tz) = terrain_z
-                    && pred.z <= tz + LAND_SNAP {
-                        pred.z = tz; pred.z_vel = 0.0; pred.grounded = true;
-                    }
+                pred.grounded = false;
+                if pred.z <= wz {
+                    pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
+                }
+            } else if pred.z < wz - LAND_SNAP {
+                pred.z_vel = (pred.z_vel + SWIM_BUOYANCY * dt).min(SWIM_RISE_SPEED);
+                pred.z += pred.z_vel * dt;
+                pred.grounded = false;
+                if pred.z >= wz {
+                    pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
+                }
+            } else {
+                pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
             }
-
-            // ── Slope speed correction ────────────────────────────────────────
-            if pred.grounded && !in_water && (world_dx != 0.0 || world_dy != 0.0) {
-                let normal = terrain_normal_at(m, pred.x, pred.y, pred.z);
-                let vel = Vec3::new(world_dx * speed, 0.0, world_dy * speed);
-                let v_proj = vel - normal * vel.dot(normal);
-                let delta = v_proj - vel;
-                pred.x += delta.x * dt;
-                pred.y += delta.z * dt;
-                pred.z += v_proj.y * dt;
+        } else if pred.grounded {
+            match terrain_z {
+                Some(tz) if tz >= pred.z - STEP_HEIGHT => {
+                    pred.z = tz; pred.z_vel = 0.0;
+                }
+                _ => {
+                    pred.grounded = false; pred.z_vel = 0.0;
+                }
             }
-
         } else {
-            pred.x = new_x;
-            pred.y = new_y;
+            pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
+            pred.z += pred.z_vel * dt;
+            if let Some(tz) = terrain_z
+                && pred.z <= tz + LAND_SNAP {
+                    pred.z = tz; pred.z_vel = 0.0; pred.grounded = true;
+                }
         }
+
+        // ── Slope speed correction ────────────────────────────────────────────
+        if pred.grounded && !in_water && (world_dx != 0.0 || world_dy != 0.0) {
+            let normal = terrain_normal_at(m, pred.x, pred.y, pred.z);
+            let vel = Vec3::new(world_dx * speed, 0.0, world_dy * speed);
+            let v_proj = vel - normal * vel.dot(normal);
+            let delta = v_proj - vel;
+            pred.x += delta.x * dt;
+            pred.y += delta.z * dt;
+            pred.z += v_proj.y * dt;
+        }
+
+        // Safety floor: respawn if the player falls through all geometry.
+        if pred.z < -15.0 {
+            let (sx, sy, sz) = m.spawn_points.first().copied()
+                .unwrap_or_else(|| find_surface_spawn(m));
+            pred.x = sx; pred.y = sy; pred.z = sz;
+            pred.z_vel = 0.0; pred.grounded = true;
+            tracing::warn!("Player fell below floor — respawned at ({sx:.1}, {sy:.1}, {sz:.1})");
+        }
+    } else {
+        pred.x = new_x;
+        pred.y = new_y;
     }
 
     // Queue combat action intents for server-side processing.
@@ -953,23 +858,3 @@ fn dm_set_camera_free(
     Ok(serde_json::json!({ "free": free }))
 }
 
-/// Toggle avian physics debug rendering (collider wireframes).
-///
-/// Params: `{ "enabled": bool }` — omit to flip the current state.
-/// Returns `{ "ok": true, "enabled": bool }`.
-#[cfg(not(target_family = "wasm"))]
-fn dm_toggle_physics_debug(
-    In(params): In<Option<serde_json::Value>>,
-    world: &mut World,
-) -> BrpResult {
-    let mut store = world.resource_mut::<GizmoConfigStore>();
-    let (config, _) = store.config_mut::<avian3d::debug_render::PhysicsGizmos>();
-    let enabled = params
-        .as_ref()
-        .and_then(|p| p.get("enabled"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(!config.enabled);
-    config.enabled = enabled;
-    tracing::info!(enabled, "DM physics debug rendering toggled");
-    Ok(serde_json::json!({ "ok": true, "enabled": enabled }))
-}

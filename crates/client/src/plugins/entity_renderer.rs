@@ -26,7 +26,7 @@
 use std::collections::HashSet;
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use avian3d::prelude::{Collider, LinearVelocity, RigidBody};
+use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 use bevy_mesh::VertexAttributeValues;
 use bevy::gizmos::config::GizmoConfigStore;
@@ -500,10 +500,7 @@ fn ground_translation(pos: &WorldPosition) -> Vec3 {
 // their added_tick precedes the first Update run of this system.
 type NewReplicatedPos  = (With<WorldPosition>, Without<SceneRoot>);
 type ChangedRemotePos  = (Changed<WorldPosition>, Without<LocalPlayer>);
-// Exclude physics-controlled players: avian3d owns their Transform, so we must
-// not override it from PredictedPosition. Their Transform is synced back to
-// PredictedPosition via sync_physics_to_pred in PostUpdate instead.
-type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>, Without<LinearVelocity>);
+type ChangedPredictedPos = (Changed<PredictedPosition>, With<LocalPlayer>);
 type RemotePosItems<'a> = (
     &'a WorldPosition,
     &'a mut Transform,

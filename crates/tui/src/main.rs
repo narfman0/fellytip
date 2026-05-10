@@ -153,6 +153,7 @@ enum AppCmd {
     Inspect(u64),
     ListSettlements,
     ListBots,
+    #[allow(dead_code)]
     SpawnNpc,
 }
 

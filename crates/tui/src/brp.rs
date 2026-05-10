@@ -59,6 +59,7 @@ impl BrpClient {
     }
 
     /// `world.get_resource` — fetch a resource by its full type path.
+    #[allow(dead_code)]
     pub async fn get_resource(&self, resource_path: &str) -> Result<Value> {
         self.call(
             "world.get_resource",
