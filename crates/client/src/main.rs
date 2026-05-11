@@ -263,6 +263,13 @@ fn main() {
 /// entity once it exists. Movement uses direct `PredictedPosition` mutation
 /// (no avian3d physics on the player) so input response is immediate and
 /// frame-order-independent.
+///
+/// Do NOT insert a new `Transform` here — `spawn_entity_visuals` already
+/// inserted one with the correct character scale (`CHARACTER_SCALE * 3.0`).
+/// Replacing it would default scale back to 1.0, making the player visual
+/// ~13× too large and engulfing the camera view (the symptom previously
+/// reported as "movement broken"). `sync_local_player_transform` updates
+/// the translation from `PredictedPosition` each frame.
 #[allow(clippy::type_complexity)]
 fn tag_local_player(
     query: Query<
@@ -282,12 +289,20 @@ fn tag_local_player(
         .and_then(|m| smooth_surface_at(m, pos.x, pos.y, Z_SCALE * 3.0))
         .unwrap_or(pos.z);
 
-    commands.entity(entity).insert((
+    let mut ecmd = commands.entity(entity);
+    ecmd.insert((
         LocalPlayer,
         PredictedPosition { x: pos.x, y: pos.y, z: initial_z, z_vel: 0.0, grounded: true, dash_timer: 0.0 },
         EntityBounds::PLAYER,
-        Transform::from_xyz(pos.x, initial_z, pos.y),
     ));
+    // In headless mode the rendering plugins (incl. `spawn_entity_visuals`) are
+    // not installed, so nothing else inserts a Transform — provide one here.
+    // In windowed mode `spawn_entity_visuals` already inserted a Transform with
+    // the correct character scale, so do NOT override it (default scale 1.0
+    // would make the visual ~13× too large and engulf the camera view).
+    if headless.is_some() {
+        ecmd.insert(Transform::from_xyz(pos.x, initial_z, pos.y));
+    }
     tracing::debug!("Tagged local player entity {entity:?} at z={initial_z:.2} headless={}", headless.is_some());
 }
 
