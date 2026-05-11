@@ -1,0 +1,84 @@
+# Curated subset of Kenney CC0 audio mirrored from the asset server into
+# `assets/audio/<category>/<local_name>.ogg`.
+#
+# Run `python3 tools/audio_sync.py` to fetch (idempotent — skips files already
+# present at the expected size).
+#
+# Each `[category]` table maps `local_filename = "server/relative/path.ogg"`.
+# The server-relative path is appended to `server.base_url` + `/` + `server.prefix`.
+
+[server]
+base_url = "http://srv:49200"
+prefix   = "assets/kenney_aio/Audio"
+
+# ── UI feedback ──────────────────────────────────────────────────────────────
+[ui]
+"click_01.ogg" = "UI Audio/Audio/click1.ogg"
+"click_02.ogg" = "UI Audio/Audio/click2.ogg"
+"click_03.ogg" = "UI Audio/Audio/click3.ogg"
+"hover_01.ogg" = "UI Audio/Audio/rollover1.ogg"
+"hover_02.ogg" = "UI Audio/Audio/rollover2.ogg"
+"confirm.ogg"  = "Interface Sounds/Audio/confirmation_001.ogg"
+"cancel.ogg"   = "Interface Sounds/Audio/back_001.ogg"
+"error.ogg"    = "Interface Sounds/Audio/error_001.ogg"
+
+# ── Footsteps by surface ─────────────────────────────────────────────────────
+[footstep]
+"grass_01.ogg" = "Impact Sounds/Audio/footstep_grass_000.ogg"
+"grass_02.ogg" = "Impact Sounds/Audio/footstep_grass_001.ogg"
+"grass_03.ogg" = "Impact Sounds/Audio/footstep_grass_002.ogg"
+"grass_04.ogg" = "Impact Sounds/Audio/footstep_grass_003.ogg"
+"stone_01.ogg" = "Impact Sounds/Audio/footstep_concrete_000.ogg"
+"stone_02.ogg" = "Impact Sounds/Audio/footstep_concrete_001.ogg"
+"stone_03.ogg" = "Impact Sounds/Audio/footstep_concrete_002.ogg"
+"stone_04.ogg" = "Impact Sounds/Audio/footstep_concrete_003.ogg"
+"wood_01.ogg"  = "Impact Sounds/Audio/footstep_wood_000.ogg"
+"wood_02.ogg"  = "Impact Sounds/Audio/footstep_wood_001.ogg"
+"wood_03.ogg"  = "Impact Sounds/Audio/footstep_wood_002.ogg"
+"wood_04.ogg"  = "Impact Sounds/Audio/footstep_wood_003.ogg"
+"snow_01.ogg"  = "Impact Sounds/Audio/footstep_snow_000.ogg"
+"snow_02.ogg"  = "Impact Sounds/Audio/footstep_snow_001.ogg"
+"snow_03.ogg"  = "Impact Sounds/Audio/footstep_snow_002.ogg"
+"snow_04.ogg"  = "Impact Sounds/Audio/footstep_snow_003.ogg"
+
+# ── Combat impacts ───────────────────────────────────────────────────────────
+[impact]
+"melee_light_01.ogg" = "Impact Sounds/Audio/impactSoft_medium_000.ogg"
+"melee_light_02.ogg" = "Impact Sounds/Audio/impactSoft_medium_001.ogg"
+"melee_light_03.ogg" = "Impact Sounds/Audio/impactSoft_medium_002.ogg"
+"melee_heavy_01.ogg" = "Impact Sounds/Audio/impactSoft_heavy_000.ogg"
+"melee_heavy_02.ogg" = "Impact Sounds/Audio/impactSoft_heavy_001.ogg"
+"melee_heavy_03.ogg" = "Impact Sounds/Audio/impactSoft_heavy_002.ogg"
+"metal_01.ogg"       = "Impact Sounds/Audio/impactMetal_medium_000.ogg"
+"metal_02.ogg"       = "Impact Sounds/Audio/impactMetal_medium_001.ogg"
+"metal_03.ogg"       = "Impact Sounds/Audio/impactMetal_medium_002.ogg"
+"wood_01.ogg"        = "Impact Sounds/Audio/impactWood_heavy_000.ogg"
+"wood_02.ogg"        = "Impact Sounds/Audio/impactWood_heavy_001.ogg"
+"wood_03.ogg"        = "Impact Sounds/Audio/impactWood_heavy_002.ogg"
+
+# ── Doors / portals ──────────────────────────────────────────────────────────
+[door]
+"open_01.ogg"  = "RPG Audio/Audio/doorOpen_1.ogg"
+"open_02.ogg"  = "RPG Audio/Audio/doorOpen_2.ogg"
+"close_01.ogg" = "RPG Audio/Audio/doorClose_1.ogg"
+"close_02.ogg" = "RPG Audio/Audio/doorClose_2.ogg"
+
+# ── Pickups ──────────────────────────────────────────────────────────────────
+[pickup]
+"coin.ogg"    = "RPG Audio/Audio/handleCoins.ogg"
+"leather.ogg" = "RPG Audio/Audio/dropLeather.ogg"
+
+# ── Voiceover stingers ───────────────────────────────────────────────────────
+[voice]
+"level_up.ogg" = "Voiceover Pack/Audio (Male)/level_up.ogg"
+"ready.ogg"    = "Voiceover Pack Fighter/Audio/ready.ogg"
+"fight.ogg"    = "Voiceover Pack Fighter/Audio/fight.ogg"
+
+# ── Music loops + stinger ────────────────────────────────────────────────────
+[music]
+"overworld_01.ogg" = "Music Loops/Loops/Farm Frolics.ogg"
+"overworld_02.ogg" = "Music Loops/Loops/Sad Town.ogg"
+"overworld_03.ogg" = "Music Loops/Loops/Mishief Stroll.ogg"
+"combat_01.ogg"    = "Music Loops/Retro/Retro Beat.ogg"
+"combat_02.ogg"    = "Music Loops/Retro/Retro Mystic.ogg"
+"victory.ogg"      = "Music Loops/Idents/Serious ident.ogg"

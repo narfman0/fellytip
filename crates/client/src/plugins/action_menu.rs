@@ -12,6 +12,7 @@ use uuid::Uuid;
 use fellytip_shared::bridge::LocalPlayerInput;
 use fellytip_shared::inputs::ActionIntent;
 use fellytip_shared::protocol::MoveToMessage;
+use super::audio::{PlaySfx, SoundId};
 use super::target_select::HoveredTarget;
 use super::camera::OrbitCamera;
 use crate::PredictedPosition;
@@ -96,6 +97,7 @@ fn draw_action_menu(
     mut local_input: ResMut<LocalPlayerInput>,
     mut consumed: ResMut<EguiPointerConsumed>,
     mut move_writer: MessageWriter<MoveToMessage>,
+    mut sfx: MessageWriter<PlaySfx>,
 ) -> Result {
     consumed.0 = false;
     if !state.open {
@@ -114,6 +116,9 @@ fn draw_action_menu(
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_min_width(160.0);
 
+                let mut clicked = false;
+                let mut cancelled = false;
+
                 match &context {
                     TargetContext::Hostile { uuid } => {
                         let uuid = *uuid;
@@ -123,32 +128,32 @@ fn draw_action_menu(
                             local_input
                                 .actions
                                 .push((Some(ActionIntent::BasicAttack), Some(uuid)));
-                            state.open = false;
+                            clicked = true;
                         }
                         if ui
                             .add_enabled(false, egui::Button::new("↗ Shove"))
                             .clicked()
                         {
-                            state.open = false;
+                            clicked = true;
                         }
                         if ui
                             .add_enabled(false, egui::Button::new("🤝 Grapple"))
                             .clicked()
                         {
-                            state.open = false;
+                            clicked = true;
                         }
                         ui.separator();
                         if ui.button("✦ Class Action").clicked() {
                             local_input
                                 .actions
                                 .push((Some(ActionIntent::UseAbility(1)), Some(uuid)));
-                            state.open = false;
+                            clicked = true;
                         }
                         if ui.button("🛡 Dodge").clicked() {
                             local_input
                                 .actions
                                 .push((Some(ActionIntent::Dodge), None));
-                            state.open = false;
+                            clicked = true;
                         }
                     }
                     TargetContext::None => {
@@ -159,38 +164,46 @@ fn draw_action_menu(
                             if let Some((x, y, z)) = state.world_target {
                                 move_writer.write(MoveToMessage { x, y, z });
                             }
-                            state.open = false;
+                            clicked = true;
                         }
                         if ui.button("⚔ Attack").clicked() {
                             local_input
                                 .actions
                                 .push((Some(ActionIntent::BasicAttack), None));
-                            state.open = false;
+                            clicked = true;
                         }
                         if ui.button("✦ Ability").clicked() {
                             local_input
                                 .actions
                                 .push((Some(ActionIntent::UseAbility(1)), None));
-                            state.open = false;
+                            clicked = true;
                         }
                         if ui.button("🛡 Dodge").clicked() {
                             local_input
                                 .actions
                                 .push((Some(ActionIntent::Dodge), None));
-                            state.open = false;
+                            clicked = true;
                         }
                         ui.separator();
                         if ui
                             .add_enabled(false, egui::Button::new("👁 Examine"))
                             .clicked()
                         {
-                            state.open = false;
+                            clicked = true;
                         }
                     }
                 }
 
                 ui.separator();
                 if ui.button("✕ Cancel").clicked() {
+                    cancelled = true;
+                }
+
+                if clicked {
+                    sfx.write(PlaySfx(SoundId::UiClick));
+                    state.open = false;
+                } else if cancelled {
+                    sfx.write(PlaySfx(SoundId::UiCancel));
                     state.open = false;
                 }
             });

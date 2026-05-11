@@ -106,6 +106,7 @@ fn add_windowed_plugins(app: &mut App, visible: bool) {
     .add_plugins(plugins::TargetSelectPlugin)
     .add_plugins(plugins::FloatingTextPlugin)
     .add_plugins(plugins::ActionMenuPlugin)
+    .add_plugins(plugins::AudioPlugin)
     .add_plugins(plugins::ClickToMovePlugin);
 }
 
