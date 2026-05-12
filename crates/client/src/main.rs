@@ -126,10 +126,19 @@ fn main() {
         let headless    = args.iter().any(|a| a == "--headless");
         let combat_test = args.iter().any(|a| a == "--combat-test");
         if headless {
+            // Avian's PhysicsPlugins needs Transform + the asset system
+            // (it reads AssetEvent<Mesh> in clear_unused_colliders even when
+            // no Mesh asset is in use). Following avian's own test harness:
+            // MinimalPlugins + TransformPlugin + AssetPlugin + MeshPlugin.
             app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
                 std::time::Duration::from_millis(50),
             )))
             .add_plugins(bevy::log::LogPlugin::default())
+            .add_plugins(bevy::transform::TransformPlugin)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .add_plugins(bevy::mesh::MeshPlugin)
+            .add_plugins(bevy::scene::ScenePlugin)
+            .add_plugins(avian3d::prelude::PhysicsPlugins::default())
             .insert_resource(HeadlessMode);
             app.add_plugins(
                     RemotePlugin::default()
@@ -248,12 +257,7 @@ fn main() {
                 // Transform(scale=0.025) inserted by spawn_entity_visuals.
                 tag_local_player.after(ClientSet::EntityVisualSpawn),
                 ApplyDeferred,
-                // Skipped in headless mode: SpatialQuery requires the avian
-                // ColliderTrees resource, which only exists when PhysicsPlugins
-                // is loaded (windowed builds only).
-                send_player_input
-                    .in_set(ClientSet::Input)
-                    .run_if(not(resource_exists::<HeadlessMode>)),
+                send_player_input.in_set(ClientSet::Input),
             ).chain(),
         )
         .add_systems(
