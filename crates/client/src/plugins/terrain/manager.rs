@@ -10,7 +10,6 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use avian3d::prelude::{Collider, ColliderConstructor, RigidBody};
 use super::material::{tilekind_to_biome_region, BiomeRegion};
 
 use bevy::prelude::*;
@@ -251,7 +250,7 @@ pub fn apply_chunk_meshes(
     mut mgr:       ResMut<ChunkManager>,
     assets:        Res<TerrainAssets>,
     map:           Res<WorldMap>,
-    meshes:        Res<Assets<Mesh>>,
+    _meshes:       Res<Assets<Mesh>>,
     water_mat:     Option<Res<WaterMaterialHandle>>,
     mut lifecycle: ResMut<ChunkLifecycle>,
 ) {
@@ -301,37 +300,19 @@ pub fn apply_chunk_meshes(
             .clone();
 
         if let Some(&entity) = mgr.spawned.get(&coord) {
-            // LOD changed — build the new collider synchronously so the old one
-            // stays active until it is atomically replaced.  rebuild_dirty_chunks
-            // runs before this system, so the mesh is already in Assets<Mesh>.
-            let mut cmd = commands.entity(entity);
-            cmd.insert((Mesh3d(handle.clone()), MeshMaterial3d(mat)));
-            if let Some(collider) = meshes.get(&handle).and_then(Collider::trimesh_from_mesh) {
-                cmd.insert(collider);
-            } else {
-                // Mesh not in Assets yet (shouldn't happen) — fall back to deferred
-                // constructor, accepting the 1-frame gap rather than leaving no collider.
-                cmd.remove::<Collider>().insert(ColliderConstructor::TrimeshFromMesh);
-            }
+            // LOD changed — swap visual mesh/material. Physics colliders are
+            // owned by `PhysicsWorldPlugin` (game crate), driven independently
+            // from player positions; the chunk render entity is purely visual.
+            commands.entity(entity).insert((Mesh3d(handle.clone()), MeshMaterial3d(mat)));
         } else {
             // Spawn a new chunk entity. Vertex positions are in world space,
             // so Transform::IDENTITY places it correctly with no offset.
-            // Build the collider synchronously — the mesh was just added to
-            // Assets<Mesh> by rebuild_dirty_chunks this same frame, so
-            // meshes.get() will succeed and the collider is live immediately.
-            let mut bundle = commands.spawn((
+            let entity = commands.spawn((
                 Mesh3d(handle.clone()),
                 MeshMaterial3d(mat),
                 Transform::IDENTITY,
                 SurfaceTerrain,
-                RigidBody::Static,
-            ));
-            if let Some(collider) = meshes.get(&handle).and_then(Collider::trimesh_from_mesh) {
-                bundle.insert(collider);
-            } else {
-                bundle.insert(ColliderConstructor::TrimeshFromMesh);
-            }
-            let entity = bundle.id();
+            )).id();
             mgr.spawned.insert(coord, entity);
             lifecycle.newly_visible.push((coord, entity));
 

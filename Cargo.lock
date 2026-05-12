@@ -3737,6 +3737,7 @@ name = "fellytip-game"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "avian3d",
  "bevy",
  "bincode",
  "fellytip-shared",

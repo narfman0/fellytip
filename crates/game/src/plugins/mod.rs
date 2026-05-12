@@ -12,5 +12,6 @@ pub mod party;
 pub mod portal;
 pub mod perf;
 pub mod persistence;
+pub mod physics_world;
 pub mod story;
 pub mod world_sim;

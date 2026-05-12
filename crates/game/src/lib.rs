@@ -65,6 +65,7 @@ impl Plugin for ServerGamePlugin {
             .add_plugins(plugins::interest::InterestPlugin)
             .add_plugins(plugins::party::PartyPlugin)
             .add_plugins(plugins::portal::PortalPlugin)
+            .add_plugins(plugins::physics_world::PhysicsWorldPlugin)
             .add_systems(Update, (
                 fellytip_shared::components::sync_ability_modifiers,
                 fellytip_shared::components::sync_max_hp,
