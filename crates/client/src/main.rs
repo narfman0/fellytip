@@ -1,5 +1,6 @@
 mod plugins;
 
+use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, http::RemoteHttpPlugin};
@@ -366,6 +367,7 @@ fn send_player_input(
     char_screen: Option<Res<plugins::CharScreen>>,
     class_sel: Option<Res<plugins::ClassSelectionState>>,
     mut local_input: ResMut<LocalPlayerInput>,
+    spatial_query: SpatialQuery,
 ) {
     let Some(keyboard) = keyboard else { return };
     if console.is_some_and(|c| c.open)
@@ -437,7 +439,25 @@ fn send_player_input(
         else if can_y  { pred.y = new_y; }
 
         // ── Vertical / gravity ────────────────────────────────────────────────
-        let terrain_z = smooth_surface_at(m, pred.x, pred.y, pred.z);
+        // Effective ground = max(mesh ray-cast hit, tile heightmap). The mesh
+        // ray sees building roofs / props / arbitrary static colliders; the
+        // tile heightmap is the fallback when no chunk collider is loaded
+        // yet (streaming gap, freshly-entered zone, headless mode).
+        let tile_ground_z = smooth_surface_at(m, pred.x, pred.y, pred.z);
+        let mesh_ground_z = {
+            // Ray origin sits a hair above the player to avoid starting
+            // exactly on a coplanar collider; physics frame is Y-up so
+            // (world_x, world_z, world_y) maps to (transform_x, transform_y, transform_z).
+            let origin = Vec3::new(pred.x, pred.z + 0.1, pred.y);
+            spatial_query
+                .cast_ray(origin, Dir3::NEG_Y, 50.0, true, &SpatialQueryFilter::default())
+                .map(|hit| origin.y - hit.distance)
+        };
+        let terrain_z = match (mesh_ground_z, tile_ground_z) {
+            (Some(m), Some(t)) => Some(m.max(t)),
+            (Some(m), None)    => Some(m),
+            (None,    t)       => t,
+        };
         let water_z   = water_surface_at(m, pred.x, pred.y);
 
         if let Some(wz) = water_z {
