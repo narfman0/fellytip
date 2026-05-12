@@ -1,6 +1,6 @@
 mod plugins;
 
-use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
+use avian3d::prelude::{Collider, ShapeCastConfig, SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 #[cfg(not(target_family = "wasm"))]
 use bevy::remote::{BrpError, BrpResult, RemotePlugin, http::RemoteHttpPlugin};
@@ -14,7 +14,7 @@ use fellytip_shared::{
     components::{EntityBounds, Experience, WorldPosition},
     inputs::ActionIntent,
     protocol::{ChooseClassMessage, FellytipProtocolPlugin},
-    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, terrain_normal_at, find_surface_spawn, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, STEP_HEIGHT, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT, Z_SCALE},
+    world::map::{is_passable_with_bounds, is_water_at, water_surface_at, smooth_surface_at, find_surface_spawn, WorldMap, GRAVITY, JUMP_SPEED, DASH_SPEED, DASH_DURATION, LAND_SNAP, MAX_FALL_SPEED, SWIM_BUOYANCY, SWIM_RISE_SPEED, MAP_WIDTH, MAP_HEIGHT, Z_SCALE},
 };
 use plugins::camera::OrbitCamera;
 
@@ -248,7 +248,12 @@ fn main() {
                 // Transform(scale=0.025) inserted by spawn_entity_visuals.
                 tag_local_player.after(ClientSet::EntityVisualSpawn),
                 ApplyDeferred,
-                send_player_input.in_set(ClientSet::Input),
+                // Skipped in headless mode: SpatialQuery requires the avian
+                // ColliderTrees resource, which only exists when PhysicsPlugins
+                // is loaded (windowed builds only).
+                send_player_input
+                    .in_set(ClientSet::Input)
+                    .run_if(not(resource_exists::<HeadlessMode>)),
             ).chain(),
         )
         .add_systems(
@@ -430,84 +435,105 @@ fn send_player_input(
     let new_y = pred.y + world_dy * speed * speed_mul * dt;
 
     if let Some(ref m) = map {
-        // Allow movement into water tiles so the player can swim.
-        let can_xy = is_passable_with_bounds(m, new_x, new_y, pred.z, bounds) || is_water_at(m, new_x, new_y);
-        let can_x  = is_passable_with_bounds(m, new_x, pred.y, pred.z, bounds) || is_water_at(m, new_x, pred.y);
-        let can_y  = is_passable_with_bounds(m, pred.x, new_y, pred.z, bounds) || is_water_at(m, pred.x, new_y);
-        if      can_xy { pred.x = new_x; pred.y = new_y; }
-        else if can_x  { pred.x = new_x; }
-        else if can_y  { pred.y = new_y; }
+        // ── 1. Tile-level passability gate ───────────────────────────────────
+        // Reject horizontal motion onto tiles the map says are impassable
+        // (trees, cliffs, etc. that don't necessarily have an avian collider).
+        // Water is treated as passable so the player can swim into it.
+        let can_x = is_passable_with_bounds(m, new_x, pred.y, pred.z, bounds) || is_water_at(m, new_x, pred.y);
+        let can_y = is_passable_with_bounds(m, pred.x, new_y, pred.z, bounds) || is_water_at(m, pred.x, new_y);
+        let horiz_dx = if can_x { new_x - pred.x } else { 0.0 };
+        let horiz_dy = if can_y { new_y - pred.y } else { 0.0 };
 
-        // ── Vertical / gravity ────────────────────────────────────────────────
-        // Effective ground = max(mesh ray-cast hit, tile heightmap). The mesh
-        // ray sees building roofs / props / arbitrary static colliders; the
-        // tile heightmap is the fallback when no chunk collider is loaded
-        // yet (streaming gap, freshly-entered zone, headless mode).
-        let tile_ground_z = smooth_surface_at(m, pred.x, pred.y, pred.z);
-        let mesh_ground_z = {
-            // Ray origin sits a hair above the player to avoid starting
-            // exactly on a coplanar collider; physics frame is Y-up so
-            // (world_x, world_z, world_y) maps to (transform_x, transform_y, transform_z).
-            let origin = Vec3::new(pred.x, pred.z + 0.1, pred.y);
-            spatial_query
-                .cast_ray(origin, Dir3::NEG_Y, 50.0, true, &SpatialQueryFilter::default())
-                .map(|hit| origin.y - hit.distance)
-        };
-        let terrain_z = match (mesh_ground_z, tile_ground_z) {
-            (Some(m), Some(t)) => Some(m.max(t)),
-            (Some(m), None)    => Some(m),
-            (None,    t)       => t,
-        };
-        let water_z   = water_surface_at(m, pred.x, pred.y);
-
+        // ── 2. Vertical velocity update ───────────────────────────────────────
+        // Apply buoyancy in water, gravity in air, and a small downward stick
+        // when grounded (keeps the shape-cast biting into the floor every frame).
+        let water_z = water_surface_at(m, pred.x, pred.y);
         if let Some(wz) = water_z {
             if pred.z > wz + LAND_SNAP {
                 pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
-                pred.z += pred.z_vel * dt;
-                pred.grounded = false;
-                if pred.z <= wz {
-                    pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
-                }
             } else if pred.z < wz - LAND_SNAP {
                 pred.z_vel = (pred.z_vel + SWIM_BUOYANCY * dt).min(SWIM_RISE_SPEED);
-                pred.z += pred.z_vel * dt;
-                pred.grounded = false;
-                if pred.z >= wz {
-                    pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
-                }
             } else {
-                pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
+                pred.z_vel = 0.0;
             }
-        } else if pred.grounded {
-            match terrain_z {
-                Some(tz) if tz >= pred.z - STEP_HEIGHT => {
-                    pred.z = tz; pred.z_vel = 0.0;
-                }
-                _ => {
-                    pred.grounded = false; pred.z_vel = 0.0;
-                }
-            }
+        } else if pred.grounded && pred.z_vel <= 0.0 {
+            pred.z_vel = -0.5;
         } else {
             pred.z_vel = (pred.z_vel + GRAVITY * dt).max(MAX_FALL_SPEED);
-            pred.z += pred.z_vel * dt;
-            if let Some(tz) = terrain_z
-                && pred.z <= tz + LAND_SNAP {
-                    pred.z = tz; pred.z_vel = 0.0; pred.grounded = true;
+        }
+
+        // ── 3. Swept shape-cast in the player's velocity direction ────────────
+        // A single capsule sweep replaces the down-ray + per-axis tile slide
+        // pair. The contact normal tells us whether we landed (n.y > 0.7) or
+        // hit a wall (n.y near 0). Iterate so the leftover velocity slides
+        // along the contact plane after each hit.
+        let half_h  = bounds.height * 0.5;
+        let cyl_len = (bounds.height - 2.0 * bounds.half_w).max(0.01);
+        let capsule = Collider::capsule(bounds.half_w, cyl_len);
+        let mut origin = Vec3::new(pred.x, pred.z + half_h, pred.y);
+        let mut remaining = Vec3::new(horiz_dx, pred.z_vel * dt, horiz_dy);
+        let mut grounded_new = false;
+        let mut hit_any = false;
+        const SKIN: f32 = 0.02;
+
+        for _ in 0..3 {
+            let len = remaining.length();
+            if len < 1e-5 { break; }
+            let Ok(dir) = Dir3::new(remaining / len) else { break };
+            let cfg = ShapeCastConfig::from_max_distance(len);
+            match spatial_query.cast_shape(
+                &capsule,
+                origin,
+                Quat::IDENTITY,
+                dir,
+                &cfg,
+                &SpatialQueryFilter::default(),
+            ) {
+                Some(hit) => {
+                    hit_any = true;
+                    let travel = (hit.distance - SKIN).max(0.0);
+                    origin += dir.as_vec3() * travel;
+                    let n: Vec3 = hit.normal1;
+                    if n.y > 0.7 {
+                        grounded_new = true;
+                        if pred.z_vel < 0.0 { pred.z_vel = 0.0; }
+                    } else if n.y < -0.7 && pred.z_vel > 0.0 {
+                        pred.z_vel = 0.0;
+                    }
+                    // Slide: project leftover motion onto the contact plane.
+                    let leftover = remaining - dir.as_vec3() * travel;
+                    remaining = leftover - n * leftover.dot(n);
                 }
+                None => {
+                    origin += remaining;
+                    break;
+                }
+            }
         }
 
-        // ── Slope speed correction ────────────────────────────────────────────
-        if pred.grounded && !in_water && (world_dx != 0.0 || world_dy != 0.0) {
-            let normal = terrain_normal_at(m, pred.x, pred.y, pred.z);
-            let vel = Vec3::new(world_dx * speed, 0.0, world_dy * speed);
-            let v_proj = vel - normal * vel.dot(normal);
-            let delta = v_proj - vel;
-            pred.x += delta.x * dt;
-            pred.y += delta.z * dt;
-            pred.z += v_proj.y * dt;
-        }
+        pred.x = origin.x;
+        pred.z = origin.y - half_h;
+        pred.y = origin.z;
+        pred.grounded = grounded_new;
 
-        // Safety floor: respawn if the player falls through all geometry.
+        // ── 4. Water surface snap ─────────────────────────────────────────────
+        if let Some(wz) = water_z
+            && (pred.z - wz).abs() < LAND_SNAP {
+                pred.z = wz; pred.z_vel = 0.0; pred.grounded = true;
+            }
+
+        // ── 5. Tile fallback (chunk streaming gap) ────────────────────────────
+        // If the shape-cast saw no colliders at all and we're below the tile
+        // heightmap, snap to the tile surface. This handles chunks whose
+        // trimesh hasn't been built yet — without it the player free-falls
+        // into the void on a fresh zone load.
+        if !hit_any && !pred.grounded
+            && let Some(tz) = smooth_surface_at(m, pred.x, pred.y, pred.z)
+            && pred.z <= tz + LAND_SNAP {
+                pred.z = tz; pred.z_vel = 0.0; pred.grounded = true;
+            }
+
+        // ── 6. Safety floor backstop ──────────────────────────────────────────
         if pred.z < -15.0 {
             let (sx, sy, sz) = m.spawn_points.first().copied()
                 .unwrap_or_else(|| find_surface_spawn(m));
