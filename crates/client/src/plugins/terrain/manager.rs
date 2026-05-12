@@ -140,7 +140,7 @@ pub fn update_chunk_visibility(
             {
                 continue;
             }
-            let dist = cam_world.distance(coord.world_center(&map));
+            let dist = cam_world.distance(super::chunk::chunk_world_center(coord, &map));
             new_lod.insert(coord, LodLevel::from_distance(dist));
             visible.insert(coord);
         }

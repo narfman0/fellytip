@@ -37,6 +37,7 @@ impl LodLevel {
     }
 
     /// Number of vertices along one side of the chunk mesh at this LOD.
+    #[allow(dead_code)]
     pub fn verts_per_side(self) -> usize {
         CHUNK_TILES / self.step() + 1
     }
@@ -60,18 +61,7 @@ impl LodLevel {
     }
 }
 
-/// Which edges of this chunk border a neighbour at a coarser LOD.
-///
-/// When a flag is set, `build_chunk_mesh` replaces the outermost triangle strip
-/// on that edge with T-collapse stitching triangles that eliminate cracks where
-/// the two meshes meet at a 2:1 vertex ratio.
-///
-/// "North" = −Z (tile iy decreasing), "South" = +Z (iy increasing),
-/// "West"  = −X (tile ix decreasing), "East"  = +X (ix increasing).
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct EdgeTransitions {
-    pub north: bool,
-    pub south: bool,
-    pub east:  bool,
-    pub west:  bool,
-}
+// `EdgeTransitions` lives in `fellytip_world_types::mesh` so the physics
+// layer can produce / consume the same flag set. Re-export here to keep
+// existing `super::lod::EdgeTransitions` import paths working.
+pub use fellytip_shared::world::mesh::EdgeTransitions;

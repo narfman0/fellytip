@@ -13,5 +13,6 @@ pub mod faction;
 pub mod grid;
 pub mod map;
 pub mod math;
+pub mod mesh;
 pub mod population;
 pub mod zone;

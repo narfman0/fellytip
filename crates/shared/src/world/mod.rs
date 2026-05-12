@@ -13,6 +13,7 @@ pub use fellytip_world_types::{
     faction,
     grid,
     map,
+    mesh,
     population,
     zone,
 };
