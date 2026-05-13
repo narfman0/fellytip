@@ -128,13 +128,27 @@ fn tick_portal_cooldowns(
     }
 }
 
-/// For each non-trigger entity with a `ZoneMembership`, emit a
-/// `PlayerZoneTransition` when it enters any same-zone `PortalTrigger`'s
-/// radius. Entities with an active `PortalCooldown` are skipped.
+/// For each player-controlled entity with a `ZoneMembership`, emit a
+/// `PlayerZoneTransition` when it enters a same-zone `PortalTrigger`'s
+/// radius. Only `LastPlayerInput` carriers (the human player) are eligible:
+///
+///  - Raid bots / war-party members have their own zone-hop driver
+///    (`advance_zone_parties`); if `check_portal_triggers` saw them, an
+///    intra-zone portal at zone-local `(1.0, 1.0, 0.0)` would be within
+///    range of a raid bot at `(0, 0, 0)` and bounce it through random
+///    zones, defeating `advance_zone_parties`'s deterministic chain.
+///  - Wandering NPCs and wildlife also shouldn't auto-teleport.
+///
+/// Emits at most one transition per entity per tick — multiple overlapping
+/// portals would otherwise compound into chained zone swaps.
 type MoverQuery<'w, 's> = Query<
     'w, 's,
     (Entity, &'static WorldPosition, &'static ZoneMembership),
-    (Without<PortalTrigger>, Without<PortalCooldown>),
+    (
+        Without<PortalTrigger>,
+        Without<PortalCooldown>,
+        With<crate::plugins::combat::LastPlayerInput>,
+    ),
 >;
 
 fn check_portal_triggers(
@@ -167,6 +181,9 @@ fn check_portal_triggers(
                     entity,
                     portal_id: portal.id,
                 });
+                // First overlapping portal wins — break out so we don't queue
+                // a second transition for the same entity this tick.
+                break;
             }
         }
     }

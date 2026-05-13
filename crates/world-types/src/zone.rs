@@ -8,7 +8,9 @@
 //! owns the portal graph. Both are populated by `generate_zones()` at startup
 //! from the civilization `Building` list.
 
+use bevy::ecs::reflect::ReflectComponent;
 use bevy::prelude::{Component, Reflect, Resource};
+use bevy::reflect::{ReflectDeserialize, ReflectSerialize};
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -25,6 +27,7 @@ pub const OVERWORLD_ZONE: ZoneId = ZoneId(0);
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect,
 )]
+#[reflect(Serialize, Deserialize)]
 pub struct ZoneId(pub u32);
 
 /// Identifies a distinct coordinate universe. Zones in the same WorldId share
@@ -352,6 +355,7 @@ impl ZoneTopology {
 #[derive(
     Component, Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect,
 )]
+#[reflect(Component, Serialize, Deserialize)]
 pub struct ZoneMembership(pub ZoneId);
 
 // ── Zone generation ───────────────────────────────────────────────────────────

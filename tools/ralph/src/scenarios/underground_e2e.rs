@@ -25,7 +25,9 @@ pub struct UndergroundE2e;
 
 const WAR_PARTY_MEMBER: &str = "fellytip_game::plugins::ai::WarPartyMember";
 const FACTION_BADGE: &str = "fellytip_shared::components::FactionBadge";
-const ZONE_MEMBERSHIP: &str = "fellytip_shared::world::zone::ZoneMembership";
+// Use the original-crate path; BRP registers types under their defining
+// crate even when re-exported elsewhere (e.g. `fellytip_shared::world::zone`).
+const ZONE_MEMBERSHIP: &str = "fellytip_world_types::zone::ZoneMembership";
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(15);
 const SURFACE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -113,11 +115,15 @@ impl Scenario for UndergroundE2e {
                 if !raid_entities.contains(&eid) {
                     return false;
                 }
-                // ZoneMembership reflects as a tuple struct ([id]); handle both
-                // array and object encodings defensively.
-                let zid = e["components"][ZONE_MEMBERSHIP][0]
-                    .as_u64()
-                    .or_else(|| e["components"][ZONE_MEMBERSHIP]["0"].as_u64())
+                // ZoneMembership(pub ZoneId(pub u32)) reflects as a bare
+                // integer via #[reflect(Serialize, Deserialize)]. Older
+                // builds without that attribute serialized as an array/object;
+                // accept all three shapes so the scenario keeps working if
+                // the reflect derive is tweaked again.
+                let zm = &e["components"][ZONE_MEMBERSHIP];
+                let zid = zm.as_u64()
+                    .or_else(|| zm[0].as_u64())
+                    .or_else(|| zm["0"].as_u64())
                     .unwrap_or(u64::MAX);
                 zid == OVERWORLD_ZONE_ID
             });
