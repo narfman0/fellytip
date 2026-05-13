@@ -61,6 +61,7 @@ impl Plugin for PhysicsWorldPlugin {
             // — useful for verifying which zone a player is currently in.
             .register_type::<ZoneMembership>()
             .register_type::<ZoneId>()
+            .register_type::<crate::movement::KinematicState>()
             .init_resource::<PhysicsChunks>()
             .init_resource::<PhysicsZoneColliders>()
             .add_systems(Update, update_physics_world);

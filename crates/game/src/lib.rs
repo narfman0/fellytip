@@ -1,3 +1,4 @@
+pub mod movement;
 pub mod plugins;
 
 use bevy::ecs::message::MessageReader;

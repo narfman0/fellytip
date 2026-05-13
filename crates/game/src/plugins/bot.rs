@@ -284,7 +284,16 @@ pub fn spawn_bot(world: &mut World, class: CharacterClass, pos: WorldPosition, c
                 ..default()
             },
             (world_meta, spell_slots, spellbook),
-            (ActionBudget::default(), ActionCooldowns::default(), controller),
+            (
+                ActionBudget::default(),
+                ActionCooldowns::default(),
+                controller,
+                // Persistent kinematic state so the swept shape-cast in
+                // drive_bots integrates gravity + grounded across frames,
+                // identical to how the windowed player works.
+                crate::movement::KinematicState::default(),
+                fellytip_shared::components::EntityBounds::PLAYER,
+            ),
         ))
         .id()
 }
@@ -304,9 +313,13 @@ fn drive_bots(
         &mut WorldPosition,
         &mut ActionBudget,
         &mut ActionCooldowns,
+        &mut crate::movement::KinematicState,
+        &fellytip_shared::components::EntityBounds,
         &CombatParticipant,
     )>,
     enemies: EnemyQuery,
+    map: Option<Res<fellytip_shared::world::map::WorldMap>>,
+    spatial: avian3d::prelude::SpatialQuery,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
@@ -314,8 +327,8 @@ fn drive_bots(
         return;
     }
 
-    for (bot_entity, mut bot, mut pos, mut budget, mut cds, _participant) in bots.iter_mut() {
-        // ── 1. Movement (random walk) ────────────────────────────────────────
+    for (bot_entity, mut bot, mut pos, mut budget, mut cds, mut kstate, bounds, _participant) in bots.iter_mut() {
+        // ── 1. Movement (random walk via shared kinematic step) ──────────────
         if matches!(bot.policy, BotPolicy::Wander | BotPolicy::Aggressive) {
             bot.move_change_timer -= dt;
             if bot.move_change_timer <= 0.0 {
@@ -323,9 +336,22 @@ fn drive_bots(
                 bot.move_dir = [angle.cos(), angle.sin()];
                 bot.move_change_timer = bot.move_change_secs.max(0.1);
             }
-            let step = bot.move_speed * dt;
-            pos.x += bot.move_dir[0] * step;
-            pos.y += bot.move_dir[1] * step;
+            let desired = bevy::math::Vec2::new(
+                bot.move_dir[0] * bot.move_speed,
+                bot.move_dir[1] * bot.move_speed,
+            );
+            let (nx, ny, nz) = crate::movement::step_kinematic(
+                pos.x, pos.y, pos.z,
+                &mut kstate,
+                desired,
+                *bounds,
+                dt,
+                &spatial,
+                map.as_deref(),
+            );
+            pos.x = nx;
+            pos.y = ny;
+            pos.z = nz;
         }
 
         // ── 2. One-shot programmatic action (always honoured) ───────────────
