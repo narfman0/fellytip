@@ -17,6 +17,7 @@
 //! `position[2] = gy - half_h`; `position[1]` is the height.
 
 use crate::map::{WorldMap, CHUNK_TILES};
+use crate::zone::InteriorTile;
 
 // ── Chunk coordinate ──────────────────────────────────────────────────────────
 
@@ -234,6 +235,105 @@ fn filter_triangles(indices: &mut Vec<u32>, bad: &std::collections::HashSet<u32>
     *indices = kept;
 }
 
+// ── Zone interior geometry ────────────────────────────────────────────────────
+//
+// Each interior zone is a grid of `InteriorTile` (row-major, `tiles[y*w + x]`).
+// The builder emits a single combined trimesh for the whole zone:
+//
+//   * Floor / Stair / Water → flat 1×1 horizontal quad at y = 0.
+//   * Balcony → flat 1×1 horizontal quad at y = `BALCONY_LIFT` (0.02).
+//   * Wall / Window → solid 1×1×WALL_HEIGHT box (12 triangles).
+//   * Roof / Void / Pit → no geometry (no collision).
+//
+// Tile (x, y) is centered at `(x * TILE_SIZE, _, y * TILE_SIZE)` in physics
+// coords — matching the renderer's per-tile entity transforms exactly.
+
+/// Side length of a zone interior tile in physics-world units.
+pub const ZONE_TILE_SIZE: f32 = 1.0;
+/// Height of a Wall / Window tile from floor to ceiling.
+pub const ZONE_WALL_HEIGHT: f32 = 2.5;
+/// Tiny lift so a Balcony doesn't z-fight with the floor below it.
+pub const ZONE_BALCONY_LIFT: f32 = 0.02;
+
+pub struct ZoneGeometry {
+    pub positions: Vec<[f32; 3]>,
+    pub indices:   Vec<u32>,
+}
+
+/// Build the combined collision trimesh for a zone interior.
+///
+/// `tiles` is a row-major grid of `width × height` tiles.
+pub fn build_zone_interior_geometry(
+    tiles:  &[InteriorTile],
+    width:  u16,
+    height: u16,
+) -> ZoneGeometry {
+    let w = width as usize;
+    let h = height as usize;
+    let mut positions = Vec::<[f32; 3]>::new();
+    let mut indices   = Vec::<u32>::new();
+    for y in 0..h {
+        for x in 0..w {
+            let Some(tile) = tiles.get(y * w + x) else { continue };
+            let cx = x as f32 * ZONE_TILE_SIZE;
+            let cz = y as f32 * ZONE_TILE_SIZE;
+            match tile {
+                InteriorTile::Floor | InteriorTile::Stair | InteriorTile::Water => {
+                    emit_floor_quad(&mut positions, &mut indices, cx, 0.0, cz);
+                }
+                InteriorTile::Balcony => {
+                    emit_floor_quad(&mut positions, &mut indices, cx, ZONE_BALCONY_LIFT, cz);
+                }
+                InteriorTile::Wall | InteriorTile::Window => {
+                    emit_wall_box(&mut positions, &mut indices, cx, cz);
+                }
+                InteriorTile::Roof | InteriorTile::Void | InteriorTile::Pit => { /* no collision */ }
+            }
+        }
+    }
+    ZoneGeometry { positions, indices }
+}
+
+/// Push a 1×1 horizontal quad centered on `(cx, y, cz)`, CCW from above.
+fn emit_floor_quad(positions: &mut Vec<[f32; 3]>, indices: &mut Vec<u32>, cx: f32, y: f32, cz: f32) {
+    let half = ZONE_TILE_SIZE * 0.5;
+    let base = positions.len() as u32;
+    positions.extend_from_slice(&[
+        [cx - half, y, cz - half],
+        [cx + half, y, cz - half],
+        [cx + half, y, cz + half],
+        [cx - half, y, cz + half],
+    ]);
+    indices.extend_from_slice(&[base, base + 1, base + 2,  base, base + 2, base + 3]);
+}
+
+/// Push a 1×1×WALL_HEIGHT box centered horizontally on `(cx, cz)`, bottom at y=0.
+fn emit_wall_box(positions: &mut Vec<[f32; 3]>, indices: &mut Vec<u32>, cx: f32, cz: f32) {
+    let half = ZONE_TILE_SIZE * 0.5;
+    let top = ZONE_WALL_HEIGHT;
+    let base = positions.len() as u32;
+    // 8 corner vertices, indexed: 0..=3 bottom, 4..=7 top.
+    positions.extend_from_slice(&[
+        [cx - half, 0.0, cz - half], // 0 bottom-NW
+        [cx + half, 0.0, cz - half], // 1 bottom-NE
+        [cx + half, 0.0, cz + half], // 2 bottom-SE
+        [cx - half, 0.0, cz + half], // 3 bottom-SW
+        [cx - half, top, cz - half], // 4 top-NW
+        [cx + half, top, cz - half], // 5 top-NE
+        [cx + half, top, cz + half], // 6 top-SE
+        [cx - half, top, cz + half], // 7 top-SW
+    ]);
+    // 12 triangles, CCW from outside.
+    let b = base;
+    let q = |a, b, c, d| [a, b, c, a, c, d];
+    indices.extend_from_slice(&q(b + 4, b + 5, b + 6, b + 7));         // top  (+Y)
+    indices.extend_from_slice(&q(b + 3, b + 2, b + 1, b));             // bot  (-Y)
+    indices.extend_from_slice(&q(b,     b + 1, b + 5, b + 4));         // north (-Z)
+    indices.extend_from_slice(&q(b + 2, b + 3, b + 7, b + 6));         // south (+Z)
+    indices.extend_from_slice(&q(b + 3, b,     b + 4, b + 7));         // west  (-X)
+    indices.extend_from_slice(&q(b + 1, b + 2, b + 6, b + 5));         // east  (+X)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -308,6 +408,91 @@ mod tests {
         assert_eq!(geom.indices.len() % 3, 0);
         for &i in &geom.indices {
             assert!((i as usize) < geom.positions.len(), "index out of range");
+        }
+    }
+
+    // ── Zone interior tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn zone_empty_tiles_produces_empty_geometry() {
+        let g = build_zone_interior_geometry(&[InteriorTile::Void; 4], 2, 2);
+        assert!(g.positions.is_empty());
+        assert!(g.indices.is_empty());
+    }
+
+    #[test]
+    fn zone_single_floor_tile_is_one_quad() {
+        let g = build_zone_interior_geometry(&[InteriorTile::Floor], 1, 1);
+        assert_eq!(g.positions.len(), 4);
+        assert_eq!(g.indices.len(), 6);
+        // All y = 0 (horizontal floor).
+        for p in &g.positions {
+            assert!((p[1]).abs() < 1e-6, "floor vertex not at y=0: {p:?}");
+        }
+    }
+
+    #[test]
+    fn zone_single_wall_is_solid_box() {
+        let g = build_zone_interior_geometry(&[InteriorTile::Wall], 1, 1);
+        // 8 corners, 12 triangles × 3 = 36 indices, 6 faces × 2 tris = 12 tris.
+        assert_eq!(g.positions.len(), 8);
+        assert_eq!(g.indices.len(), 36);
+        // Half the corners at y=0, half at y=WALL_HEIGHT.
+        let lo = g.positions.iter().filter(|p| p[1] < 0.01).count();
+        let hi = g.positions.iter().filter(|p| (p[1] - ZONE_WALL_HEIGHT).abs() < 1e-5).count();
+        assert_eq!(lo, 4);
+        assert_eq!(hi, 4);
+    }
+
+    #[test]
+    fn zone_balcony_is_lifted_floor() {
+        let g = build_zone_interior_geometry(&[InteriorTile::Balcony], 1, 1);
+        assert_eq!(g.positions.len(), 4);
+        for p in &g.positions {
+            assert!((p[1] - ZONE_BALCONY_LIFT).abs() < 1e-6, "balcony vertex y: {p:?}");
+        }
+    }
+
+    #[test]
+    fn zone_void_pit_roof_contribute_no_collision() {
+        let tiles = vec![
+            InteriorTile::Void,
+            InteriorTile::Pit,
+            InteriorTile::Roof,
+        ];
+        let g = build_zone_interior_geometry(&tiles, 3, 1);
+        assert!(g.positions.is_empty());
+    }
+
+    #[test]
+    fn zone_mixed_tiles_position_each_by_index() {
+        // [Floor, Wall] horizontally — floor at x=0, wall at x=1.
+        let g = build_zone_interior_geometry(&[InteriorTile::Floor, InteriorTile::Wall], 2, 1);
+        // 4 floor verts + 8 wall verts.
+        assert_eq!(g.positions.len(), 12);
+        // Floor tile centered at (0, 0, 0), so x in [-0.5, 0.5].
+        for i in 0..4 {
+            let p = g.positions[i];
+            assert!(p[0] >= -0.5 - 1e-5 && p[0] <= 0.5 + 1e-5, "floor x: {p:?}");
+        }
+        // Wall tile centered at (1, _, 0), so x in [0.5, 1.5].
+        for i in 4..12 {
+            let p = g.positions[i];
+            assert!(p[0] >= 0.5 - 1e-5 && p[0] <= 1.5 + 1e-5, "wall x: {p:?}");
+        }
+    }
+
+    #[test]
+    fn zone_geometry_indices_valid() {
+        let tiles = vec![
+            InteriorTile::Floor, InteriorTile::Wall, InteriorTile::Floor,
+            InteriorTile::Wall,  InteriorTile::Floor, InteriorTile::Wall,
+            InteriorTile::Floor, InteriorTile::Wall, InteriorTile::Floor,
+        ];
+        let g = build_zone_interior_geometry(&tiles, 3, 3);
+        assert_eq!(g.indices.len() % 3, 0);
+        for &i in &g.indices {
+            assert!((i as usize) < g.positions.len(), "index out of range");
         }
     }
 }

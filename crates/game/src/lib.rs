@@ -18,6 +18,7 @@ use uuid::Uuid;
 use plugins::character_persistence::{load_character, load_local_player_uuid, save_character, store_local_player_uuid};
 use plugins::combat::{ActionCooldowns, CombatParticipant, LastPlayerInput, PositionSanityTimer};
 use plugins::persistence::Db;
+use plugins::portal::PortalCooldown;
 pub use plugins::map_gen::MapGenConfig;
 
 /// Bundles all server-side game logic plugins.
@@ -248,7 +249,10 @@ fn spawn_player_on_class_choice(
             ..default()
         },
         (world_meta, spell_slots, spellbook),
-        (ActionBudget::default(), ActionCooldowns::default()),
+        // Grace period so the player doesn't insta-trigger a portal they
+        // happen to spawn on top of (overworld portals sit at z=0; spawn
+        // position is at surface terrain height with the same xy).
+        (ActionBudget::default(), ActionCooldowns::default(), PortalCooldown(3.0)),
     ));
     tracing::info!(uuid = %player_uuid, x = px, y = py, z = pz, "Player spawned after class selection");
 }

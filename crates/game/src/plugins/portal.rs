@@ -157,7 +157,12 @@ fn check_portal_triggers(
             };
             let dx = tpos.x - pos.x;
             let dy = tpos.y - pos.y;
-            if dx * dx + dy * dy <= portal.trigger_radius * portal.trigger_radius {
+            let dz = tpos.z - pos.z;
+            // 3D check so a portal at z=0 (overworld ground) doesn't fire on
+            // a player walking past on a z=17 hilltop with the same xy.
+            if dx * dx + dy * dy + dz * dz
+                <= portal.trigger_radius * portal.trigger_radius
+            {
                 out.write(PlayerZoneTransition {
                     entity,
                     portal_id: portal.id,
