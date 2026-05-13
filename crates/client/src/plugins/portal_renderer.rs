@@ -276,9 +276,9 @@ fn spawn_portal_meshes(
         .map(|z| z.0)
         .unwrap_or(OVERWORLD_ZONE);
 
-    if player_zone == OVERWORLD_ZONE {
-        return;
-    }
+    // OVERWORLD is treated like any other zone — portals on the surface (cave
+    // entrances, etc.) get the same window mesh + frame + render-target
+    // camera so the player can see *into* the destination zone from outside.
 
     let Some(ref neighbor_msg) = neighbor_cache.0 else {
         return;

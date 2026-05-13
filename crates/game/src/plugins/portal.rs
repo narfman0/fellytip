@@ -69,6 +69,7 @@ impl Plugin for PortalPlugin {
                     apply_zone_transitions,
                     send_zone_tiles,
                     send_zone_neighbors,
+                    send_initial_zone_neighbors,
                 ).chain(),
             );
     }
@@ -323,12 +324,79 @@ fn portal_anchor_world_pos(
         .unwrap_or(Vec3::ZERO)
 }
 
-/// Broadcast portal/topology information for the current zone and all
-/// zones within 2 hops for each `PlayerZoneTransition`.
+/// Build the 0/1/2-hop portal-neighbor message for a given zone. Shared by
+/// transition-driven broadcasts and the initial player-spawn broadcast so the
+/// overworld also gets a neighbor cache (otherwise overworld portals never
+/// get rendered with their window-into-destination meshes).
+fn build_neighbor_msg(
+    current_zone: ZoneId,
+    topology: &ZoneTopology,
+    registry: &ZoneRegistry,
+) -> ZoneNeighborMessage {
+    let mut zone_hops: Vec<(ZoneId, u8)> = vec![(current_zone, 0)];
+    let mut portals: Vec<ClientPortalEntry> = Vec::new();
+
+    // Hop 0: portals in current zone.
+    for portal in topology.exits_from(current_zone) {
+        let from_world_pos = portal_anchor_world_pos(portal.from_zone, &portal.from_anchor, registry);
+        let to_world_pos   = portal_anchor_world_pos(portal.to_zone,   &portal.to_anchor,   registry);
+        portals.push(ClientPortalEntry { portal: portal.clone(), from_hop: 0, from_world_pos, to_world_pos });
+    }
+
+    // Hop 1: 1-hop neighbor zones.
+    let hop1_zones: Vec<ZoneId> = topology.neighbors(current_zone).collect();
+    for &zone1 in &hop1_zones {
+        zone_hops.push((zone1, 1));
+        for portal in topology.exits_from(zone1) {
+            if !portals.iter().any(|e| e.portal.id == portal.id) {
+                let from_world_pos = portal_anchor_world_pos(portal.from_zone, &portal.from_anchor, registry);
+                let to_world_pos   = portal_anchor_world_pos(portal.to_zone,   &portal.to_anchor,   registry);
+                portals.push(ClientPortalEntry { portal: portal.clone(), from_hop: 1, from_world_pos, to_world_pos });
+            }
+        }
+    }
+
+    // Hop 2: 2-hop neighbor zones.
+    for zone1 in hop1_zones {
+        for zone2 in topology.neighbors(zone1) {
+            if zone_hops.iter().any(|(z, _)| *z == zone2) { continue; }
+            zone_hops.push((zone2, 2));
+            for portal in topology.exits_from(zone2) {
+                if !portals.iter().any(|e| e.portal.id == portal.id) {
+                    let from_world_pos = portal_anchor_world_pos(portal.from_zone, &portal.from_anchor, registry);
+                    let to_world_pos   = portal_anchor_world_pos(portal.to_zone,   &portal.to_anchor,   registry);
+                    portals.push(ClientPortalEntry { portal: portal.clone(), from_hop: 2, from_world_pos, to_world_pos });
+                }
+            }
+        }
+    }
+
+    ZoneNeighborMessage { current_zone, portals, zone_hops }
+}
+
+/// Emit a neighbor message the first frame a player gains `ZoneMembership` so
+/// the overworld portal renderer has data to paint cave-entrance windows on
+/// initial spawn. Without this, the renderer would have to wait for the player
+/// to first walk through a portal before seeing any portal mesh at all.
+#[allow(clippy::type_complexity)]
+fn send_initial_zone_neighbors(
+    players: Query<&ZoneMembership, (Added<ZoneMembership>, With<crate::plugins::combat::LastPlayerInput>)>,
+    topology: Option<Res<ZoneTopology>>,
+    registry: Option<Res<ZoneRegistry>>,
+    mut writer: MessageWriter<ZoneNeighborMessage>,
+) {
+    let Some(topology) = topology else { return };
+    let Some(registry) = registry else { return };
+    for zm in &players {
+        writer.write(build_neighbor_msg(zm.0, &topology, &registry));
+    }
+}
+
+/// Broadcast portal/topology information for the destination zone of every
+/// `PlayerZoneTransition` (0–2 hops out).
 ///
-/// The `from_world_pos` and `to_world_pos` fields in `ClientPortalEntry` are
-/// now populated from `ZoneRegistry` anchor positions so the portal renderer
-/// can place portal meshes at correct world-space locations.
+/// `from_world_pos` / `to_world_pos` come from `ZoneRegistry` anchor positions
+/// so the portal renderer can place meshes at correct world-space locations.
 fn send_zone_neighbors(
     mut events: MessageReader<PlayerZoneTransition>,
     topology: Option<Res<ZoneTopology>>,
@@ -342,94 +410,6 @@ fn send_zone_neighbors(
         let Some(transit_portal) = topology.portals.iter().find(|p| p.id == ev.portal_id) else {
             continue;
         };
-        let current_zone = transit_portal.to_zone;
-
-        // Collect all zones within 2 hops and their hop distances.
-        let mut zone_hops: Vec<(ZoneId, u8)> = vec![(current_zone, 0)];
-        let mut portals: Vec<ClientPortalEntry> = Vec::new();
-
-        // Hop 0: portals in current zone.
-        for portal in topology.exits_from(current_zone) {
-            let from_world_pos = portal_anchor_world_pos(
-                portal.from_zone,
-                &portal.from_anchor,
-                &registry,
-            );
-            let to_world_pos = portal_anchor_world_pos(
-                portal.to_zone,
-                &portal.to_anchor,
-                &registry,
-            );
-            portals.push(ClientPortalEntry {
-                portal: portal.clone(),
-                from_hop: 0,
-                from_world_pos,
-                to_world_pos,
-            });
-        }
-
-        // Hop 1: 1-hop neighbor zones.
-        let hop1_zones: Vec<ZoneId> = topology.neighbors(current_zone).collect();
-        for &zone1 in &hop1_zones {
-            zone_hops.push((zone1, 1));
-            for portal in topology.exits_from(zone1) {
-                // Avoid duplicating portals already in the list.
-                if !portals.iter().any(|e| e.portal.id == portal.id) {
-                    let from_world_pos = portal_anchor_world_pos(
-                        portal.from_zone,
-                        &portal.from_anchor,
-                        &registry,
-                    );
-                    let to_world_pos = portal_anchor_world_pos(
-                        portal.to_zone,
-                        &portal.to_anchor,
-                        &registry,
-                    );
-                    portals.push(ClientPortalEntry {
-                        portal: portal.clone(),
-                        from_hop: 1,
-                        from_world_pos,
-                        to_world_pos,
-                    });
-                }
-            }
-        }
-
-        // Hop 2: 2-hop neighbor zones.
-        for zone1 in hop1_zones {
-            for zone2 in topology.neighbors(zone1) {
-                // Skip zones already tracked (current or hop-1).
-                if zone_hops.iter().any(|(z, _)| *z == zone2) {
-                    continue;
-                }
-                zone_hops.push((zone2, 2));
-                for portal in topology.exits_from(zone2) {
-                    if !portals.iter().any(|e| e.portal.id == portal.id) {
-                        let from_world_pos = portal_anchor_world_pos(
-                            portal.from_zone,
-                            &portal.from_anchor,
-                            &registry,
-                        );
-                        let to_world_pos = portal_anchor_world_pos(
-                            portal.to_zone,
-                            &portal.to_anchor,
-                            &registry,
-                        );
-                        portals.push(ClientPortalEntry {
-                            portal: portal.clone(),
-                            from_hop: 2,
-                            from_world_pos,
-                            to_world_pos,
-                        });
-                    }
-                }
-            }
-        }
-
-        writer.write(ZoneNeighborMessage {
-            current_zone,
-            portals,
-            zone_hops,
-        });
+        writer.write(build_neighbor_msg(transit_portal.to_zone, &topology, &registry));
     }
 }
