@@ -328,7 +328,11 @@ fn drive_bots(
     }
 
     for (bot_entity, mut bot, mut pos, mut budget, mut cds, mut kstate, bounds, _participant) in bots.iter_mut() {
-        // ── 1. Movement (random walk via shared kinematic step) ──────────────
+        // ── 1. Movement via shared kinematic step ────────────────────────────
+        // Always run the step so gravity + grounded-state stay correct even
+        // for Idle bots; the random-walk only contributes the horizontal
+        // desired velocity for Wander/Aggressive policies.
+        let mut desired = bevy::math::Vec2::ZERO;
         if matches!(bot.policy, BotPolicy::Wander | BotPolicy::Aggressive) {
             bot.move_change_timer -= dt;
             if bot.move_change_timer <= 0.0 {
@@ -336,23 +340,23 @@ fn drive_bots(
                 bot.move_dir = [angle.cos(), angle.sin()];
                 bot.move_change_timer = bot.move_change_secs.max(0.1);
             }
-            let desired = bevy::math::Vec2::new(
+            desired = bevy::math::Vec2::new(
                 bot.move_dir[0] * bot.move_speed,
                 bot.move_dir[1] * bot.move_speed,
             );
-            let (nx, ny, nz) = crate::movement::step_kinematic(
-                pos.x, pos.y, pos.z,
-                &mut kstate,
-                desired,
-                *bounds,
-                dt,
-                &spatial,
-                map.as_deref(),
-            );
-            pos.x = nx;
-            pos.y = ny;
-            pos.z = nz;
         }
+        let (nx, ny, nz) = crate::movement::step_kinematic(
+            pos.x, pos.y, pos.z,
+            &mut kstate,
+            desired,
+            *bounds,
+            dt,
+            &spatial,
+            map.as_deref(),
+        );
+        pos.x = nx;
+        pos.y = ny;
+        pos.z = nz;
 
         // ── 2. One-shot programmatic action (always honoured) ───────────────
         let one_shot = bot.pending_action.take();
