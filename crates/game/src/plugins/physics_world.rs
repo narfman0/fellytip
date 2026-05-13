@@ -26,7 +26,8 @@ use std::collections::{HashMap, HashSet};
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 use fellytip_shared::components::WorldPosition;
-use fellytip_shared::world::map::{WorldMap, CHUNK_TILES};
+use fellytip_shared::world::civilization::{Building, Buildings};
+use fellytip_shared::world::map::{WorldMap, CHUNK_TILES, MAP_HEIGHT, MAP_WIDTH};
 use fellytip_shared::world::mesh::{
     build_chunk_geometry, build_zone_interior_geometry, ChunkCoord, EdgeTransitions,
 };
@@ -57,6 +58,7 @@ impl Plugin for PhysicsWorldPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<PhysicsChunk>()
             .register_type::<PhysicsZone>()
+            .register_type::<PhysicsBuilding>()
             // Register ZoneMembership + ZoneId so BRP / inspector can see them
             // — useful for verifying which zone a player is currently in.
             .register_type::<ZoneMembership>()
@@ -64,7 +66,7 @@ impl Plugin for PhysicsWorldPlugin {
             .register_type::<crate::movement::KinematicState>()
             .init_resource::<PhysicsChunks>()
             .init_resource::<PhysicsZoneColliders>()
-            .add_systems(Update, update_physics_world);
+            .add_systems(Update, (update_physics_world, refresh_building_colliders));
     }
 }
 
@@ -221,4 +223,52 @@ impl From<ChunkCoord> for PhysicsChunk {
 #[reflect(Component)]
 pub struct PhysicsZone {
     pub zone_id: u32,
+}
+
+/// Tag component on per-building cuboid colliders. Used to find/despawn them
+/// when the `Buildings` resource changes (world reload, seed swap).
+#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct PhysicsBuilding;
+
+/// Rebuild building cuboid colliders whenever the `Buildings` resource changes.
+///
+/// Half-extents come from `BuildingKind::approx_half_extents()` — a pure
+/// data-only map of each kind to a footprint + height. No GLB loading needed,
+/// so colliders exist identically in windowed and headless modes.
+fn refresh_building_colliders(
+    mut commands: Commands,
+    buildings: Option<Res<Buildings>>,
+    existing: Query<Entity, With<PhysicsBuilding>>,
+) {
+    let Some(buildings) = buildings else { return };
+    if !buildings.is_changed() { return }
+
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    for b in &buildings.0 {
+        spawn_building_collider(&mut commands, b);
+    }
+}
+
+fn spawn_building_collider(commands: &mut Commands, b: &Building) {
+    let (hx, hy, hz) = b.kind.approx_half_extents();
+    // Tile-space → physics-world: tile (tx, ty) centered at
+    // (tx - MAP_WIDTH/2 + 0.5, ty - MAP_HEIGHT/2 + 0.5). Matches
+    // entity_renderer.rs::spawn_building_visuals so collider lines up with
+    // the GLB visual.
+    let half_w = (MAP_WIDTH  / 2) as f32;
+    let half_h = (MAP_HEIGHT / 2) as f32;
+    let wx = b.tx as f32 - half_w + 0.5;
+    let wy = b.ty as f32 - half_h + 0.5;
+    let pos = Vec3::new(wx, b.z + hy, wy);
+    let rot = Quat::from_rotation_y(b.rotation as f32 * std::f32::consts::FRAC_PI_2);
+    commands.spawn((
+        RigidBody::Static,
+        Collider::cuboid(hx * 2.0, hy * 2.0, hz * 2.0),
+        Transform::from_translation(pos).with_rotation(rot),
+        GlobalTransform::IDENTITY,
+        PhysicsBuilding,
+    ));
 }

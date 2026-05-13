@@ -23,12 +23,9 @@
 //! on input) for zero-latency visual response.  Remote entity transforms still
 //! track the authoritative `WorldPosition` from replication.
 
-use std::collections::HashSet;
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
-use bevy_mesh::VertexAttributeValues;
 use bevy::gizmos::config::GizmoConfigStore;
 use super::settings::WindmillSpinEnabled;
 use crate::{ClientSet, LocalPlayer, PredictedPosition};
@@ -76,8 +73,6 @@ impl Plugin for EntityRendererPlugin {
                 (
                     spawn_entity_visuals.in_set(ClientSet::EntityVisualSpawn),
                     spawn_building_visuals,
-                    despawn_building_colliders,
-                    build_building_colliders,
                     apply_faction_tint,
                     tag_windmill_children,
                     spin_windmills,
@@ -140,16 +135,9 @@ impl EntityVisualAssets {
 #[derive(Component)]
 struct BuildingVisual;
 
-/// Placed on a `BuildingVisual` entity once its physics collider has been built,
-/// so `build_building_colliders` doesn't re-process it on subsequent frames.
-#[derive(Component)]
-struct BuildingColliderReady;
-
-/// Marker on the standalone collider entity derived from a building's mesh AABB.
-/// Not a child of the building — lives at world-space AABB center to avoid
-/// fighting the building root's uniform scale when avian reads GlobalTransform.
-#[derive(Component)]
-struct BuildingCollider;
+// Building physics colliders are authored by `fellytip_game::plugins::physics_world`
+// from the pure `Buildings` resource — no GLB loading required, so colliders
+// exist in headless mode too. Renderer is purely cosmetic for buildings now.
 
 /// GLB scene handles for all [`BuildingKind`] variants.
 #[derive(Resource)]
@@ -270,97 +258,6 @@ fn spawn_building_visuals(
                 BuildingVisual,
             ));
         }
-    }
-}
-
-/// Despawn all `BuildingCollider` entities whenever the `Buildings` resource is
-/// replaced (world seed change or map reload).  Runs before `spawn_building_visuals`
-/// clears the old `BuildingVisual` entities so the colliders stay in sync.
-fn despawn_building_colliders(
-    mut commands: Commands,
-    buildings: Res<Buildings>,
-    colliders: Query<Entity, With<BuildingCollider>>,
-) {
-    if !buildings.is_changed() { return; }
-    for entity in &colliders {
-        commands.entity(entity).despawn();
-    }
-}
-
-/// Fires when `Added<Mesh3d>` detects newly instantiated GLB scene meshes.
-///
-/// For each new mesh entity, we walk up the parent chain to find a
-/// `BuildingVisual` ancestor that doesn't yet have `BuildingColliderReady`.
-/// When found, we BFS down from that ancestor to union the world-space AABB
-/// across all mesh primitives, then spawn a standalone `BuildingCollider` entity
-/// at the AABB center.
-///
-/// The collider is an independent entity (not a child) so that avian reads its
-/// `Transform::translation` as a world-space position rather than inheriting the
-/// building root's `scale: 2.0` offset math.
-fn build_building_colliders(
-    new_meshes: Query<Entity, Added<Mesh3d>>,
-    parent_q: Query<&ChildOf>,
-    building_q: Query<Entity, (With<BuildingVisual>, Without<BuildingColliderReady>)>,
-    children_q: Query<&Children>,
-    mesh_q: Query<(&Mesh3d, &GlobalTransform)>,
-    meshes: Res<Assets<Mesh>>,
-    mut commands: Commands,
-) {
-    // Collect unprocessed BuildingVisual ancestors for all new mesh entities.
-    let mut to_process: HashSet<Entity> = HashSet::new();
-    for mesh_entity in &new_meshes {
-        let mut cur = mesh_entity;
-        loop {
-            if building_q.contains(cur) {
-                to_process.insert(cur);
-                break;
-            }
-            match parent_q.get(cur) {
-                Ok(p) => cur = p.parent(),
-                Err(_) => break,
-            }
-        }
-    }
-
-    for building_entity in to_process {
-        // BFS to accumulate world-space AABB across all mesh descendants.
-        let mut lo = Vec3::splat(f32::MAX);
-        let mut hi = Vec3::splat(f32::MIN);
-        let mut found = false;
-
-        let mut stack = vec![building_entity];
-        while let Some(entity) = stack.pop() {
-            if let Ok((mesh_handle, gtf)) = mesh_q.get(entity)
-                && let Some(mesh) = meshes.get(mesh_handle)
-                    && let Some(VertexAttributeValues::Float32x3(verts)) =
-                        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-                    {
-                        let mat = gtf.affine();
-                        for &[x, y, z] in verts {
-                            let world = mat.transform_point3(Vec3::new(x, y, z));
-                            lo = lo.min(world);
-                            hi = hi.max(world);
-                        }
-                        found = true;
-                    }
-            if let Ok(children) = children_q.get(entity) {
-                stack.extend(children.iter());
-            }
-        }
-
-        if !found { continue; }
-
-        let half = (hi - lo) * 0.5;
-        let center = lo + half;
-
-        commands.spawn((
-            Transform::from_translation(center),
-            RigidBody::Static,
-            Collider::cuboid(half.x.max(0.05), half.y.max(0.05), half.z.max(0.05)),
-            BuildingCollider,
-        ));
-        commands.entity(building_entity).insert(BuildingColliderReady);
     }
 }
 

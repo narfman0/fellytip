@@ -93,6 +93,37 @@ pub enum BuildingKind {
     CapitalTower,   // 5-floor interior zone (20×20 circular, capital landmark)
 }
 
+impl BuildingKind {
+    /// Approximate axis-aligned half-extents of this kind's exterior at the
+    /// renderer's standard `Vec3::splat(2.0)` GLB scale. Returns `(hx, hy, hz)`
+    /// where `hy` is the half-height (so a Tower of total height 10 returns
+    /// `hy = 5.0`).
+    ///
+    /// Used by `PhysicsWorldPlugin` to spawn cuboid colliders without needing
+    /// to load the GLB scene (so colliders exist in headless mode too).
+    /// Numbers are intentionally rough — they're collision proxies, not visual
+    /// truth. Refine when a kind needs tighter collision.
+    pub fn approx_half_extents(self) -> (f32, f32, f32) {
+        match self {
+            BuildingKind::TentDetailed   => (1.25, 1.0,  1.25),
+            BuildingKind::TentSmall      => (1.0,  0.75, 1.0),
+            BuildingKind::CampfireStones => (0.75, 0.25, 0.75),
+            BuildingKind::Windmill       => (1.5,  3.0,  1.5),
+            BuildingKind::Stall
+            | BuildingKind::StallBench
+            | BuildingKind::StallGreen
+            | BuildingKind::StallRed     => (1.0,  1.25, 1.0),
+            BuildingKind::Fountain       => (1.0,  0.5,  1.0),
+            BuildingKind::Lantern        => (0.25, 1.5,  0.25),
+            BuildingKind::Tavern
+            | BuildingKind::Barracks     => (2.0,  2.5,  2.0),
+            BuildingKind::Tower          => (1.5,  5.0,  1.5),
+            BuildingKind::Keep           => (2.5,  3.75, 2.5),
+            BuildingKind::CapitalTower   => (2.5,  6.25, 2.5),
+        }
+    }
+}
+
 /// A single procedurally-placed building belonging to a settlement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Building {
