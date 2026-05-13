@@ -302,6 +302,84 @@ pub fn dm_set_ecology(In(params): In<Option<Value>>, world: &mut World) -> BrpRe
     Ok(json!({ "ok": true }))
 }
 
+// ── dm/list_raid_parties ──────────────────────────────────────────────────────
+
+/// Group every active `WarPartyMember` by their `(attacker_faction, target)`
+/// pair and return one entry per group with the member positions + zones.
+///
+/// Returns:
+/// ```json
+/// {
+///   "parties": [{
+///     "attacker_faction": "remnants",
+///     "target_settlement_id": "uuid",
+///     "target_x": -74.5,
+///     "target_y": -227.5,
+///     "member_count": 3,
+///     "zones_present": [0, 0, 43],
+///     "centroid": { "x": 1.0, "y": 0.5, "z": 0.0 }
+///   }]
+/// }
+/// ```
+///
+/// Lets `tools/worldwatch` show live raids on the overworld map and gives
+/// `underground_e2e` a much shorter observation window — the previous E2E
+/// had to poll `WarPartyMember` and `ZoneMembership` separately and join.
+pub fn dm_list_raid_parties(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    use fellytip_game::plugins::ai::WarPartyMember;
+    use fellytip_shared::{
+        components::WorldPosition,
+        world::zone::ZoneMembership,
+    };
+    use std::collections::HashMap;
+
+    let mut q = world.query::<(&WarPartyMember, &WorldPosition, Option<&ZoneMembership>)>();
+
+    // Bucket by (attacker_faction, target_settlement_id).
+    type Key = (String, uuid::Uuid);
+    struct Bucket {
+        target_x: f32,
+        target_y: f32,
+        zones: Vec<u32>,
+        sum_x: f32,
+        sum_y: f32,
+        sum_z: f32,
+        count: usize,
+    }
+    let mut groups: HashMap<Key, Bucket> = HashMap::new();
+    for (wm, pos, zm) in q.iter(world) {
+        let k = (wm.attacker_faction.0.to_string(), wm.target_settlement_id);
+        let b = groups.entry(k).or_insert_with(|| Bucket {
+            target_x: wm.target_x,
+            target_y: wm.target_y,
+            zones: Vec::new(),
+            sum_x: 0.0, sum_y: 0.0, sum_z: 0.0,
+            count: 0,
+        });
+        let z = zm.map(|z| z.0.0).unwrap_or(0);
+        b.zones.push(z);
+        b.sum_x += pos.x;
+        b.sum_y += pos.y;
+        b.sum_z += pos.z;
+        b.count += 1;
+    }
+
+    let parties: Vec<Value> = groups.into_iter().map(|((faction, sid), b)| {
+        let n = b.count.max(1) as f32;
+        json!({
+            "attacker_faction": faction,
+            "target_settlement_id": sid.to_string(),
+            "target_x": b.target_x,
+            "target_y": b.target_y,
+            "member_count": b.count,
+            "zones_present": b.zones,
+            "centroid": { "x": b.sum_x / n, "y": b.sum_y / n, "z": b.sum_z / n },
+        })
+    }).collect();
+
+    Ok(json!({ "parties": parties }))
+}
+
 // ── dm/ecology_snapshot ───────────────────────────────────────────────────────
 
 /// Read the full `EcologyState` resource as JSON.
