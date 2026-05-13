@@ -1,5 +1,6 @@
 pub mod basic_movement;
 pub mod combat_resolves;
+pub mod ecology_dynamics;
 pub mod movement_e2e;
 pub mod npc_spawn_with_dm;
 pub mod physics_buildings;
@@ -26,6 +27,7 @@ pub fn all_scenarios() -> Vec<Box<dyn Scenario>> {
         Box::new(movement_e2e::MovementE2e),
         Box::new(physics_terrain::PhysicsTerrain),
         Box::new(physics_buildings::PhysicsBuildings),
+        Box::new(ecology_dynamics::EcologyDynamics),
     ]
 }
 

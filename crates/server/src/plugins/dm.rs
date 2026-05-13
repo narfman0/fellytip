@@ -302,6 +302,30 @@ pub fn dm_set_ecology(In(params): In<Option<Value>>, world: &mut World) -> BrpRe
     Ok(json!({ "ok": true }))
 }
 
+// ── dm/ecology_snapshot ───────────────────────────────────────────────────────
+
+/// Read the full `EcologyState` resource as JSON.
+///
+/// Returns an array of region snapshots:
+/// `[{ region, prey, predator, r, k, alpha, beta, delta }, …]`.
+///
+/// Used by the `ecology_dynamics` ralph scenario to compare populations
+/// across time and assert the Lotka-Volterra integration is alive.
+pub fn dm_ecology_snapshot(In(_params): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let ecology = world.resource::<EcologyState>();
+    let regions: Vec<_> = ecology.regions.iter().map(|r| json!({
+        "region":   r.region.0.as_str(),
+        "prey":     r.prey.count,
+        "predator": r.predator.count,
+        "r":        r.r,
+        "k":        r.k,
+        "alpha":    r.alpha,
+        "beta":     r.beta,
+        "delta":    r.delta,
+    })).collect();
+    Ok(json!({ "regions": regions }))
+}
+
 // ── dm/battle_history ─────────────────────────────────────────────────────────
 
 /// Return recent `BattleRecord` entries newest-first.
