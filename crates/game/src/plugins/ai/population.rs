@@ -992,8 +992,13 @@ pub fn spawn_underground_raid(
     let underground_fid = FactionId(SmolStr::new("remnants"));
 
     for i in 0..UNDERGROUND_RAID_PARTY_SIZE {
-        let offset_x = (i % 3) as f32 * 1.0;
-        let offset_y = (i / 3) as f32 * 1.0;
+        // Tight cluster: tile-fraction offsets so all members sit inside the
+        // depth-N→depth-N-1 portal's trigger_radius (1.0 in zone tile space).
+        // Otherwise the outer member at offset (1.0, 0.0) sits exactly on the
+        // boundary and the third at (2.0, 0.0) is past it, stranding it
+        // forever in the deepest zone.
+        let offset_x = (i % 3) as f32 * 0.5;
+        let offset_y = (i / 3) as f32 * 0.5;
         let pos = WorldPosition {
             x: spawn_x + offset_x,
             y: spawn_y + offset_y,

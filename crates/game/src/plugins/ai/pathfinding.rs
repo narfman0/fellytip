@@ -381,9 +381,14 @@ pub fn war_party_separation(
     temp: Res<ChunkTemperature>,
     scheduler: Res<AdaptiveScheduler>,
 ) {
-    // Collect (entity, settlement_id, pos) snapshot.
+    // Only members on the overworld participate in repulsion / formation.
+    // Underground raid members stay clumped near their spawn position so all
+    // three sit inside the depth-N→depth-N-1 portal's trigger radius and
+    // advance together via `advance_zone_parties`. Without this gate the
+    // outermost member drifts past r=1.5 and gets stranded mid-chain.
     let snapshot: Vec<(Entity, uuid::Uuid, f32, f32)> = warriors
         .iter()
+        .filter(|(_, w, _)| w.current_zone == fellytip_shared::world::zone::OVERWORLD_ZONE)
         .map(|(e, w, pos)| (e, w.target_settlement_id, pos.x, pos.y))
         .collect();
 
