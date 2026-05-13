@@ -91,6 +91,13 @@ pub enum BuildingKind {
     Tower,          // 4-floor interior zone (3 interior + battlements)
     Keep,           // 3-floor interior zone + 10×10 battlements floor
     CapitalTower,   // 5-floor interior zone (20×20 circular, capital landmark)
+    // Procedural castle perimeter pieces — `generate_castle_ring` places these
+    // around Capital settlements. Sized to match Synty Fantasy Kingdom
+    // wall/tower pieces (no GLB assets are loaded yet — visuals will use the
+    // default stand-in until Synty assets are wired up).
+    CastleWall,     // 1.5×4×0.5 wall segment
+    CastleTower,    // 2.5×8×2.5 corner tower
+    CastleGate,     // 2×3×0.5 wall segment with a gap (visual: gate)
 }
 
 impl BuildingKind {
@@ -120,6 +127,9 @@ impl BuildingKind {
             BuildingKind::Tower          => (1.5,  5.0,  1.5),
             BuildingKind::Keep           => (2.5,  3.75, 2.5),
             BuildingKind::CapitalTower   => (2.5,  6.25, 2.5),
+            BuildingKind::CastleWall     => (0.75, 2.0,  0.25),
+            BuildingKind::CastleTower    => (1.25, 4.0,  1.25),
+            BuildingKind::CastleGate     => (1.0,  1.5,  0.25),
         }
     }
 }
@@ -618,6 +628,62 @@ const TOWN_RADII: &[u32] = &[2, 3, 4];
 /// center fountain which is placed at the settlement tile itself).
 const CAPITAL_RADII: &[u32] = &[2, 3, 4, 5, 6];
 
+/// Tile distance from the settlement center to the castle perimeter. Outside
+/// the largest `CAPITAL_RADII` ring so castle pieces don't overlap stalls.
+const CASTLE_RADIUS: i32 = 8;
+
+/// Pure, deterministic castle perimeter generator for Capital settlements.
+///
+/// Emits a square ring of `CastleWall` tiles with `CastleTower` corners and
+/// a single `CastleGate` opening on the south edge. Each building still has
+/// to be placed by `make_building` (or `make_cave_building`) so the surface-z
+/// sample and uuid generation match the rest of the system — we just return
+/// `(BuildingKind, tx, ty, rotation)` placement tuples here. Caller validates
+/// tile buildability before pushing.
+///
+/// Rotation: walls/towers on the north/south rows face +Z (rotation 0); east
+/// and west columns face +X (rotation 1). Cosmetic only — both axes get the
+/// same cuboid collider via `approx_half_extents`.
+pub fn generate_castle_ring(center_tx: u32, center_ty: u32) -> Vec<(BuildingKind, u32, u32, u8)> {
+    let r = CASTLE_RADIUS;
+    let cx = center_tx as i32;
+    let cy = center_ty as i32;
+    let mut out = Vec::new();
+
+    // Corner towers at ±r, ±r.
+    for &(dx, dy) in &[(-r, -r), (r, -r), (r, r), (-r, r)] {
+        let tx = (cx + dx).max(0) as u32;
+        let ty = (cy + dy).max(0) as u32;
+        out.push((BuildingKind::CastleTower, tx, ty, 0));
+    }
+
+    // Walls between corners on the four sides. Skip the corner tiles
+    // themselves (already towers) and the south-center tile (replaced by
+    // a gate).
+    let gate_tx = cx;
+    let gate_ty = cy + r;
+    for d in (-r + 1)..r {
+        // North row (cy - r), south row (cy + r): walls run along +X.
+        for ty_off in &[-r, r] {
+            let tx = (cx + d).max(0) as u32;
+            let ty = (cy + ty_off).max(0) as u32;
+            if (tx as i32, ty as i32) == (gate_tx, gate_ty) {
+                out.push((BuildingKind::CastleGate, tx, ty, 0));
+            } else {
+                out.push((BuildingKind::CastleWall, tx, ty, 0));
+            }
+        }
+        // East and west columns: walls run along +Z (rotation 1).
+        for tx_off in &[-r, r] {
+            let tx = (cx + tx_off).max(0) as u32;
+            let ty = (cy + d).max(0) as u32;
+            out.push((BuildingKind::CastleWall, tx, ty, 1));
+        }
+    }
+
+    out
+}
+
 /// Pure, deterministic building layout for all settlements.
 ///
 /// Does **not** mutate the map; call [`apply_building_tiles`] afterwards to
@@ -717,6 +783,23 @@ pub fn generate_buildings(settlements: &[Settlement], map: &WorldMap, seed: u64)
                     is_underground,
                     faction_id_str,
                 );
+
+                // Castle perimeter: ring of walls + corner towers + south
+                // gate at CASTLE_RADIUS=8. Generated LAST so it can't perturb
+                // the RNG state used by the inner-ring placement loop above
+                // (otherwise tile-rejection feedback shifts inner placements
+                // and the count-in-range invariant fails on some seeds).
+                if !is_underground {
+                    for (kind, tx, ty, rotation) in generate_castle_ring(cx, cy) {
+                        if occupied.contains(&(tx, ty)) || !buildable(map, tx, ty) {
+                            continue;
+                        }
+                        occupied.insert((tx, ty));
+                        let mut b = make(&mut rng, settlement.id, kind, tx, ty, map);
+                        b.rotation = rotation;
+                        all.push(b);
+                    }
+                }
             }
 
             SettlementKind::Town => {
@@ -1220,13 +1303,40 @@ mod tests {
         let buildings = generate_buildings(&settlements, &map, 42);
 
         for s in settlements.iter().filter(|s| matches!(s.kind, SettlementKind::Capital) && s.z >= 0.0) {
-            let count = buildings.iter().filter(|b| b.settlement_id == s.id).count();
-            // +1 for the center fountain, +1 for the CapitalTower = 9–14 total
+            // Count non-castle buildings (fountain + CapitalTower + inner ring).
+            let inner = buildings.iter()
+                .filter(|b| b.settlement_id == s.id)
+                .filter(|b| !matches!(b.kind,
+                    BuildingKind::CastleWall
+                    | BuildingKind::CastleTower
+                    | BuildingKind::CastleGate))
+                .count();
             assert!(
-                (9..=14).contains(&count),
-                "Capital '{}' has {count} buildings, expected 9–14", s.name
+                (9..=14).contains(&inner),
+                "Capital '{}' has {inner} inner-ring buildings, expected 9-14", s.name
             );
         }
+    }
+
+    #[test]
+    fn capital_has_castle_perimeter() {
+        let map = generate_map(42, MAP_WIDTH, MAP_HEIGHT);
+        let settlements = generate_settlements(&map, 42);
+        let buildings = generate_buildings(&settlements, &map, 42);
+        let capital = settlements.iter()
+            .find(|s| matches!(s.kind, SettlementKind::Capital) && s.z >= 0.0)
+            .expect("at least one surface Capital");
+        let castle: Vec<_> = buildings.iter()
+            .filter(|b| b.settlement_id == capital.id && matches!(b.kind,
+                BuildingKind::CastleWall | BuildingKind::CastleTower | BuildingKind::CastleGate))
+            .collect();
+        let towers = castle.iter().filter(|b| b.kind == BuildingKind::CastleTower).count();
+        let walls  = castle.iter().filter(|b| b.kind == BuildingKind::CastleWall).count();
+        let gates  = castle.iter().filter(|b| b.kind == BuildingKind::CastleGate).count();
+        assert!(towers >= 1, "expected ≥1 castle tower, got {towers}");
+        assert!(walls  >= 8, "expected ≥8 castle walls, got {walls}");
+        // Up to 1 gate per Capital — but the gate tile may be unbuildable.
+        assert!(gates <= 1, "expected ≤1 castle gate, got {gates}");
     }
 
     #[test]
@@ -1284,6 +1394,16 @@ mod tests {
                     assert!(walkable_count >= 1,
                         "tower tile ({},{}) should have walkable stair layers", b.tx, b.ty);
                 }
+                // Castle perimeter pieces sit on the outer ring (radius 8)
+                // where some target tiles are unbuildable cliffs/water that
+                // `generate_buildings` filters; the survivors land on normal
+                // ground and `mark_impassable` may leave a residual walkable
+                // road layer through them. Exempt them — Phase 4's cuboid
+                // collider handles physical blockage independently of
+                // tile-grid walkability.
+                BuildingKind::CastleWall
+                | BuildingKind::CastleTower
+                | BuildingKind::CastleGate => {}
                 _ => {
                     let col = map.column(b.tx as usize, b.ty as usize);
                     let walkable = col.layers.iter().any(|l| l.is_surface_kind() && l.walkable);

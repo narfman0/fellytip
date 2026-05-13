@@ -174,6 +174,13 @@ impl BuildingAssets {
             | BuildingKind::Tower
             | BuildingKind::Keep
             | BuildingKind::CapitalTower => self.tent_detailed.clone(),
+            // Castle perimeter pieces (procedural ring around Capitals). No
+            // Synty Fantasy Kingdom GLBs are loaded yet — physics is correct
+            // via approx_half_extents, visuals use the tent placeholder until
+            // Synty assets are wired up.
+            BuildingKind::CastleWall
+            | BuildingKind::CastleTower
+            | BuildingKind::CastleGate => self.tent_detailed.clone(),
         }
     }
 }
