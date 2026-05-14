@@ -550,51 +550,91 @@ fn draw_minimap(
 
             if in_zone_interior {
                 // ── Zone interior: tile-by-tile render ───────────────────────
-                // Player's WorldPosition is in zone-local coords when inside,
+                // Player WorldPosition is in zone-local coords while inside,
                 // so it works as a direct minimap centre. Skip drawing the
-                // surface map at zone-local sample coords — that would just
-                // show a meaningless patch near world origin.
-                if let Some(msg) = zone_cache.0.get(&player_zone_id) {
-                    let w = msg.width as usize;
-                    let h = msg.height as usize;
-                    let tile_px = MINI_ZOOM; // 1 zone tile = MINI_ZOOM pixels
-                    for ty in 0..h {
-                        for tx in 0..w {
-                            let Some(tile) = msg.tiles.get(ty * w + tx) else { continue };
-                            let color = interior_tile_color(*tile);
-                            if color == egui::Color32::TRANSPARENT { continue }
-                            // Tile center in zone-local coords.
-                            let wx = tx as f32 + 0.5;
-                            let wy = ty as f32 + 0.5;
-                            let cdelta = world_to_canvas(wx - px, wy - py);
-                            let cpos = center + cdelta;
-                            if !rect.expand(tile_px).contains(cpos) { continue }
-                            painter.rect_filled(
-                                egui::Rect::from_center_size(cpos, egui::vec2(tile_px, tile_px)),
-                                0.0,
-                                color,
-                            );
+                // surface texture at zone-local coords — that would just show
+                // a meaningless patch near world origin.
+
+                let tile_px = MINI_ZOOM; // 1 zone tile = MINI_ZOOM pixels
+
+                let draw_tile = |wx: f32, wy: f32, color: egui::Color32| {
+                    if color == egui::Color32::TRANSPARENT { return }
+                    let cdelta = world_to_canvas(wx - px, wy - py);
+                    let cpos = center + cdelta;
+                    if !rect.expand(tile_px).contains(cpos) { return }
+                    painter.rect_filled(
+                        egui::Rect::from_center_size(cpos, egui::vec2(tile_px, tile_px)),
+                        0.0,
+                        color,
+                    );
+                };
+
+                // (1) Adjacent (1-hop) zones drawn FIRST so the player's zone
+                // overlaps them where they share canvas space — neighbour is
+                // visible only where the player's zone has no tile. Each
+                // neighbour tile is translated so the portal's `to_anchor` in
+                // the neighbour lines up with its `from_anchor` in the
+                // player's zone — i.e. the doorway lines up across the seam.
+                // Dimmed to 50% saturation so the player's zone reads as
+                // "here" and neighbours read as "through the door".
+                if let Some(ref nm) = neighbor_cache.0 {
+                    for entry in &nm.portals {
+                        if entry.from_hop != 0 { continue }
+                        let neighbor_id = entry.portal.to_zone;
+                        let Some(neighbor_msg) = zone_cache.0.get(&neighbor_id) else { continue };
+                        // Translation: where (0,0) of the neighbour lands in
+                        // the player's zone-local frame. Assumes axis-aligned
+                        // connection (no rotation); see TODO if portals get
+                        // rotated mappings.
+                        let off_x = entry.from_world_pos.x - entry.to_world_pos.x;
+                        let off_y = entry.from_world_pos.z - entry.to_world_pos.z;
+                        let nw = neighbor_msg.width as usize;
+                        let nh = neighbor_msg.height as usize;
+                        for ny in 0..nh {
+                            for nx in 0..nw {
+                                let Some(tile) = neighbor_msg.tiles.get(ny * nw + nx) else { continue };
+                                let c = interior_tile_color(*tile);
+                                if c == egui::Color32::TRANSPARENT { continue }
+                                let dim = egui::Color32::from_rgb(
+                                    (c.r() as u16 * 5 / 10) as u8,
+                                    (c.g() as u16 * 5 / 10) as u8,
+                                    (c.b() as u16 * 5 / 10) as u8,
+                                );
+                                let wx = nx as f32 + 0.5 + off_x;
+                                let wy = ny as f32 + 0.5 + off_y;
+                                draw_tile(wx, wy, dim);
+                            }
                         }
                     }
                 }
 
-                // Portal markers — only show hop=0 portals (in the player's
-                // current zone). Each marker is a small cyan diamond at the
-                // anchor's zone-local position, with destination ZoneId on
-                // hover. Acts as a "exit here" pointer without rendering the
-                // adjacent zone in full.
+                // (2) Player's current zone on top of any neighbour overlap.
+                if let Some(msg) = zone_cache.0.get(&player_zone_id) {
+                    let w = msg.width as usize;
+                    let h = msg.height as usize;
+                    for ty in 0..h {
+                        for tx in 0..w {
+                            let Some(tile) = msg.tiles.get(ty * w + tx) else { continue };
+                            let wx = tx as f32 + 0.5;
+                            let wy = ty as f32 + 0.5;
+                            draw_tile(wx, wy, interior_tile_color(*tile));
+                        }
+                    }
+                }
+
+                // (3) Portal markers on top — cyan diamond at each hop-0
+                // anchor so the doorway is always findable even when the
+                // adjacent zone's wall hides it.
                 if let Some(ref nm) = neighbor_cache.0 {
                     for entry in &nm.portals {
                         if entry.from_hop != 0 { continue }
-                        // from_world_pos: physics-Y-up; .x = world.x, .z = world.y.
                         let pwx = entry.from_world_pos.x;
                         let pwy = entry.from_world_pos.z;
                         let cdelta = world_to_canvas(pwx - px, pwy - py);
                         let sp = center + cdelta;
                         if !rect.contains(sp) { continue }
-                        let stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
                         painter.circle_filled(sp, 3.5, egui::Color32::from_rgb(120, 230, 255));
-                        painter.circle_stroke(sp, 3.5, stroke);
+                        painter.circle_stroke(sp, 3.5, egui::Stroke::new(1.5, egui::Color32::BLACK));
                     }
                 }
             } else {
