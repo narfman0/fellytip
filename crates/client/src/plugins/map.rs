@@ -16,8 +16,8 @@ use fellytip_shared::{
     world::{
         civilization::{Settlement, SettlementKind, Settlements},
         faction::{standing_tier, StandingTier},
-        map::{TileKind, WorldMap},
-        zone::{ZoneMembership, ZoneRegistry, OVERWORLD_ZONE, WORLD_SUNKEN_REALM},
+        map::{TileKind, WorldMap, MAP_HEIGHT, MAP_WIDTH},
+        zone::{ZoneMembership, ZoneRegistry, WORLD_SUNKEN_REALM},
     },
 };
 
@@ -28,15 +28,20 @@ use crate::plugins::pause_menu::PauseMenu;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Downsampled terrain texture side length (pixels). 2 tiles per pixel.
+/// Downsampled terrain texture side length (pixels). Sized to the current
+/// world dimensions; sampling stride is computed at build time so reducing
+/// TEX_SIZE downsamples and increasing it upsamples.
 const TEX_SIZE: usize = 512;
 
-/// World-space extent: map spans [-512, 512) in both X and Y.
-const MAP_W: f32 = 1024.0;
-const MAP_H: f32 = 1024.0;
+/// World-space extents — derived from the canonical `MAP_WIDTH`/`MAP_HEIGHT`
+/// constants so the minimap / big-map stay correct if the world is resized.
+/// World tiles span `[0, MAP_WIDTH)`; world coords span `[-MAP_W/2, MAP_W/2)`.
+const MAP_W: f32 = MAP_WIDTH  as f32;
+const MAP_H: f32 = MAP_HEIGHT as f32;
 
-/// Default zoom so the full 1024-unit map fits in the 512-px canvas.
-const ZOOM_DEFAULT: f32 = 0.5;
+/// Default zoom so the full map fits in the 512-px canvas (one world unit per
+/// canvas pixel at `ZOOM_DEFAULT = CANVAS / MAP_W`).
+const ZOOM_DEFAULT: f32 = 1.0;
 const ZOOM_MIN: f32 = 0.2;
 const ZOOM_MAX: f32 = 4.0;
 
@@ -168,14 +173,22 @@ fn build_terrain_texture(
     }
     let Some(map) = world_map else { return };
 
+    // Sampling stride: with `map.width == TEX_SIZE` this is 1 (per-tile),
+    // and with `map.width > TEX_SIZE` it downsamples evenly. Previously
+    // hard-coded to 2 (when the world was 1024-wide); after `MAP_WIDTH`
+    // shrank to 512 the constant clamped the right + bottom halves to the
+    // map edge, producing a heavily streaked texture.
+    let stride_x = map.width  / TEX_SIZE;
+    let stride_y = map.height / TEX_SIZE;
+
     // ── Surface texture ───────────────────────────────────────────────────────
     if tex.surface.is_none() {
         let mut data = vec![0u8; TEX_SIZE * TEX_SIZE * 4];
         for ty in 0..TEX_SIZE {
             for tx in 0..TEX_SIZE {
-                let ix = (tx * 2).min(map.width.saturating_sub(1));
+                let ix = (tx * stride_x).min(map.width.saturating_sub(1));
                 // Flip Y: ty=0 → northernmost tile row.
-                let iy = (map.height.saturating_sub(1)).saturating_sub(ty * 2);
+                let iy = (map.height.saturating_sub(1)).saturating_sub(ty * stride_y);
                 let kind = map
                     .column(ix, iy)
                     .layers
@@ -219,8 +232,8 @@ fn build_terrain_texture(
         let mut data = vec![0u8; TEX_SIZE * TEX_SIZE * 4];
         for ty in 0..TEX_SIZE {
             for tx in 0..TEX_SIZE {
-                let ix = (tx * 2).min(map.width.saturating_sub(1));
-                let iy = (map.height.saturating_sub(1)).saturating_sub(ty * 2);
+                let ix = (tx * stride_x).min(map.width.saturating_sub(1));
+                let iy = (map.height.saturating_sub(1)).saturating_sub(ty * stride_y);
                 let kind = map
                     .column(ix, iy)
                     .layers
@@ -460,18 +473,17 @@ fn draw_minimap(
     }
     let Ok((pos, zone_membership)) = player_q.single() else { return Ok(()) };
 
-    // Select terrain texture based on which world the player is in.
-    // Uses world_id from ZoneMembership → ZoneRegistry; falls back to z-check.
-    let is_underground = if let (Some(registry), Some(membership)) = (&zone_registry, zone_membership) {
-        registry.get(membership.0)
+    // Select terrain texture based on which world the player is in. Uses
+    // `world_id` from `ZoneMembership → ZoneRegistry` — a `BuildingFloor` or
+    // `Dungeon` zone on the surface world still picks the surface texture,
+    // only Sunken Realm zones swap. Falls back to a z-coordinate heuristic
+    // when the registry / membership aren't loaded yet (early frames).
+    let is_underground = match (zone_registry.as_deref(), zone_membership) {
+        (Some(registry), Some(membership)) => registry
+            .get(membership.0)
             .map(|z| z.world_id == WORLD_SUNKEN_REALM)
-            .unwrap_or(false)
-    } else {
-        // Fallback: check for non-overworld zone membership or z-coordinate
-        zone_membership
-            .map(|z| z.0 != OVERWORLD_ZONE)
-            .unwrap_or(false)
-            || pos.z < -1.0
+            .unwrap_or(false),
+        _ => pos.z < -1.0,
     };
 
     let terrain_id = if is_underground {
