@@ -17,7 +17,7 @@ use fellytip_shared::{
         civilization::{Settlement, SettlementKind, Settlements},
         faction::{standing_tier, StandingTier},
         map::{TileKind, WorldMap, MAP_HEIGHT, MAP_WIDTH},
-        zone::{ZoneMembership, ZoneRegistry, WORLD_SUNKEN_REALM},
+        zone::{InteriorTile, ZoneMembership, ZoneRegistry, OVERWORLD_ZONE, WORLD_SUNKEN_REALM},
     },
 };
 
@@ -25,6 +25,7 @@ use crate::{LocalPlayer, PredictedPosition};
 use crate::plugins::camera::OrbitCamera;
 use crate::plugins::debug_console::DebugConsole;
 use crate::plugins::pause_menu::PauseMenu;
+use crate::plugins::zone_cache::{ZoneCache, ZoneNeighborCache};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -128,7 +129,24 @@ fn toggle_map(
     }
 }
 
-// ── Terrain texture ───────────────────────────────────────────────────────────
+// ── Tile colors ───────────────────────────────────────────────────────────────
+
+/// Color for a zone interior tile on the minimap. Sized for `egui` `Color32`
+/// rather than the surface texture's `[u8; 4]` so the painter can use it
+/// directly without an intermediate allocation.
+fn interior_tile_color(tile: InteriorTile) -> egui::Color32 {
+    match tile {
+        InteriorTile::Floor   => egui::Color32::from_rgb(120,  90,  55),
+        InteriorTile::Stair   => egui::Color32::from_rgb(160, 140, 100),
+        InteriorTile::Water   => egui::Color32::from_rgb( 60, 120, 200),
+        InteriorTile::Balcony => egui::Color32::from_rgb(160, 110,  70),
+        InteriorTile::Wall    => egui::Color32::from_rgb( 80,  60,  40),
+        InteriorTile::Window  => egui::Color32::from_rgb(150, 180, 200),
+        InteriorTile::Roof    => egui::Color32::from_rgb( 90,  50,  35),
+        InteriorTile::Pit     => egui::Color32::from_rgb( 20,  20,  20),
+        InteriorTile::Void    => egui::Color32::TRANSPARENT,
+    }
+}
 
 fn tile_color(kind: TileKind) -> [u8; 4] {
     match kind {
@@ -466,6 +484,8 @@ fn draw_minimap(
     console: Option<Res<DebugConsole>>,
     pause_menu: Option<Res<PauseMenu>>,
     zone_registry: Option<Res<ZoneRegistry>>,
+    zone_cache: Res<ZoneCache>,
+    neighbor_cache: Res<ZoneNeighborCache>,
 ) -> Result {
     // Hide behind other overlays.
     if console.is_some_and(|c| c.open) || pause_menu.is_some_and(|m| m.open) {
@@ -473,12 +493,16 @@ fn draw_minimap(
     }
     let Ok((pos, zone_membership)) = player_q.single() else { return Ok(()) };
 
-    // Select terrain texture based on which world the player is in. Uses
-    // `world_id` from `ZoneMembership → ZoneRegistry` — a `BuildingFloor` or
-    // `Dungeon` zone on the surface world still picks the surface texture,
-    // only Sunken Realm zones swap. Falls back to a z-coordinate heuristic
-    // when the registry / membership aren't loaded yet (early frames).
-    let is_underground = match (zone_registry.as_deref(), zone_membership) {
+    // Player zone for routing the minimap mode. `OVERWORLD_ZONE` = surface
+    // map texture; any other zone gets a tile-by-tile interior render so the
+    // minimap shows the actual room the player is in (not the surface map
+    // sampled at zone-local coords, which would be visually meaningless).
+    let player_zone_id = zone_membership.map(|z| z.0).unwrap_or(OVERWORLD_ZONE);
+    let in_zone_interior = player_zone_id != OVERWORLD_ZONE;
+
+    // Sunken Realm label vs Surface label is purely cosmetic now — the
+    // texture-driven world-tinting is only used for the overworld branch.
+    let is_sunken_realm = match (zone_registry.as_deref(), zone_membership) {
         (Some(registry), Some(membership)) => registry
             .get(membership.0)
             .map(|z| z.world_id == WORLD_SUNKEN_REALM)
@@ -486,12 +510,12 @@ fn draw_minimap(
         _ => pos.z < -1.0,
     };
 
-    let terrain_id = if is_underground {
+    // Pick the overworld terrain texture (only used when not in a zone).
+    let terrain_id_opt = if is_sunken_realm {
         tex.sunken_realm.or(tex.surface)
     } else {
         tex.surface
     };
-    let Some(terrain_id) = terrain_id else { return Ok(()) };
 
     let px = pos.x;
     let py = pos.y;
@@ -521,22 +545,67 @@ fn draw_minimap(
             let rect = resp.rect;
             let center = rect.center();
 
-            // Dark fill behind terrain.
+            // Dark fill behind whatever we render.
             painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(8, 8, 16));
 
-            // Terrain rendered as a rotated quad mesh so it follows the camera yaw.
-            // For each canvas corner, compute the world position and then its UV.
-            {
+            if in_zone_interior {
+                // ── Zone interior: tile-by-tile render ───────────────────────
+                // Player's WorldPosition is in zone-local coords when inside,
+                // so it works as a direct minimap centre. Skip drawing the
+                // surface map at zone-local sample coords — that would just
+                // show a meaningless patch near world origin.
+                if let Some(msg) = zone_cache.0.get(&player_zone_id) {
+                    let w = msg.width as usize;
+                    let h = msg.height as usize;
+                    let tile_px = MINI_ZOOM; // 1 zone tile = MINI_ZOOM pixels
+                    for ty in 0..h {
+                        for tx in 0..w {
+                            let Some(tile) = msg.tiles.get(ty * w + tx) else { continue };
+                            let color = interior_tile_color(*tile);
+                            if color == egui::Color32::TRANSPARENT { continue }
+                            // Tile center in zone-local coords.
+                            let wx = tx as f32 + 0.5;
+                            let wy = ty as f32 + 0.5;
+                            let cdelta = world_to_canvas(wx - px, wy - py);
+                            let cpos = center + cdelta;
+                            if !rect.expand(tile_px).contains(cpos) { continue }
+                            painter.rect_filled(
+                                egui::Rect::from_center_size(cpos, egui::vec2(tile_px, tile_px)),
+                                0.0,
+                                color,
+                            );
+                        }
+                    }
+                }
+
+                // Portal markers — only show hop=0 portals (in the player's
+                // current zone). Each marker is a small cyan diamond at the
+                // anchor's zone-local position, with destination ZoneId on
+                // hover. Acts as a "exit here" pointer without rendering the
+                // adjacent zone in full.
+                if let Some(ref nm) = neighbor_cache.0 {
+                    for entry in &nm.portals {
+                        if entry.from_hop != 0 { continue }
+                        // from_world_pos: physics-Y-up; .x = world.x, .z = world.y.
+                        let pwx = entry.from_world_pos.x;
+                        let pwy = entry.from_world_pos.z;
+                        let cdelta = world_to_canvas(pwx - px, pwy - py);
+                        let sp = center + cdelta;
+                        if !rect.contains(sp) { continue }
+                        let stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
+                        painter.circle_filled(sp, 3.5, egui::Color32::from_rgb(120, 230, 255));
+                        painter.circle_stroke(sp, 3.5, stroke);
+                    }
+                }
+            } else {
+                // ── Overworld: rotated terrain quad mesh ─────────────────────
+                let Some(terrain_id) = terrain_id_opt else { return };
                 let half = MINI_CANVAS / 2.0;
                 let corners: [(f32, f32); 4] = [
-                    (-half, -half), // TL
-                    ( half, -half), // TR
-                    ( half,  half), // BR
-                    (-half,  half), // BL
+                    (-half, -half), ( half, -half), ( half,  half), (-half,  half),
                 ];
                 let mut mesh = egui::epaint::Mesh::with_texture(terrain_id);
                 for (cpx, cpy) in corners {
-                    // Canvas delta → world delta (inverse rotation by yaw+π).
                     let cdx = cpx / MINI_ZOOM;
                     let cdy = -cpy / MINI_ZOOM;
                     let world_dx = -cdx * cos_yaw - cdy * sin_yaw;
@@ -553,30 +622,28 @@ fn draw_minimap(
                 }
                 mesh.indices = vec![0, 1, 2, 0, 2, 3];
                 painter.add(egui::Shape::Mesh(mesh.into()));
-            }
 
-            // Settlement dots rotated to match minimap orientation.
-            if let Some(ref setts) = settlements {
-                for s in &setts.0 {
-                    let wx = s.x - MAP_W / 2.0;
-                    let wy = s.y - MAP_H / 2.0;
-                    let dx = wx - px;
-                    let dy = wy - py;
-                    if dx.abs() > vis_radius * 1.5 || dy.abs() > vis_radius * 1.5 {
-                        continue;
+                // Settlement dots rotated to match minimap orientation.
+                if let Some(ref setts) = settlements {
+                    for s in &setts.0 {
+                        let wx = s.x - MAP_W / 2.0;
+                        let wy = s.y - MAP_H / 2.0;
+                        let dx = wx - px;
+                        let dy = wy - py;
+                        if dx.abs() > vis_radius * 1.5 || dy.abs() > vis_radius * 1.5 {
+                            continue;
+                        }
+                        let cdelta = world_to_canvas(dx, dy);
+                        let sp = center + cdelta;
+                        if !rect.contains(sp) { continue }
+                        let (r, fill) = match s.kind {
+                            SettlementKind::Capital => (4.0, egui::Color32::from_rgb(255, 220, 60)),
+                            SettlementKind::Town    => (3.0, egui::Color32::from_rgb(220, 220, 220)),
+                            SettlementKind::PeacefulSanctuary => (3.0, egui::Color32::from_rgb(180, 230, 200)),
+                        };
+                        painter.circle_filled(sp, r, fill);
+                        painter.circle_stroke(sp, r, egui::Stroke::new(1.0, egui::Color32::BLACK));
                     }
-                    let cdelta = world_to_canvas(dx, dy);
-                    let sp = center + cdelta;
-                    if !rect.contains(sp) {
-                        continue;
-                    }
-                    let (r, fill) = match s.kind {
-                        SettlementKind::Capital => (4.0, egui::Color32::from_rgb(255, 220, 60)),
-                        SettlementKind::Town    => (3.0, egui::Color32::from_rgb(220, 220, 220)),
-                        SettlementKind::PeacefulSanctuary => (3.0, egui::Color32::from_rgb(180, 230, 200)),
-                    };
-                    painter.circle_filled(sp, r, fill);
-                    painter.circle_stroke(sp, r, egui::Stroke::new(1.0, egui::Color32::BLACK));
                 }
             }
 
@@ -608,11 +675,12 @@ fn draw_minimap(
             // Coordinates, world label, and nearby settlement below the canvas.
             ui.label(egui::RichText::new(format!("X {:.0}  Y {:.0}", px, py)).small());
             {
-                let world_label = if is_underground { "Sunken Realm" } else { "Surface" };
-                let world_color = if is_underground {
-                    egui::Color32::from_rgb(130, 100, 200)
+                let (world_label, world_color) = if in_zone_interior {
+                    ("Zone interior", egui::Color32::from_rgb(180, 160, 120))
+                } else if is_sunken_realm {
+                    ("Sunken Realm", egui::Color32::from_rgb(130, 100, 200))
                 } else {
-                    egui::Color32::from_rgb(120, 200, 120)
+                    ("Surface", egui::Color32::from_rgb(120, 200, 120))
                 };
                 ui.label(egui::RichText::new(world_label).small().color(world_color));
             }
